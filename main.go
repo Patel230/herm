@@ -60,6 +60,13 @@ var borderGradientColors = []color.Color{
 	lipgloss.Color("#6B34B0"),
 }
 
+type appMode int
+
+const (
+	modeChat appMode = iota
+	modeConfig
+)
+
 type message struct {
 	content  string
 	isSystem bool // system feedback (e.g. unknown command errors)
@@ -95,6 +102,8 @@ type model struct {
 	config     Config
 	pasteCount int
 	pasteStore map[int]string // paste ID → actual content
+	mode       appMode
+	configForm configForm
 }
 
 func initialModel() model {
@@ -219,6 +228,11 @@ func (m model) displayLineCount() int {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Config mode: delegate to config form
+	if m.mode == modeConfig {
+		return m.updateConfigMode(msg)
+	}
+
 	var cmds []tea.Cmd
 	taMsg := tea.Msg(msg) // message forwarded to textarea (may be modified)
 
@@ -313,20 +327,71 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // enterConfigMode switches to the config editing mode.
-// Stub for 3a — will be fully implemented in 3b.
 func (m model) enterConfigMode() (tea.Model, tea.Cmd) {
-	m.messages = append(m.messages, message{
-		content:  "Opening config... (not yet implemented)",
-		isSystem: true,
-	})
+	m.mode = modeConfig
+	m.configForm = newConfigForm(m.config, m.width, m.height)
 	m.textarea.Reset()
 	m.textarea.SetHeight(minInputHeight)
+	m.textarea.Blur()
+	return m, nil
+}
+
+// exitConfigMode returns to chat mode, optionally saving config changes.
+func (m model) exitConfigMode(save bool) (tea.Model, tea.Cmd) {
+	m.mode = modeChat
+	if save {
+		m.configForm.applyTo(&m.config)
+		if err := saveConfig(m.config); err != nil {
+			m.messages = append(m.messages, message{
+				content:  fmt.Sprintf("Error saving config: %v", err),
+				isSystem: true,
+			})
+		} else {
+			m.messages = append(m.messages, message{
+				content:  "Config saved.",
+				isSystem: true,
+			})
+		}
+	} else {
+		m.messages = append(m.messages, message{
+			content:  "Config changes discarded.",
+			isSystem: true,
+		})
+	}
 	if m.ready {
 		m.viewport.SetHeight(m.viewportHeight())
 		m.updateViewportContent()
 		m.viewport.GotoBottom()
 	}
-	return m, nil
+	return m, m.textarea.Focus()
+}
+
+// updateConfigMode handles input while the config form is active.
+func (m model) updateConfigMode(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.configForm.width = msg.Width
+		m.configForm.height = msg.Height
+		return m, nil
+
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "esc", "ctrl+c":
+			return m.exitConfigMode(false)
+		case "enter":
+			if m.configForm.validate() {
+				return m.exitConfigMode(true)
+			}
+			// validation failed — stay in config mode, errors shown
+			return m, nil
+		}
+	}
+
+	var cmd tea.Cmd
+	m.configForm, cmd = m.configForm.Update(msg)
+	return m, cmd
 }
 
 // handleCommand processes slash commands and returns the updated model.
@@ -430,6 +495,10 @@ func (m model) View() tea.View {
 		return v
 	}
 
+	if m.mode == modeConfig {
+		return m.viewConfig()
+	}
+
 	inputBorderStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForegroundBlend(borderGradientColors...).
@@ -448,6 +517,28 @@ func (m model) View() tea.View {
 		v.Cursor = c
 	}
 
+	v.AltScreen = true
+	return v
+}
+
+func (m model) viewConfig() tea.View {
+	formBorder := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForegroundBlend(borderGradientColors...).
+		Width(m.width).
+		Padding(1, 0)
+
+	formContent := m.configForm.View()
+	rendered := formBorder.Render(formContent)
+
+	// Center vertically
+	formHeight := lipgloss.Height(rendered)
+	padding := (m.height - formHeight) / 2
+	if padding < 0 {
+		padding = 0
+	}
+
+	v := tea.NewView(strings.Repeat("\n", padding) + rendered)
 	v.AltScreen = true
 	return v
 }
