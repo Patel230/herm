@@ -32,7 +32,7 @@
 
 - [x] 3a: Add `modeModel` to `appMode`. Create `modelList` component in a new `modellist.go` file — holds filtered available models, cursor index, highlighted active model. Supports up/down navigation, enter to select, esc to cancel. Purple-themed view matching existing style.
 - [x] 3b: Register `/model` command in `commands` slice and `handleCommand`. Wire up `enterModelMode` / `exitModelMode` transitions similar to config mode. On enter: build model list from current config. On exit with selection: update `model.activeModel`, persist to config, show success message. Esc discards. If no API keys configured, show error message instead of entering model mode.
-- [ ] 3c: Add model selection tests — entering/exiting model mode, selecting a model persists it, esc discards, no-keys-configured error, only shows models for configured providers, active model highlighting.
+- [x] 3c: Add model selection tests — entering/exiting model mode, selecting a model persists it, esc discards, no-keys-configured error, only shows models for configured providers, active model highlighting.
 
 ## Phase 4: Integration Tests
 

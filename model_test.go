@@ -605,8 +605,8 @@ func TestUnknownCommandShowsError(t *testing.T) {
 	if len(m.messages) != 1 {
 		t.Fatalf("messages count = %d, want 1", len(m.messages))
 	}
-	if !m.messages[0].isSystem {
-		t.Error("unknown command message should be a system message")
+	if m.messages[0].kind != msgError {
+		t.Error("unknown command message should be an error message")
 	}
 	if !strings.Contains(m.messages[0].content, "/foo") {
 		t.Errorf("error message should mention the command, got %q", m.messages[0].content)
@@ -673,7 +673,7 @@ func TestConfigModeEscDiscards(t *testing.T) {
 	// Should show "discarded" system message
 	found := false
 	for _, msg := range m.messages {
-		if msg.isSystem && strings.Contains(msg.content, "discard") {
+		if msg.kind == msgInfo && strings.Contains(msg.content, "discard") {
 			found = true
 			break
 		}
@@ -711,7 +711,7 @@ func TestConfigModeEnterSaves(t *testing.T) {
 	// Should show "saved" system message
 	found := false
 	for _, msg := range m.messages {
-		if msg.isSystem && strings.Contains(msg.content, "saved") {
+		if msg.kind == msgSuccess && strings.Contains(msg.content, "saved") {
 			found = true
 			break
 		}
@@ -785,6 +785,142 @@ func TestConfigModeWindowResizeForwarded(t *testing.T) {
 	}
 }
 
+// --- filterCommands tests ---
+
+func TestFilterCommandsExactMatch(t *testing.T) {
+	matches := filterCommands("/config")
+	if len(matches) != 1 || matches[0] != "/config" {
+		t.Errorf("filterCommands(/config) = %v, want [/config]", matches)
+	}
+}
+
+func TestFilterCommandsPartialMatch(t *testing.T) {
+	matches := filterCommands("/con")
+	if len(matches) != 1 || matches[0] != "/config" {
+		t.Errorf("filterCommands(/con) = %v, want [/config]", matches)
+	}
+}
+
+func TestFilterCommandsNoMatch(t *testing.T) {
+	matches := filterCommands("/xyz")
+	if len(matches) != 0 {
+		t.Errorf("filterCommands(/xyz) = %v, want []", matches)
+	}
+}
+
+func TestFilterCommandsSlashOnly(t *testing.T) {
+	matches := filterCommands("/")
+	if len(matches) != len(commands) {
+		t.Errorf("filterCommands(/) = %v, want all %d commands", matches, len(commands))
+	}
+}
+
+// --- autocompleteMatches tests ---
+
+func TestAutocompleteMatchesChatMode(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+	m = typeString(m, "/")
+
+	matches := m.autocompleteMatches()
+	if len(matches) == 0 {
+		t.Error("autocompleteMatches should return matches when typing / in chat mode")
+	}
+}
+
+func TestAutocompleteMatchesConfigMode(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+	m = typeString(m, "/config")
+	m = sendKey(m, tea.KeyEnter)
+
+	// In config mode, autocomplete should not be active
+	matches := m.autocompleteMatches()
+	if matches != nil {
+		t.Errorf("autocompleteMatches should be nil in config mode, got %v", matches)
+	}
+}
+
+func TestAutocompleteMatchesNoSlash(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+	m = typeString(m, "hello")
+
+	matches := m.autocompleteMatches()
+	if matches != nil {
+		t.Errorf("autocompleteMatches should be nil without slash, got %v", matches)
+	}
+}
+
+// --- Tab/Esc key handling tests ---
+
+func TestTabAcceptsTopMatch(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+	m = typeString(m, "/con")
+	m = sendKey(m, tea.KeyTab)
+
+	if m.textarea.Value() != "/config" {
+		t.Errorf("textarea = %q, want /config after Tab", m.textarea.Value())
+	}
+}
+
+func TestTabWithNoMatchDoesNothing(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+	m = typeString(m, "/xyz")
+	m = sendKey(m, tea.KeyTab)
+
+	if m.textarea.Value() != "/xyz" {
+		t.Errorf("textarea = %q, want /xyz (unchanged) after Tab with no match", m.textarea.Value())
+	}
+}
+
+func TestEscDismissesSlashInput(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+	m = typeString(m, "/con")
+	m = sendKey(m, tea.KeyEscape)
+
+	if m.textarea.Value() != "" {
+		t.Errorf("textarea = %q, want empty after Esc on slash input", m.textarea.Value())
+	}
+}
+
+func TestEscWithoutSlashDoesNotClear(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+	m = typeString(m, "hello")
+	m = sendKey(m, tea.KeyEscape)
+
+	if m.textarea.Value() != "hello" {
+		t.Errorf("textarea = %q, want hello (unchanged) after Esc without slash", m.textarea.Value())
+	}
+}
+
+func TestTabThenEnterExecutesCommand(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+	m = typeString(m, "/con")
+	m = sendKey(m, tea.KeyTab)
+	m = sendKey(m, tea.KeyEnter)
+
+	if m.mode != modeConfig {
+		t.Errorf("mode = %d, want modeConfig after Tab+Enter on /con", m.mode)
+	}
+}
+
+func TestAutocompleteVisibleInView(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+	m = typeString(m, "/")
+
+	v := m.View()
+	if !strings.Contains(v.Content, "/config") {
+		t.Error("View should show /config in autocomplete when typing /")
+	}
+}
+
 func TestPasteConfigThresholdRespected(t *testing.T) {
 	m := initialModel()
 	m.config.PasteCollapseMinChars = 50
@@ -804,5 +940,393 @@ func TestPasteConfigThresholdRespected(t *testing.T) {
 	m = paste(m, shortText)
 	if m.textarea.Value() != shortText {
 		t.Errorf("paste below threshold should be verbatim, got %q", m.textarea.Value())
+	}
+}
+
+// --- /model command tests ---
+
+// modelWithKey returns a model with only an Anthropic API key configured.
+func modelWithKey() model {
+	m := initialModel()
+	m.config.AnthropicAPIKey = "sk-test-key"
+	m.config.GrokAPIKey = ""
+	m.config.OpenAIAPIKey = ""
+	m.config.ActiveModel = ""
+	return m
+}
+
+func TestSlashModelEntersModelMode(t *testing.T) {
+	m := modelWithKey()
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/model")
+	m = sendKey(m, tea.KeyEnter)
+
+	if m.mode != modeModel {
+		t.Errorf("mode = %d, want modeModel (%d)", m.mode, modeModel)
+	}
+	if m.textarea.Value() != "" {
+		t.Errorf("textarea should be empty after /model, got %q", m.textarea.Value())
+	}
+}
+
+func TestSlashModelNoKeysShowsError(t *testing.T) {
+	m := initialModel()
+	m.config.AnthropicAPIKey = ""
+	m.config.GrokAPIKey = ""
+	m.config.OpenAIAPIKey = ""
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/model")
+	m = sendKey(m, tea.KeyEnter)
+
+	if m.mode != modeChat {
+		t.Errorf("mode = %d, want modeChat (no keys configured)", m.mode)
+	}
+	if len(m.messages) != 1 {
+		t.Fatalf("messages count = %d, want 1", len(m.messages))
+	}
+	if m.messages[0].kind != msgError {
+		t.Error("should show error message when no keys configured")
+	}
+	if !strings.Contains(m.messages[0].content, "No API keys") {
+		t.Errorf("error message = %q, want mention of API keys", m.messages[0].content)
+	}
+}
+
+func TestModelModeEscCancels(t *testing.T) {
+	m := modelWithKey()
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/model")
+	m = sendKey(m, tea.KeyEnter)
+
+	if m.mode != modeModel {
+		t.Fatal("should be in model mode")
+	}
+
+	result, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = result.(model)
+
+	if m.mode != modeChat {
+		t.Errorf("mode = %d, want modeChat after Esc", m.mode)
+	}
+	found := false
+	for _, msg := range m.messages {
+		if msg.kind == msgInfo && strings.Contains(msg.content, "cancelled") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("should show cancellation message after Esc")
+	}
+}
+
+func TestModelModeEnterSelectsModel(t *testing.T) {
+	m := modelWithKey()
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/model")
+	m = sendKey(m, tea.KeyEnter)
+
+	// Should show Anthropic models since only that key is set
+	if len(m.modelList.models) == 0 {
+		t.Fatal("model list should have models")
+	}
+	for _, md := range m.modelList.models {
+		if md.Provider != ProviderAnthropic {
+			t.Errorf("model list should only have anthropic models, got %s", md.Provider)
+		}
+	}
+
+	// Select (Enter)
+	selectedModel := m.modelList.selected()
+	result, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = result.(model)
+
+	if m.mode != modeChat {
+		t.Errorf("mode = %d, want modeChat after selection", m.mode)
+	}
+	if m.config.ActiveModel != selectedModel.ID {
+		t.Errorf("ActiveModel = %q, want %q", m.config.ActiveModel, selectedModel.ID)
+	}
+	found := false
+	for _, msg := range m.messages {
+		if msg.kind == msgSuccess && strings.Contains(msg.content, selectedModel.DisplayName) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("should show success message with model name")
+	}
+}
+
+func TestModelModeOnlyShowsConfiguredProviders(t *testing.T) {
+	m := initialModel()
+	m.config.AnthropicAPIKey = ""
+	m.config.GrokAPIKey = "grok-key"
+	m.config.OpenAIAPIKey = "openai-key"
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/model")
+	m = sendKey(m, tea.KeyEnter)
+
+	if m.mode != modeModel {
+		t.Fatal("should be in model mode")
+	}
+
+	for _, md := range m.modelList.models {
+		if md.Provider == ProviderAnthropic {
+			t.Error("should not show Anthropic models without key")
+		}
+	}
+	// Should have Grok and OpenAI models
+	hasGrok := false
+	hasOpenAI := false
+	for _, md := range m.modelList.models {
+		if md.Provider == ProviderGrok {
+			hasGrok = true
+		}
+		if md.Provider == ProviderOpenAI {
+			hasOpenAI = true
+		}
+	}
+	if !hasGrok {
+		t.Error("should show Grok models with key configured")
+	}
+	if !hasOpenAI {
+		t.Error("should show OpenAI models with key configured")
+	}
+}
+
+func TestModelModeNavigationUpDown(t *testing.T) {
+	m := initialModel()
+	m.config.AnthropicAPIKey = "key"
+	m.config.OpenAIAPIKey = "key"
+	m.config.ActiveModel = ""
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/model")
+	m = sendKey(m, tea.KeyEnter)
+
+	start := m.modelList.cursor
+
+	// Move down
+	result, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = result.(model)
+	if m.modelList.cursor != start+1 {
+		t.Errorf("cursor after down = %d, want %d", m.modelList.cursor, start+1)
+	}
+
+	// Move down again
+	result, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = result.(model)
+	if m.modelList.cursor != start+2 {
+		t.Errorf("cursor after second down = %d, want %d", m.modelList.cursor, start+2)
+	}
+
+	// Move up
+	result, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = result.(model)
+	if m.modelList.cursor != start+1 {
+		t.Errorf("cursor after up = %d, want %d", m.modelList.cursor, start+1)
+	}
+}
+
+func TestModelModeNavigationBounds(t *testing.T) {
+	m := modelWithKey()
+	m.config.ActiveModel = ""
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/model")
+	m = sendKey(m, tea.KeyEnter)
+
+	// Move cursor to top first
+	for i := 0; i < len(m.modelList.models); i++ {
+		result, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+		m = result.(model)
+	}
+	if m.modelList.cursor != 0 {
+		t.Errorf("cursor should be at 0 after moving up enough times, got %d", m.modelList.cursor)
+	}
+
+	// Try to go above 0
+	result, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = result.(model)
+	if m.modelList.cursor != 0 {
+		t.Errorf("cursor should not go below 0, got %d", m.modelList.cursor)
+	}
+
+	// Go to bottom
+	for i := 0; i < len(m.modelList.models)+5; i++ {
+		result, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		m = result.(model)
+	}
+	if m.modelList.cursor != len(m.modelList.models)-1 {
+		t.Errorf("cursor should stop at last item, got %d, want %d",
+			m.modelList.cursor, len(m.modelList.models)-1)
+	}
+}
+
+func TestModelModeCursorStartsOnActiveModel(t *testing.T) {
+	m := initialModel()
+	m.config.AnthropicAPIKey = "key"
+	// Set active model to second Anthropic model
+	m.config.ActiveModel = "claude-haiku-4-20250414"
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/model")
+	m = sendKey(m, tea.KeyEnter)
+
+	// Find the index of the active model in the list
+	expectedIdx := -1
+	for i, md := range m.modelList.models {
+		if md.ID == "claude-haiku-4-20250414" {
+			expectedIdx = i
+			break
+		}
+	}
+	if expectedIdx == -1 {
+		t.Fatal("active model not found in list")
+	}
+	if m.modelList.cursor != expectedIdx {
+		t.Errorf("cursor = %d, want %d (should start on active model)", m.modelList.cursor, expectedIdx)
+	}
+}
+
+func TestModelModeActiveModelHighlighted(t *testing.T) {
+	m := initialModel()
+	m.config.AnthropicAPIKey = "key"
+	m.config.ActiveModel = "claude-sonnet-4-20250514"
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/model")
+	m = sendKey(m, tea.KeyEnter)
+
+	if m.modelList.activeModel != "claude-sonnet-4-20250514" {
+		t.Errorf("activeModel = %q, want claude-sonnet-4-20250514", m.modelList.activeModel)
+	}
+
+	// The view should contain the active marker
+	view := m.modelList.View()
+	if !strings.Contains(view, "●") {
+		t.Error("model list view should show active marker ●")
+	}
+}
+
+func TestModelModeCtrlCCancels(t *testing.T) {
+	m := modelWithKey()
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/model")
+	m = sendKey(m, tea.KeyEnter)
+
+	result, _ := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	m = result.(model)
+
+	if m.mode != modeChat {
+		t.Errorf("mode = %d, want modeChat after Ctrl+C", m.mode)
+	}
+}
+
+func TestModelModeWindowResize(t *testing.T) {
+	m := modelWithKey()
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/model")
+	m = sendKey(m, tea.KeyEnter)
+
+	result, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = result.(model)
+
+	if m.mode != modeModel {
+		t.Error("should stay in model mode after resize")
+	}
+	if m.width != 120 || m.height != 40 {
+		t.Errorf("dimensions = %dx%d, want 120x40", m.width, m.height)
+	}
+}
+
+func TestModelModeViewRendered(t *testing.T) {
+	m := modelWithKey()
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/model")
+	m = sendKey(m, tea.KeyEnter)
+
+	v := m.View()
+	if !strings.Contains(v.Content, "Select Model") {
+		t.Error("model view should contain 'Select Model'")
+	}
+}
+
+func TestModelCommandInAutocomplete(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+	m = typeString(m, "/m")
+
+	matches := m.autocompleteMatches()
+	found := false
+	for _, match := range matches {
+		if match == "/model" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("autocomplete for /m should include /model, got %v", matches)
+	}
+}
+
+func TestModelModeSelectNavigatedModel(t *testing.T) {
+	m := initialModel()
+	m.config.AnthropicAPIKey = "key"
+	m.config.ActiveModel = ""
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/model")
+	m = sendKey(m, tea.KeyEnter)
+
+	// Navigate down from initial position
+	result, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = result.(model)
+
+	targetModel := m.modelList.models[m.modelList.cursor]
+
+	// Select it
+	result, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = result.(model)
+
+	if m.config.ActiveModel != targetModel.ID {
+		t.Errorf("ActiveModel = %q, want %q", m.config.ActiveModel, targetModel.ID)
+	}
+}
+
+func TestModelModeVimKeys(t *testing.T) {
+	m := initialModel()
+	m.config.AnthropicAPIKey = "key"
+	m.config.OpenAIAPIKey = "key"
+	m.config.ActiveModel = ""
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/model")
+	m = sendKey(m, tea.KeyEnter)
+
+	startCursor := m.modelList.cursor
+
+	// j moves down
+	result, _ := m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	m = result.(model)
+	if m.modelList.cursor != startCursor+1 {
+		t.Errorf("cursor after j = %d, want %d", m.modelList.cursor, startCursor+1)
+	}
+
+	// k moves up
+	result, _ = m.Update(tea.KeyPressMsg{Code: 'k', Text: "k"})
+	m = result.(model)
+	if m.modelList.cursor != startCursor {
+		t.Errorf("cursor after k = %d, want %d", m.modelList.cursor, startCursor)
 	}
 }
