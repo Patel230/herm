@@ -117,18 +117,23 @@ func expandPastes(s string, store map[int]string) string {
 }
 
 type model struct {
-	textarea   textarea.Model
-	viewport   viewport.Model
-	width      int
-	height     int
-	messages   []message
-	ready      bool
-	config     Config
-	pasteCount int
-	pasteStore map[int]string // paste ID → actual content
-	mode       appMode
-	configForm configForm
-	modelList  modelList
+	textarea     textarea.Model
+	viewport     viewport.Model
+	width        int
+	height       int
+	messages     []message
+	ready        bool
+	config       Config
+	pasteCount   int
+	pasteStore   map[int]string // paste ID → actual content
+	mode         appMode
+	configForm   configForm
+	modelList    modelList
+	models       []ModelDef
+	modelsErr    error
+	modelsLoaded bool
+	sweScores    map[string]float64
+	sweLoaded    bool
 }
 
 // autocompleteMatches returns matching commands for the current textarea input,
@@ -183,8 +188,32 @@ func initialModel() model {
 	}
 }
 
+// modelsMsg carries the result of the async model fetch.
+type modelsMsg struct {
+	models []ModelDef
+	err    error
+}
+
+// sweScoresMsg carries the result of the async SWE-bench fetch.
+type sweScoresMsg struct {
+	scores map[string]float64
+	err    error
+}
+
+// fetchModelsCmd returns a tea.Cmd that fetches models from OpenRouter.
+func fetchModelsCmd() tea.Msg {
+	models, err := fetchModels()
+	return modelsMsg{models: models, err: err}
+}
+
+// fetchSWEScoresCmd returns a tea.Cmd that fetches SWE-bench scores.
+func fetchSWEScoresCmd() tea.Msg {
+	scores, err := fetchSWEScores()
+	return sweScoresMsg{scores: scores, err: err}
+}
+
 func (m model) Init() tea.Cmd {
-	return textarea.Blink
+	return tea.Batch(textarea.Blink, fetchModelsCmd, fetchSWEScoresCmd)
 }
 
 // wrapLineCount reproduces the textarea's internal wrap() function exactly
@@ -266,6 +295,31 @@ func (m model) displayLineCount() int {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Handle async model fetch result regardless of mode
+	if msg, ok := msg.(modelsMsg); ok {
+		m.modelsLoaded = true
+		m.modelsErr = msg.err
+		if msg.err == nil {
+			m.models = msg.models
+			if m.sweLoaded && m.sweScores != nil {
+				matchSWEScores(m.models, m.sweScores)
+			}
+		}
+		return m, nil
+	}
+
+	// Handle async SWE-bench scores result regardless of mode
+	if msg, ok := msg.(sweScoresMsg); ok {
+		m.sweLoaded = true
+		if msg.err == nil {
+			m.sweScores = msg.scores
+			if m.modelsLoaded && m.models != nil {
+				matchSWEScores(m.models, m.sweScores)
+			}
+		}
+		return m, nil
+	}
+
 	// Config mode: delegate to config form
 	if m.mode == modeConfig {
 		return m.updateConfigMode(msg)
@@ -458,7 +512,35 @@ func (m model) updateConfigMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // enterModelMode switches to the model selection mode.
 func (m model) enterModelMode() (tea.Model, tea.Cmd) {
-	available := m.config.availableModels()
+	if !m.modelsLoaded {
+		m.messages = append(m.messages, message{
+			content: "Models are still loading... please try again in a moment.",
+			kind:    msgInfo,
+		})
+		m.textarea.Reset()
+		m.textarea.SetHeight(minInputHeight)
+		if m.ready {
+			m.viewport.SetHeight(m.viewportHeight())
+			m.updateViewportContent()
+			m.viewport.GotoBottom()
+		}
+		return m, nil
+	}
+	if m.modelsErr != nil {
+		m.messages = append(m.messages, message{
+			content: fmt.Sprintf("Failed to load models: %v", m.modelsErr),
+			kind:    msgError,
+		})
+		m.textarea.Reset()
+		m.textarea.SetHeight(minInputHeight)
+		if m.ready {
+			m.viewport.SetHeight(m.viewportHeight())
+			m.updateViewportContent()
+			m.viewport.GotoBottom()
+		}
+		return m, nil
+	}
+	available := m.config.availableModels(m.models)
 	if len(available) == 0 {
 		m.messages = append(m.messages, message{
 			content: "No API keys configured. Use /config to add a key first.",
@@ -474,7 +556,7 @@ func (m model) enterModelMode() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.mode = modeModel
-	activeModel := m.config.resolveActiveModel()
+	activeModel := m.config.resolveActiveModel(m.models)
 	m.modelList = newModelList(available, activeModel, m.width, m.height)
 	m.textarea.Reset()
 	m.textarea.SetHeight(minInputHeight)
@@ -758,19 +840,13 @@ func (m model) viewModel() tea.View {
 		Border(lipgloss.RoundedBorder()).
 		BorderForegroundBlend(borderGradientColors...).
 		Width(m.width).
+		Height(m.height - 2). // constrain to window height (minus border)
 		Padding(1, 0)
 
 	formContent := m.modelList.View()
 	rendered := formBorder.Render(formContent)
 
-	// Center vertically
-	formHeight := lipgloss.Height(rendered)
-	padding := (m.height - formHeight) / 2
-	if padding < 0 {
-		padding = 0
-	}
-
-	v := tea.NewView(strings.Repeat("\n", padding) + rendered)
+	v := tea.NewView(rendered)
 	v.AltScreen = true
 	return v
 }
