@@ -57,7 +57,7 @@ Add a `/config` slash command that opens an interactive form (using `charm.land/
 
 - [x] 3a: Add command parsing layer in `Update` — when input starts with `/`, route to command handling instead of sending as a message. `/config` recognized (stub), unknown commands show error. Note: `huh` doesn't support bubbletea v2 yet, so we'll build a custom config form using bubbles/v2 textinput instead.
 - [x] 3b: Add mode switching (`modeChat` / `modeConfig`). `/config` creates a custom config form (using bubbles/v2 textinput) pre-populated with current values. In `modeConfig`, Update/View delegated to form. Enter saves, Esc discards. Config changes persist to disk.
-- [ ] 3c: Style the huh form with a custom theme matching cpsl's purple aesthetic (use the existing `borderGradientColors` and `logoColors` as reference). Ensure the form renders cleanly in the alt-screen context.
+- [x] 3c: Style the config form with purple theme matching cpsl's aesthetic — purple cursor, gradient labels, field descriptions, styled keybind hints.
 - [ ] 3d: Add tests for command parsing (recognizes `/config`, rejects unknown `/foo`, doesn't treat `/` in normal text as command), mode switching (entering and exiting config mode), and config form completion (values saved on confirm, discarded on abort).
 
 ---

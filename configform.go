@@ -12,6 +12,7 @@ import (
 
 type configField struct {
 	label string
+	desc  string
 	input textinput.Model
 	err   string
 }
@@ -27,13 +28,25 @@ func newConfigForm(cfg Config, width, height int) configForm {
 	pasteInput := textinput.New()
 	pasteInput.Placeholder = "200"
 	pasteInput.SetValue(strconv.Itoa(cfg.PasteCollapseMinChars))
+	pasteInput.Prompt = "  "
 	pasteInput.Focus()
 	pasteInput.CharLimit = 10
 	pasteInput.SetWidth(20)
 
+	// Purple-themed textinput styles
+	s := pasteInput.Styles()
+	s.Focused.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("#E0E0E0"))
+	s.Focused.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#5B1A99"))
+	s.Focused.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#9B82F5"))
+	s.Blurred.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
+	s.Blurred.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#444444"))
+	s.Blurred.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
+	s.Cursor.Color = lipgloss.Color("#B88AFF")
+	pasteInput.SetStyles(s)
+
 	return configForm{
 		fields: []configField{
-			{label: "Paste collapse min chars", input: pasteInput},
+			{label: "Paste collapse min chars", desc: "minimum characters to trigger paste collapsing", input: pasteInput},
 		},
 		width:  width,
 		height: height,
@@ -93,28 +106,39 @@ func (f configForm) View() string {
 
 	labelStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#9B6ADE")).
-		PaddingLeft(2)
+		Bold(true)
+
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#666666")).
+		Italic(true)
 
 	errStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#FF6B6B")).
 		PaddingLeft(4)
 
 	hintStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#666666")).
+		Foreground(lipgloss.Color("#555555")).
 		PaddingLeft(2).
 		PaddingTop(1)
 
+	hintKeyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#7B3EC7"))
+
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("Configuration"))
+	b.WriteString(titleStyle.Render("⚙ Configuration"))
 	b.WriteString("\n")
 
 	for i, field := range f.fields {
-		prefix := "  "
+		cursor := lipgloss.NewStyle().Foreground(lipgloss.Color("#3A0066")).Render("  ")
 		if i == f.focused {
-			prefix = lipgloss.NewStyle().Foreground(lipgloss.Color("#B88AFF")).Render("▸ ")
+			cursor = lipgloss.NewStyle().Foreground(lipgloss.Color("#B88AFF")).Render("▸ ")
 		}
-		b.WriteString(prefix)
+		b.WriteString(cursor)
 		b.WriteString(labelStyle.Render(field.label))
+		if field.desc != "" {
+			b.WriteString("  ")
+			b.WriteString(descStyle.Render(field.desc))
+		}
 		b.WriteString("\n")
 		b.WriteString(fmt.Sprintf("    %s\n", field.input.View()))
 		if field.err != "" {
@@ -123,7 +147,12 @@ func (f configForm) View() string {
 		}
 	}
 
-	b.WriteString(hintStyle.Render("enter: save • esc: cancel"))
+	hint := fmt.Sprintf(
+		"  %s save  %s cancel",
+		hintKeyStyle.Render("enter"),
+		hintKeyStyle.Render("esc"),
+	)
+	b.WriteString(hintStyle.Render(hint))
 	b.WriteString("\n")
 
 	return b.String()
