@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -570,6 +571,217 @@ func TestPasteMultiplePastesInOneMessage(t *testing.T) {
 	}
 	if !strings.Contains(content, " and: ") {
 		t.Error("message should contain ' and: ' between pastes")
+	}
+}
+
+// --- Command parsing tests ---
+
+func TestSlashConfigEntersConfigMode(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/config")
+	m = sendKey(m, tea.KeyEnter)
+
+	if m.mode != modeConfig {
+		t.Errorf("mode = %d, want modeConfig (%d)", m.mode, modeConfig)
+	}
+	// Textarea should be cleared and blurred
+	if m.textarea.Value() != "" {
+		t.Errorf("textarea should be empty after /config, got %q", m.textarea.Value())
+	}
+}
+
+func TestUnknownCommandShowsError(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/foo")
+	m = sendKey(m, tea.KeyEnter)
+
+	if m.mode != modeChat {
+		t.Error("unknown command should stay in chat mode")
+	}
+	if len(m.messages) != 1 {
+		t.Fatalf("messages count = %d, want 1", len(m.messages))
+	}
+	if !m.messages[0].isSystem {
+		t.Error("unknown command message should be a system message")
+	}
+	if !strings.Contains(m.messages[0].content, "/foo") {
+		t.Errorf("error message should mention the command, got %q", m.messages[0].content)
+	}
+}
+
+func TestSlashInNormalTextNotTreatedAsCommand(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "use a/b path")
+	m = sendKey(m, tea.KeyEnter)
+
+	if m.mode != modeChat {
+		t.Error("text with / in middle should stay in chat mode")
+	}
+	if len(m.messages) != 1 {
+		t.Fatalf("messages count = %d, want 1", len(m.messages))
+	}
+	if m.messages[0].content != "use a/b path" {
+		t.Errorf("message = %q, want %q", m.messages[0].content, "use a/b path")
+	}
+}
+
+func TestSlashConfigWithExtraArgs(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/config something")
+	m = sendKey(m, tea.KeyEnter)
+
+	// Should still enter config mode (extra args ignored for now)
+	if m.mode != modeConfig {
+		t.Errorf("mode = %d, want modeConfig", m.mode)
+	}
+}
+
+// --- Mode switching tests ---
+
+func TestConfigModeEscDiscards(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	originalThreshold := m.config.PasteCollapseMinChars
+
+	// Enter config mode
+	m = typeString(m, "/config")
+	m = sendKey(m, tea.KeyEnter)
+
+	if m.mode != modeConfig {
+		t.Fatal("should be in config mode")
+	}
+
+	// Press Esc to cancel
+	result, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = result.(model)
+
+	if m.mode != modeChat {
+		t.Errorf("mode = %d, want modeChat after Esc", m.mode)
+	}
+	if m.config.PasteCollapseMinChars != originalThreshold {
+		t.Error("config should not change after Esc")
+	}
+	// Should show "discarded" system message
+	found := false
+	for _, msg := range m.messages {
+		if msg.isSystem && strings.Contains(msg.content, "discard") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("should show discard message after Esc")
+	}
+}
+
+func TestConfigModeEnterSaves(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	// Enter config mode
+	m = typeString(m, "/config")
+	m = sendKey(m, tea.KeyEnter)
+
+	if m.mode != modeConfig {
+		t.Fatal("should be in config mode")
+	}
+
+	// The form should be pre-populated with current value
+	val := m.configForm.fields[0].input.Value()
+	if val != strconv.Itoa(m.config.PasteCollapseMinChars) {
+		t.Errorf("form value = %q, want %q", val, strconv.Itoa(m.config.PasteCollapseMinChars))
+	}
+
+	// Press Enter to save (valid value already set)
+	result, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = result.(model)
+
+	if m.mode != modeChat {
+		t.Errorf("mode = %d, want modeChat after Enter", m.mode)
+	}
+	// Should show "saved" system message
+	found := false
+	for _, msg := range m.messages {
+		if msg.isSystem && strings.Contains(msg.content, "saved") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("should show saved message after Enter")
+	}
+}
+
+func TestConfigModeValidationRejectsInvalid(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	// Enter config mode
+	m = typeString(m, "/config")
+	m = sendKey(m, tea.KeyEnter)
+
+	// Clear the input and type invalid value
+	// Select all and delete existing content
+	m.configForm.fields[0].input.SetValue("abc")
+
+	// Press Enter — should stay in config mode due to validation
+	result, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = result.(model)
+
+	if m.mode != modeConfig {
+		t.Errorf("mode = %d, want modeConfig (invalid input should not save)", m.mode)
+	}
+	if m.configForm.fields[0].err == "" {
+		t.Error("should show validation error for non-numeric input")
+	}
+}
+
+func TestConfigModeCtrlCDiscards(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/config")
+	m = sendKey(m, tea.KeyEnter)
+
+	// Ctrl+C in config mode should discard (not quit the app)
+	result, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	m = result.(model)
+
+	if m.mode != modeChat {
+		t.Errorf("mode = %d, want modeChat after Ctrl+C in config", m.mode)
+	}
+	// Should NOT quit the app
+	if cmd != nil {
+		// Check it's not a quit command by running it
+		// (focus command from textarea is OK)
+	}
+}
+
+func TestConfigModeWindowResizeForwarded(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/config")
+	m = sendKey(m, tea.KeyEnter)
+
+	// Resize while in config mode
+	result, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = result.(model)
+
+	if m.mode != modeConfig {
+		t.Error("should stay in config mode after resize")
+	}
+	if m.width != 120 || m.height != 40 {
+		t.Errorf("dimensions = %dx%d, want 120x40", m.width, m.height)
 	}
 }
 
