@@ -35,8 +35,8 @@ type modelList struct {
 }
 
 // visibleRows returns how many model rows fit in the available height.
-// Accounts for border (2), padding (2), title+blank (3), hint (3).
-const modelListChrome = 10 // border top/bottom + padding + title + blank line + hint lines
+// Accounts for border (2), padding (2), title+blank (2), header (1), separator (1), hint (2).
+const modelListChrome = 12 // border + padding + title + header + separator + hint
 
 func (l modelList) visibleRows() int {
 	rows := l.height - modelListChrome
@@ -177,6 +177,37 @@ func (l modelList) selected() ModelDef {
 	return l.models[l.cursor]
 }
 
+// columnLabel returns the header label for a sort column.
+func columnLabel(col sortColumn) string {
+	switch col {
+	case colName:
+		return "MODEL"
+	case colProvider:
+		return "PROVIDER"
+	case colPrice:
+		return "PRICE"
+	case colSWE:
+		return "SWE-BENCH"
+	}
+	return ""
+}
+
+// formatSWEScore formats a SWE-bench score for display.
+func formatSWEScore(score float64) string {
+	if score == 0 {
+		return "—"
+	}
+	return fmt.Sprintf("%.1f", score)
+}
+
+// padRight pads s with spaces to width w. If s is longer, it's truncated.
+func padRight(s string, w int) string {
+	if len(s) >= w {
+		return s[:w]
+	}
+	return s + strings.Repeat(" ", w-len(s))
+}
+
 func (l modelList) View() string {
 	titleStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#B88AFF")).
@@ -196,31 +227,100 @@ func (l modelList) View() string {
 		return b.String()
 	}
 
-	providerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#666666")).
-		Italic(true)
+	// Compute column widths from data
+	nameW := len("MODEL")
+	provW := len("PROVIDER")
+	priceW := len("PRICE")
+	sweW := len("SWE-BENCH")
 
+	for _, m := range l.models {
+		if len(m.DisplayName) > nameW {
+			nameW = len(m.DisplayName)
+		}
+		if len(m.Provider) > provW {
+			provW = len(m.Provider)
+		}
+		p := fmt.Sprintf("%s / %s", formatPrice(m.PromptPrice), formatPrice(m.CompletionPrice))
+		if len(p) > priceW {
+			priceW = len(p)
+		}
+		s := formatSWEScore(m.SWEScore)
+		if len(s) > sweW {
+			sweW = len(s)
+		}
+	}
+
+	// Add padding between columns
+	const colGap = 2
+
+	// Styles
+	headerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#888888")).
+		Bold(true)
+	activeHeaderStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#B88AFF")).
+		Bold(true)
+	sepStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#3A0066"))
+	providerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#666666"))
 	priceStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#555555"))
-
-	activeMarker := lipgloss.NewStyle().
+	sweStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#9B6ADE"))
+	sweNoneStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#444444"))
+	activeMarkerStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#6FE7B8")).
 		Bold(true)
-
 	scrollIndicator := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#555555")).
 		PaddingLeft(2)
-
 	hintStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#555555")).
 		PaddingLeft(2).
 		PaddingTop(1)
-
 	hintKeyStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#7B3EC7"))
 
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("⚡ Select Model"))
+	b.WriteString("\n")
+
+	// Render header row
+	sortArrow := func(col sortColumn) string {
+		if l.sortCol != col {
+			return ""
+		}
+		if l.sortAsc {
+			return " ▲"
+		}
+		return " ▼"
+	}
+
+	renderHeader := func(col sortColumn, width int) string {
+		label := columnLabel(col) + sortArrow(col)
+		padded := padRight(label, width)
+		if l.sortCol == col {
+			return activeHeaderStyle.Render(padded)
+		}
+		return headerStyle.Render(padded)
+	}
+
+	gap := strings.Repeat(" ", colGap)
+	b.WriteString("  ") // cursor column placeholder
+	b.WriteString(renderHeader(colName, nameW))
+	b.WriteString(gap)
+	b.WriteString(renderHeader(colProvider, provW))
+	b.WriteString(gap)
+	b.WriteString(renderHeader(colPrice, priceW))
+	b.WriteString(gap)
+	b.WriteString(renderHeader(colSWE, sweW))
+	b.WriteString("\n")
+
+	// Separator line
+	totalW := 2 + nameW + colGap + provW + colGap + priceW + colGap + sweW + 3
+	b.WriteString(sepStyle.Render("  " + strings.Repeat("─", totalW-2)))
 	b.WriteString("\n")
 
 	vis := l.visibleRows()
@@ -237,31 +337,35 @@ func (l modelList) View() string {
 
 	for i := l.scroll; i < end; i++ {
 		m := l.models[i]
-		cursorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#3A0066"))
+		cursorStr := "  "
 		labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
 
-		cursor := cursorStyle.Render("  ")
 		if i == l.cursor {
-			cursor = lipgloss.NewStyle().Foreground(lipgloss.Color("#B88AFF")).Render("▸ ")
+			cursorStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#B88AFF")).Render("▸ ")
 			labelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E0E0E0")).Bold(true)
+		} else {
+			cursorStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#3A0066")).Render("  ")
 		}
 
-		b.WriteString(cursor)
-		b.WriteString(labelStyle.Render(m.DisplayName))
-		b.WriteString("  ")
-		b.WriteString(providerStyle.Render(m.Provider))
+		price := fmt.Sprintf("%s / %s", formatPrice(m.PromptPrice), formatPrice(m.CompletionPrice))
+		score := formatSWEScore(m.SWEScore)
 
-		// Pricing columns
-		if m.PromptPrice > 0 || m.CompletionPrice > 0 {
-			b.WriteString("  ")
-			b.WriteString(priceStyle.Render(
-				fmt.Sprintf("%s / %s", formatPrice(m.PromptPrice), formatPrice(m.CompletionPrice)),
-			))
+		b.WriteString(cursorStr)
+		b.WriteString(labelStyle.Render(padRight(m.DisplayName, nameW)))
+		b.WriteString(gap)
+		b.WriteString(providerStyle.Render(padRight(m.Provider, provW)))
+		b.WriteString(gap)
+		b.WriteString(priceStyle.Render(padRight(price, priceW)))
+		b.WriteString(gap)
+		if m.SWEScore == 0 {
+			b.WriteString(sweNoneStyle.Render(padRight(score, sweW)))
+		} else {
+			b.WriteString(sweStyle.Render(padRight(score, sweW)))
 		}
 
 		if m.ID == l.activeModel {
-			b.WriteString("  ")
-			b.WriteString(activeMarker.Render("●"))
+			b.WriteString(" ")
+			b.WriteString(activeMarkerStyle.Render("●"))
 		}
 		b.WriteString("\n")
 	}
@@ -273,9 +377,10 @@ func (l modelList) View() string {
 	}
 
 	hint := fmt.Sprintf(
-		"  %s select  %s cancel  %s in/out per 1M tokens",
+		"  %s select  %s cancel  %s sort  %s in/out per 1M tokens",
 		hintKeyStyle.Render("enter"),
 		hintKeyStyle.Render("esc"),
+		hintKeyStyle.Render("←/→"),
 		hintKeyStyle.Render("$"),
 	)
 	b.WriteString(hintStyle.Render(hint))
