@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"image/color"
+	"log"
 	"os"
 	"strings"
 	"unicode"
@@ -64,6 +65,7 @@ type model struct {
 	height   int
 	messages []string
 	ready    bool
+	config   Config
 }
 
 func initialModel() model {
@@ -93,9 +95,15 @@ func initialModel() model {
 	ta.SetStyles(s)
 	ta.Focus()
 
+	cfg, err := loadConfig()
+	if err != nil {
+		log.Printf("warning: loading config: %v (using defaults)", err)
+	}
+
 	return model{
 		textarea: ta,
 		messages: []string{},
+		config:   cfg,
 	}
 }
 
@@ -331,7 +339,7 @@ func (m model) View() tea.View {
 	inputBorderStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForegroundBlend(borderGradientColors...).
-		Width(m.width - 2)
+		Width(m.width)
 
 	inputBox := inputBorderStyle.Render(m.textarea.View())
 
