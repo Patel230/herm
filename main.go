@@ -61,7 +61,8 @@ var borderGradientColors = []color.Color{
 }
 
 type message struct {
-	content string
+	content  string
+	isSystem bool // system feedback (e.g. unknown command errors)
 }
 
 var pasteplaceholderRe = regexp.MustCompile(`\[pasted #(\d+) \| \d+ chars\]`)
@@ -271,6 +272,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			val := strings.TrimSpace(m.textarea.Value())
 			if val != "" {
+				if strings.HasPrefix(val, "/") {
+					return m.handleCommand(val)
+				}
 				content := expandPastes(val, m.pasteStore)
 				m.messages = append(m.messages, message{content: content})
 				m.textarea.Reset()
@@ -306,6 +310,46 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+// enterConfigMode switches to the config editing mode.
+// Stub for 3a — will be fully implemented in 3b.
+func (m model) enterConfigMode() (tea.Model, tea.Cmd) {
+	m.messages = append(m.messages, message{
+		content:  "Opening config... (not yet implemented)",
+		isSystem: true,
+	})
+	m.textarea.Reset()
+	m.textarea.SetHeight(minInputHeight)
+	if m.ready {
+		m.viewport.SetHeight(m.viewportHeight())
+		m.updateViewportContent()
+		m.viewport.GotoBottom()
+	}
+	return m, nil
+}
+
+// handleCommand processes slash commands and returns the updated model.
+func (m model) handleCommand(input string) (tea.Model, tea.Cmd) {
+	cmd := strings.Fields(input)[0] // e.g. "/config"
+
+	switch cmd {
+	case "/config":
+		return m.enterConfigMode()
+	default:
+		m.messages = append(m.messages, message{
+			content:  fmt.Sprintf("Unknown command: %s", cmd),
+			isSystem: true,
+		})
+		m.textarea.Reset()
+		m.textarea.SetHeight(minInputHeight)
+		if m.ready {
+			m.viewport.SetHeight(m.viewportHeight())
+			m.updateViewportContent()
+			m.viewport.GotoBottom()
+		}
+		return m, nil
+	}
 }
 
 func (m *model) recalcTextareaHeight() {
@@ -358,11 +402,20 @@ func (m *model) updateViewportContent() {
 			Foreground(lipgloss.Color("#E0E0E0")).
 			PaddingLeft(2)
 
+		systemStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FF6B6B")).
+			PaddingLeft(2).
+			Italic(true)
+
 		var parts []string
 		parts = append(parts, centeredLogo, "")
 		for _, msg := range m.messages {
 			wrapped := lipgloss.NewStyle().Width(m.width - 4).Render(msg.content)
-			parts = append(parts, msgStyle.Render(wrapped), "")
+			if msg.isSystem {
+				parts = append(parts, systemStyle.Render(wrapped), "")
+			} else {
+				parts = append(parts, msgStyle.Render(wrapped), "")
+			}
 		}
 		content = strings.Join(parts, "\n")
 	}
