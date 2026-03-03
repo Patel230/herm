@@ -18,7 +18,7 @@
 
 Create the `.cpsl/` directory and `config.json` on startup, and load config into the model.
 
-- [ ] 1a: Add a `config.go` file with the config struct, default values, load/save functions, and `.cpsl/` directory initialization. The config struct should include a `PasteCollapseMinLines int` field (default: 5). Use `os.UserConfigDir()` or current working directory (`.cpsl/config.json`) for path resolution — match Claude Code's per-project pattern (`.cpsl/` in CWD). Ensure `config.json` is created with defaults if it doesn't exist, and existing files are loaded and merged with defaults for forward-compat.
+- [x] 1a: Add a `config.go` file with the config struct, default values, load/save functions, and `.cpsl/` directory initialization. The config struct should include a `PasteCollapseMinLines int` field (default: 5). Use `os.UserConfigDir()` or current working directory (`.cpsl/config.json`) for path resolution — match Claude Code's per-project pattern (`.cpsl/` in CWD). Ensure `config.json` is created with defaults if it doesn't exist, and existing files are loaded and merged with defaults for forward-compat.
 - [ ] 1b: Integrate config loading into the app startup (`main()` / `initialModel()`). Store the loaded config in the `model` struct so it's available throughout the Update/View cycle. Handle errors gracefully (log warning, use defaults).
 - [ ] 1c: Add `.cpsl/` to `.gitignore` so it's not committed.
 - [ ] 1d: Add tests for config load/save — test default creation, round-trip (save then load), missing file fallback, malformed JSON fallback, and field merging when new fields are added.
