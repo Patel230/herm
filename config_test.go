@@ -37,7 +37,7 @@ func TestLoadConfigCreatesDefault(t *testing.T) {
 func TestLoadConfigRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 
-	original := Config{PasteCollapseMinLines: 10}
+	original := Config{PasteCollapseMinChars: 10}
 	if err := saveConfigTo(dir, original); err != nil {
 		t.Fatalf("saveConfigTo: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestLoadConfigMalformedJSON(t *testing.T) {
 func TestLoadConfigMergesNewFields(t *testing.T) {
 	dir := t.TempDir()
 
-	// Write a config file that is missing the PasteCollapseMinLines field
+	// Write a config file that is missing the PasteCollapseMinChars field
 	// (simulates upgrading when a new field is added)
 	cfgDir := filepath.Join(dir, configDir)
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
@@ -106,9 +106,9 @@ func TestLoadConfigMergesNewFields(t *testing.T) {
 	}
 
 	// Missing field should get its default value
-	if cfg.PasteCollapseMinLines != defaultConfig().PasteCollapseMinLines {
-		t.Errorf("PasteCollapseMinLines = %d, want default %d",
-			cfg.PasteCollapseMinLines, defaultConfig().PasteCollapseMinLines)
+	if cfg.PasteCollapseMinChars != defaultConfig().PasteCollapseMinChars {
+		t.Errorf("PasteCollapseMinChars = %d, want default %d",
+			cfg.PasteCollapseMinChars, defaultConfig().PasteCollapseMinChars)
 	}
 }
 
@@ -116,7 +116,7 @@ func TestSaveConfigCreatesDir(t *testing.T) {
 	dir := t.TempDir()
 	subdir := filepath.Join(dir, "nested", "path")
 
-	cfg := Config{PasteCollapseMinLines: 3}
+	cfg := Config{PasteCollapseMinChars: 3}
 	if err := saveConfigTo(subdir, cfg); err != nil {
 		t.Fatalf("saveConfigTo: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestSaveConfigCreatesDir(t *testing.T) {
 	if err := json.Unmarshal(data, &loaded); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if loaded.PasteCollapseMinLines != 3 {
-		t.Errorf("PasteCollapseMinLines = %d, want 3", loaded.PasteCollapseMinLines)
+	if loaded.PasteCollapseMinChars != 3 {
+		t.Errorf("PasteCollapseMinChars = %d, want 3", loaded.PasteCollapseMinChars)
 	}
 }

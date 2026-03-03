@@ -11,12 +11,12 @@ const configDir = ".cpsl"
 const configFile = "config.json"
 
 type Config struct {
-	PasteCollapseMinLines int `json:"paste_collapse_min_lines"`
+	PasteCollapseMinChars int `json:"paste_collapse_min_chars"`
 }
 
 func defaultConfig() Config {
 	return Config{
-		PasteCollapseMinLines: 5,
+		PasteCollapseMinChars: 200,
 	}
 }
 
