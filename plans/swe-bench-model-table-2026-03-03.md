@@ -41,7 +41,7 @@ Multiple entries may reference the same underlying model (different agent system
 
 ## Phase 1: SWE-bench Data Fetching & Model Enrichment
 
-- [ ] 1a: Add `SWEScore float64` field to `ModelDef` in `models.go`. Add SWE-bench API types (`sweBenchResponse`, etc.) and a `fetchSWEScores()` function that fetches the leaderboard JSON, parses the "Verified" results, extracts model tags, and returns a `map[string]float64` mapping model tag identifiers to their best (highest) resolved score.
+- [x] 1a: Add `SWEScore float64` field to `ModelDef` in `models.go`. Add SWE-bench API types (`sweBenchResponse`, etc.) and a `fetchSWEScores()` function that fetches the leaderboard JSON, parses the "Verified" results, extracts model tags, and returns a `map[string]float64` mapping model tag identifiers to their best (highest) resolved score.
 - [ ] 1b: Add a `matchSWEScores()` function that takes `[]ModelDef` and the SWE score map, and enriches each model's `SWEScore` by fuzzy-matching OpenRouter IDs against SWE-bench model tags. Add a new `sweScoresMsg` message type in `main.go`, a `fetchSWEScoresCmd()` tea.Cmd, fire it from `Init()` alongside model fetch, and handle the result in `Update()` to merge scores into `m.models`.
 - [ ] 1c: Add tests for SWE-bench parsing (mock JSON → score map), fuzzy matching logic (known model IDs → expected scores), and graceful handling of missing/malformed data.
 
