@@ -465,21 +465,19 @@ func TestPasteCounterIncrements(t *testing.T) {
 	if len(m.messages) != 4 {
 		t.Fatalf("messages count = %d, want 4", len(m.messages))
 	}
-	if !strings.Contains(m.messages[0].content, "[pasted #1") {
-		t.Errorf("messages[0] should contain paste #1 placeholder, got %q", m.messages[0].content)
-	}
-	if !strings.Contains(m.messages[1].content, "[pasted #2") {
-		t.Errorf("messages[1] should contain paste #2 placeholder, got %q", m.messages[1].content)
+	// Messages should contain expanded paste content
+	if m.messages[0].content != longText {
+		t.Error("messages[0] should contain expanded paste content")
 	}
 	if m.messages[2].content != "hello" {
 		t.Errorf("messages[2] = %q, want %q", m.messages[2].content, "hello")
 	}
-	if !strings.Contains(m.messages[3].content, "[pasted #3") {
-		t.Errorf("messages[3] should contain paste #3 placeholder, got %q", m.messages[3].content)
+	if m.messages[3].content != longText {
+		t.Error("messages[3] should contain expanded paste content")
 	}
 }
 
-func TestPasteViewportShowsPlaceholder(t *testing.T) {
+func TestPasteViewportShowsExpandedContent(t *testing.T) {
 	m := initialModel()
 	m = resize(m, 80, 24)
 
@@ -488,22 +486,12 @@ func TestPasteViewportShowsPlaceholder(t *testing.T) {
 	m = sendKey(m, tea.KeyEnter)
 
 	v := m.View()
-	if !strings.Contains(v.Content, "[pasted #1 | 300 chars]") {
-		t.Error("viewport should contain paste placeholder")
+	// Viewport should show the expanded content, not the placeholder
+	if strings.Contains(v.Content, "[pasted #1 | 300 chars]") {
+		t.Error("viewport should not contain placeholder after submit")
 	}
-}
-
-func TestPasteViewportHidesFullContent(t *testing.T) {
-	m := initialModel()
-	m = resize(m, 80, 24)
-
-	longText := strings.Repeat("UNIQUE_PASTE_CONTENT", 20)
-	m = paste(m, longText)
-	m = sendKey(m, tea.KeyEnter)
-
-	v := m.View()
-	if strings.Contains(v.Content, "UNIQUE_PASTE_CONTENT") {
-		t.Error("viewport should not show full paste content")
+	if !strings.Contains(v.Content, "aaaaaa") {
+		t.Error("viewport should show expanded paste content")
 	}
 }
 
@@ -544,8 +532,9 @@ func TestPasteTypingContinuesAfterPaste(t *testing.T) {
 	if !strings.HasPrefix(content, "before ") {
 		t.Errorf("message should start with 'before ', got %q", content)
 	}
-	if !strings.Contains(content, "[pasted #1") {
-		t.Error("message should contain paste placeholder")
+	// Paste should be expanded in the sent message
+	if !strings.Contains(content, longText) {
+		t.Error("message should contain expanded paste content")
 	}
 	if !strings.HasSuffix(content, " after") {
 		t.Errorf("message should end with ' after', got %q", content)
@@ -569,17 +558,18 @@ func TestPasteMultiplePastesInOneMessage(t *testing.T) {
 		t.Fatalf("messages count = %d, want 1", len(m.messages))
 	}
 	content := m.messages[0].content
-	if !strings.Contains(content, "[pasted #1 | 300 chars]") {
-		t.Error("message should contain paste #1 placeholder")
+	// Both pastes should be expanded in the sent message
+	if !strings.Contains(content, text1) {
+		t.Error("message should contain expanded paste #1 content")
 	}
-	if !strings.Contains(content, "[pasted #2 | 400 chars]") {
-		t.Error("message should contain paste #2 placeholder")
+	if !strings.Contains(content, text2) {
+		t.Error("message should contain expanded paste #2 content")
 	}
-	if m.pasteStore[1] != text1 {
-		t.Error("pasteStore[1] should be text1")
+	if !strings.HasPrefix(content, "code: ") {
+		t.Errorf("message should start with 'code: ', got prefix %q", content[:10])
 	}
-	if m.pasteStore[2] != text2 {
-		t.Error("pasteStore[2] should be text2")
+	if !strings.Contains(content, " and: ") {
+		t.Error("message should contain ' and: ' between pastes")
 	}
 }
 

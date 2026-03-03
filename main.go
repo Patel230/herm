@@ -5,6 +5,8 @@ import (
 	"image/color"
 	"log"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -60,6 +62,26 @@ var borderGradientColors = []color.Color{
 
 type message struct {
 	content string
+}
+
+var pasteplaceholderRe = regexp.MustCompile(`\[pasted #(\d+) \| \d+ chars\]`)
+
+// expandPastes replaces paste placeholders with actual content from the paste store.
+func expandPastes(s string, store map[int]string) string {
+	return pasteplaceholderRe.ReplaceAllStringFunc(s, func(match string) string {
+		sub := pasteplaceholderRe.FindStringSubmatch(match)
+		if len(sub) < 2 {
+			return match
+		}
+		id, err := strconv.Atoi(sub[1])
+		if err != nil {
+			return match
+		}
+		if content, ok := store[id]; ok {
+			return content
+		}
+		return match
+	})
 }
 
 type model struct {
@@ -249,7 +271,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			val := strings.TrimSpace(m.textarea.Value())
 			if val != "" {
-				m.messages = append(m.messages, message{content: val})
+				content := expandPastes(val, m.pasteStore)
+				m.messages = append(m.messages, message{content: content})
 				m.textarea.Reset()
 				m.textarea.SetHeight(minInputHeight)
 				if m.ready {
