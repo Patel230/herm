@@ -66,15 +66,16 @@ type message struct {
 }
 
 type model struct {
-	textarea     textarea.Model
-	viewport     viewport.Model
-	width        int
-	height       int
-	messages     []message
-	ready        bool
-	config       Config
-	pendingPaste bool
-	pasteCount   int
+	textarea            textarea.Model
+	viewport            viewport.Model
+	width               int
+	height              int
+	messages            []message
+	ready               bool
+	config              Config
+	pendingPaste        bool
+	pendingPasteContent string
+	pasteCount          int
 }
 
 func initialModel() model {
@@ -236,26 +237,51 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.PasteMsg:
 		if len(msg.Content) >= m.config.PasteCollapseMinChars {
 			m.pendingPaste = true
+			m.pendingPasteContent = msg.Content
+			return m, nil // don't pass to textarea
 		}
 
 	case tea.KeyPressMsg:
+		// When a large paste is pending, only Enter and Esc are handled.
+		if m.pendingPasteContent != "" {
+			switch msg.String() {
+			case "ctrl+c":
+				return m, tea.Quit
+			case "enter":
+				content := m.pendingPasteContent
+				newMsg := message{
+					content:   content,
+					isPaste:   true,
+					charCount: len(content),
+				}
+				m.pasteCount++
+				newMsg.pasteNumber = m.pasteCount
+				m.pendingPaste = false
+				m.pendingPasteContent = ""
+				m.messages = append(m.messages, newMsg)
+				if m.ready {
+					m.viewport.SetHeight(m.viewportHeight())
+					m.updateViewportContent()
+					m.viewport.GotoBottom()
+				}
+			case "esc":
+				m.pendingPaste = false
+				m.pendingPasteContent = ""
+			}
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
 		case "enter":
 			val := strings.TrimSpace(m.textarea.Value())
 			if val != "" {
-				msg := message{
+				newMsg := message{
 					content:   val,
-					isPaste:   m.pendingPaste,
 					charCount: len(val),
 				}
-				if m.pendingPaste {
-					m.pasteCount++
-					msg.pasteNumber = m.pasteCount
-				}
-				m.pendingPaste = false
-				m.messages = append(m.messages, msg)
+				m.messages = append(m.messages, newMsg)
 				m.textarea.Reset()
 				m.textarea.SetHeight(minInputHeight)
 				if m.ready {
@@ -306,6 +332,9 @@ func (m *model) recalcTextareaHeight() {
 }
 
 func (m model) inputBoxHeight() int {
+	if m.pendingPasteContent != "" {
+		return 1 + 2 // 1-line indicator + top + bottom border
+	}
 	return m.textarea.Height() + 2 // top + bottom border
 }
 
@@ -350,10 +379,11 @@ func (m *model) updateViewportContent() {
 		for _, msg := range m.messages {
 			if msg.isPaste && msg.charCount >= m.config.PasteCollapseMinChars {
 				header := fmt.Sprintf("[pasted text #%d | %d chars]", msg.pasteNumber, msg.charCount)
-				parts = append(parts, pasteHeaderStyle.Render(header))
+				parts = append(parts, pasteHeaderStyle.Render(header), "")
+			} else {
+				wrapped := lipgloss.NewStyle().Width(m.width - 4).Render(msg.content)
+				parts = append(parts, msgStyle.Render(wrapped), "")
 			}
-			wrapped := lipgloss.NewStyle().Width(m.width - 4).Render(msg.content)
-			parts = append(parts, msgStyle.Render(wrapped), "")
 		}
 		content = strings.Join(parts, "\n")
 	}
@@ -373,17 +403,30 @@ func (m model) View() tea.View {
 		BorderForegroundBlend(borderGradientColors...).
 		Width(m.width)
 
-	inputBox := inputBorderStyle.Render(m.textarea.View())
+	var inputBox string
+	if m.pendingPasteContent != "" {
+		indicator := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#9B6ADE")).
+			Render(fmt.Sprintf("[pasted text | %d chars]", len(m.pendingPasteContent)))
+		hint := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#666666")).
+			Render("Enter to send · Esc to cancel")
+		inputBox = inputBorderStyle.Render(indicator + "  " + hint)
+	} else {
+		inputBox = inputBorderStyle.Render(m.textarea.View())
+	}
 
 	fullView := m.viewport.View() + "\n" + inputBox
 
 	v := tea.NewView(fullView)
 
-	c := m.textarea.Cursor()
-	if c != nil {
-		c.Y += m.viewport.Height() + 1 // +1 for top border
-		c.X += 1                        // +1 for left border
-		v.Cursor = c
+	if m.pendingPasteContent == "" {
+		c := m.textarea.Cursor()
+		if c != nil {
+			c.Y += m.viewport.Height() + 1 // +1 for top border
+			c.X += 1                        // +1 for left border
+			v.Cursor = c
+		}
 	}
 
 	v.AltScreen = true

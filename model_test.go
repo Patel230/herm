@@ -522,6 +522,9 @@ func TestPasteResetAfterSend(t *testing.T) {
 	if m.pendingPaste {
 		t.Error("pendingPaste should be false after send")
 	}
+	if m.pendingPasteContent != "" {
+		t.Error("pendingPasteContent should be empty after send")
+	}
 
 	// Next normal message should not be marked as paste
 	m = typeString(m, "normal")
@@ -529,6 +532,78 @@ func TestPasteResetAfterSend(t *testing.T) {
 
 	if m.messages[1].isPaste {
 		t.Error("message after paste should not be marked as paste")
+	}
+}
+
+func TestPasteEscCancels(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	longText := strings.Repeat("x", m.config.PasteCollapseMinChars)
+	m = paste(m, longText)
+
+	if m.pendingPasteContent == "" {
+		t.Fatal("pendingPasteContent should be set after large paste")
+	}
+
+	// Press Escape to cancel
+	m = sendKey(m, tea.KeyEscape)
+
+	if m.pendingPaste {
+		t.Error("pendingPaste should be false after Esc")
+	}
+	if m.pendingPasteContent != "" {
+		t.Error("pendingPasteContent should be empty after Esc")
+	}
+
+	// No message should have been sent
+	if len(m.messages) != 0 {
+		t.Errorf("messages count = %d, want 0 after cancel", len(m.messages))
+	}
+}
+
+func TestPasteIndicatorInView(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	longText := strings.Repeat("x", 300)
+	m = paste(m, longText)
+
+	v := m.View()
+	if !strings.Contains(v.Content, "[pasted text | 300 chars]") {
+		t.Error("View should show paste indicator when paste is pending")
+	}
+	if !strings.Contains(v.Content, "Enter to send") {
+		t.Error("View should show send hint when paste is pending")
+	}
+}
+
+func TestPasteNotInsertedIntoTextarea(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	longText := strings.Repeat("x", m.config.PasteCollapseMinChars)
+	m = paste(m, longText)
+
+	if m.textarea.Value() != "" {
+		t.Error("large paste should not be inserted into textarea")
+	}
+}
+
+func TestPasteViewportHidesFullContent(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	longText := strings.Repeat("UNIQUE_PASTE_CONTENT", 20) // 400 chars
+	m = paste(m, longText)
+	m = sendKey(m, tea.KeyEnter)
+
+	v := m.View()
+	if !strings.Contains(v.Content, "[pasted text #1 |") {
+		t.Error("viewport should show collapsed marker")
+	}
+	if strings.Contains(v.Content, "UNIQUE_PASTE_CONTENT") {
+		t.Error("viewport should not show full paste content")
 	}
 }
 
