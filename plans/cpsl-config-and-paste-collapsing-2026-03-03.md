@@ -64,8 +64,8 @@ Add a `/config` slash command that opens an interactive form (using `charm.land/
 
 ## Phase 4: Integration Testing & Polish
 
-- [ ] 4a: Add end-to-end integration tests that exercise the full flow: app starts → creates `.cpsl/` → paste a long text → see collapsed display → run `/config` → change threshold → verify new threshold applies. Use bubbletea's programmatic Update loop (same pattern as existing `model_test.go`).
-- [ ] 4b: Ensure all existing tests still pass and update any that break due to the new `message` struct or config loading changes.
+- [x] 4a: Add end-to-end integration tests that exercise the full flow: app starts → creates `.cpsl/` → paste a long text → see collapsed display → run `/config` → change threshold → verify new threshold applies. Use bubbletea's programmatic Update loop (same pattern as existing `model_test.go`).
+- [x] 4b: Ensure all existing tests still pass and update any that break due to the new `message` struct or config loading changes.
 
 ---
 
