@@ -59,23 +59,19 @@ var borderGradientColors = []color.Color{
 }
 
 type message struct {
-	content     string
-	isPaste     bool
-	charCount   int
-	pasteNumber int
+	content string
 }
 
 type model struct {
-	textarea            textarea.Model
-	viewport            viewport.Model
-	width               int
-	height              int
-	messages            []message
-	ready               bool
-	config              Config
-	pendingPaste        bool
-	pendingPasteContent string
-	pasteCount          int
+	textarea   textarea.Model
+	viewport   viewport.Model
+	width      int
+	height     int
+	messages   []message
+	ready      bool
+	config     Config
+	pasteCount int
+	pasteStore map[int]string // paste ID → actual content
 }
 
 func initialModel() model {
@@ -201,6 +197,7 @@ func (m model) displayLineCount() int {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+	taMsg := tea.Msg(msg) // message forwarded to textarea (may be modified)
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -236,52 +233,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.PasteMsg:
 		if len(msg.Content) >= m.config.PasteCollapseMinChars {
-			m.pendingPaste = true
-			m.pendingPasteContent = msg.Content
-			return m, nil // don't pass to textarea
+			m.pasteCount++
+			if m.pasteStore == nil {
+				m.pasteStore = make(map[int]string)
+			}
+			m.pasteStore[m.pasteCount] = msg.Content
+			placeholder := fmt.Sprintf("[pasted #%d | %d chars]", m.pasteCount, len(msg.Content))
+			taMsg = tea.PasteMsg{Content: placeholder}
 		}
 
 	case tea.KeyPressMsg:
-		// When a large paste is pending, only Enter and Esc are handled.
-		if m.pendingPasteContent != "" {
-			switch msg.String() {
-			case "ctrl+c":
-				return m, tea.Quit
-			case "enter":
-				content := m.pendingPasteContent
-				newMsg := message{
-					content:   content,
-					isPaste:   true,
-					charCount: len(content),
-				}
-				m.pasteCount++
-				newMsg.pasteNumber = m.pasteCount
-				m.pendingPaste = false
-				m.pendingPasteContent = ""
-				m.messages = append(m.messages, newMsg)
-				if m.ready {
-					m.viewport.SetHeight(m.viewportHeight())
-					m.updateViewportContent()
-					m.viewport.GotoBottom()
-				}
-			case "esc":
-				m.pendingPaste = false
-				m.pendingPasteContent = ""
-			}
-			return m, nil
-		}
-
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
 		case "enter":
 			val := strings.TrimSpace(m.textarea.Value())
 			if val != "" {
-				newMsg := message{
-					content:   val,
-					charCount: len(val),
-				}
-				m.messages = append(m.messages, newMsg)
+				m.messages = append(m.messages, message{content: val})
 				m.textarea.Reset()
 				m.textarea.SetHeight(minInputHeight)
 				if m.ready {
@@ -299,9 +267,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// viewport. We'll shrink to the real height right after.
 	m.textarea.SetHeight(maxInputHeight)
 
-	// Update textarea
+	// Update textarea (may receive modified PasteMsg with placeholder)
 	var taCmd tea.Cmd
-	m.textarea, taCmd = m.textarea.Update(msg)
+	m.textarea, taCmd = m.textarea.Update(taMsg)
 	cmds = append(cmds, taCmd)
 
 	// Now set the correct height based on actual content
@@ -332,9 +300,6 @@ func (m *model) recalcTextareaHeight() {
 }
 
 func (m model) inputBoxHeight() int {
-	if m.pendingPasteContent != "" {
-		return 1 + 2 // 1-line indicator + top + bottom border
-	}
 	return m.textarea.Height() + 2 // top + bottom border
 }
 
@@ -370,20 +335,11 @@ func (m *model) updateViewportContent() {
 			Foreground(lipgloss.Color("#E0E0E0")).
 			PaddingLeft(2)
 
-		pasteHeaderStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#666666")).
-			PaddingLeft(2)
-
 		var parts []string
 		parts = append(parts, centeredLogo, "")
 		for _, msg := range m.messages {
-			if msg.isPaste && msg.charCount >= m.config.PasteCollapseMinChars {
-				header := fmt.Sprintf("[pasted text #%d | %d chars]", msg.pasteNumber, msg.charCount)
-				parts = append(parts, pasteHeaderStyle.Render(header), "")
-			} else {
-				wrapped := lipgloss.NewStyle().Width(m.width - 4).Render(msg.content)
-				parts = append(parts, msgStyle.Render(wrapped), "")
-			}
+			wrapped := lipgloss.NewStyle().Width(m.width - 4).Render(msg.content)
+			parts = append(parts, msgStyle.Render(wrapped), "")
 		}
 		content = strings.Join(parts, "\n")
 	}
@@ -403,30 +359,17 @@ func (m model) View() tea.View {
 		BorderForegroundBlend(borderGradientColors...).
 		Width(m.width)
 
-	var inputBox string
-	if m.pendingPasteContent != "" {
-		indicator := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#9B6ADE")).
-			Render(fmt.Sprintf("[pasted text | %d chars]", len(m.pendingPasteContent)))
-		hint := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#666666")).
-			Render("Enter to send · Esc to cancel")
-		inputBox = inputBorderStyle.Render(indicator + "  " + hint)
-	} else {
-		inputBox = inputBorderStyle.Render(m.textarea.View())
-	}
+	inputBox := inputBorderStyle.Render(m.textarea.View())
 
 	fullView := m.viewport.View() + "\n" + inputBox
 
 	v := tea.NewView(fullView)
 
-	if m.pendingPasteContent == "" {
-		c := m.textarea.Cursor()
-		if c != nil {
-			c.Y += m.viewport.Height() + 1 // +1 for top border
-			c.X += 1                        // +1 for left border
-			v.Cursor = c
-		}
+	c := m.textarea.Cursor()
+	if c != nil {
+		c.Y += m.viewport.Height() + 1 // +1 for top border
+		c.X += 1                        // +1 for left border
+		v.Cursor = c
 	}
 
 	v.AltScreen = true

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -401,44 +402,38 @@ func paste(m model, content string) model {
 	return result.(model)
 }
 
-func TestPasteAboveThresholdMarksMessage(t *testing.T) {
+func TestPasteAboveThresholdInsertPlaceholder(t *testing.T) {
 	m := initialModel()
 	m = resize(m, 80, 24)
 
 	longText := strings.Repeat("x", m.config.PasteCollapseMinChars)
 	m = paste(m, longText)
-	m = sendKey(m, tea.KeyEnter)
 
-	if len(m.messages) != 1 {
-		t.Fatalf("messages count = %d, want 1", len(m.messages))
+	// Placeholder should be in the textarea
+	expected := fmt.Sprintf("[pasted #%d | %d chars]", 1, m.config.PasteCollapseMinChars)
+	if m.textarea.Value() != expected {
+		t.Errorf("textarea = %q, want %q", m.textarea.Value(), expected)
 	}
-	if !m.messages[0].isPaste {
-		t.Error("message should be marked as paste")
-	}
-	if m.messages[0].charCount != m.config.PasteCollapseMinChars {
-		t.Errorf("charCount = %d, want %d", m.messages[0].charCount, m.config.PasteCollapseMinChars)
-	}
-	if m.messages[0].pasteNumber != 1 {
-		t.Errorf("pasteNumber = %d, want 1", m.messages[0].pasteNumber)
+
+	// Actual content stored in pasteStore
+	if m.pasteStore[1] != longText {
+		t.Error("pasteStore should contain the original paste content")
 	}
 }
 
-func TestPasteBelowThresholdNotMarked(t *testing.T) {
+func TestPasteBelowThresholdInsertedVerbatim(t *testing.T) {
 	m := initialModel()
 	m = resize(m, 80, 24)
 
 	shortText := strings.Repeat("x", m.config.PasteCollapseMinChars-1)
 	m = paste(m, shortText)
-	m = sendKey(m, tea.KeyEnter)
 
-	if len(m.messages) != 1 {
-		t.Fatalf("messages count = %d, want 1", len(m.messages))
+	// Small paste goes directly into textarea
+	if m.textarea.Value() != shortText {
+		t.Errorf("textarea = %q, want verbatim paste", m.textarea.Value())
 	}
-	if m.messages[0].isPaste {
-		t.Error("message below threshold should not be marked as paste")
-	}
-	if m.messages[0].pasteNumber != 0 {
-		t.Errorf("pasteNumber = %d, want 0 for non-paste", m.messages[0].pasteNumber)
+	if m.pasteCount != 0 {
+		t.Errorf("pasteCount = %d, want 0 for small paste", m.pasteCount)
 	}
 }
 
@@ -448,43 +443,43 @@ func TestPasteCounterIncrements(t *testing.T) {
 
 	longText := strings.Repeat("x", m.config.PasteCollapseMinChars)
 
-	// First paste
+	// First paste + send
 	m = paste(m, longText)
 	m = sendKey(m, tea.KeyEnter)
 
-	// Second paste
+	// Second paste + send
 	m = paste(m, longText)
 	m = sendKey(m, tea.KeyEnter)
 
-	// Normal message (no paste)
+	// Normal message
 	m = typeString(m, "hello")
 	m = sendKey(m, tea.KeyEnter)
 
-	// Third paste
+	// Third paste + send
 	m = paste(m, longText)
 	m = sendKey(m, tea.KeyEnter)
 
-	if len(m.messages) != 4 {
-		t.Fatalf("messages count = %d, want 4", len(m.messages))
-	}
-	if m.messages[0].pasteNumber != 1 {
-		t.Errorf("messages[0].pasteNumber = %d, want 1", m.messages[0].pasteNumber)
-	}
-	if m.messages[1].pasteNumber != 2 {
-		t.Errorf("messages[1].pasteNumber = %d, want 2", m.messages[1].pasteNumber)
-	}
-	if m.messages[2].isPaste {
-		t.Error("messages[2] should not be marked as paste")
-	}
-	if m.messages[3].pasteNumber != 3 {
-		t.Errorf("messages[3].pasteNumber = %d, want 3", m.messages[3].pasteNumber)
-	}
 	if m.pasteCount != 3 {
 		t.Errorf("pasteCount = %d, want 3", m.pasteCount)
 	}
+	if len(m.messages) != 4 {
+		t.Fatalf("messages count = %d, want 4", len(m.messages))
+	}
+	if !strings.Contains(m.messages[0].content, "[pasted #1") {
+		t.Errorf("messages[0] should contain paste #1 placeholder, got %q", m.messages[0].content)
+	}
+	if !strings.Contains(m.messages[1].content, "[pasted #2") {
+		t.Errorf("messages[1] should contain paste #2 placeholder, got %q", m.messages[1].content)
+	}
+	if m.messages[2].content != "hello" {
+		t.Errorf("messages[2] = %q, want %q", m.messages[2].content, "hello")
+	}
+	if !strings.Contains(m.messages[3].content, "[pasted #3") {
+		t.Errorf("messages[3] should contain paste #3 placeholder, got %q", m.messages[3].content)
+	}
 }
 
-func TestPasteViewportRendersCollapsedHeader(t *testing.T) {
+func TestPasteViewportShowsPlaceholder(t *testing.T) {
 	m := initialModel()
 	m = resize(m, 80, 24)
 
@@ -493,100 +488,8 @@ func TestPasteViewportRendersCollapsedHeader(t *testing.T) {
 	m = sendKey(m, tea.KeyEnter)
 
 	v := m.View()
-	if !strings.Contains(v.Content, "[pasted text #1 | 300 chars]") {
-		t.Error("viewport should contain collapsed paste header")
-	}
-}
-
-func TestPasteViewportNormalMessageNoHeader(t *testing.T) {
-	m := initialModel()
-	m = resize(m, 80, 24)
-
-	m = typeString(m, "hello world")
-	m = sendKey(m, tea.KeyEnter)
-
-	v := m.View()
-	if strings.Contains(v.Content, "[pasted text") {
-		t.Error("normal message should not have paste header")
-	}
-}
-
-func TestPasteResetAfterSend(t *testing.T) {
-	m := initialModel()
-	m = resize(m, 80, 24)
-
-	longText := strings.Repeat("x", m.config.PasteCollapseMinChars)
-	m = paste(m, longText)
-	m = sendKey(m, tea.KeyEnter)
-
-	if m.pendingPaste {
-		t.Error("pendingPaste should be false after send")
-	}
-	if m.pendingPasteContent != "" {
-		t.Error("pendingPasteContent should be empty after send")
-	}
-
-	// Next normal message should not be marked as paste
-	m = typeString(m, "normal")
-	m = sendKey(m, tea.KeyEnter)
-
-	if m.messages[1].isPaste {
-		t.Error("message after paste should not be marked as paste")
-	}
-}
-
-func TestPasteEscCancels(t *testing.T) {
-	m := initialModel()
-	m = resize(m, 80, 24)
-
-	longText := strings.Repeat("x", m.config.PasteCollapseMinChars)
-	m = paste(m, longText)
-
-	if m.pendingPasteContent == "" {
-		t.Fatal("pendingPasteContent should be set after large paste")
-	}
-
-	// Press Escape to cancel
-	m = sendKey(m, tea.KeyEscape)
-
-	if m.pendingPaste {
-		t.Error("pendingPaste should be false after Esc")
-	}
-	if m.pendingPasteContent != "" {
-		t.Error("pendingPasteContent should be empty after Esc")
-	}
-
-	// No message should have been sent
-	if len(m.messages) != 0 {
-		t.Errorf("messages count = %d, want 0 after cancel", len(m.messages))
-	}
-}
-
-func TestPasteIndicatorInView(t *testing.T) {
-	m := initialModel()
-	m = resize(m, 80, 24)
-
-	longText := strings.Repeat("x", 300)
-	m = paste(m, longText)
-
-	v := m.View()
-	if !strings.Contains(v.Content, "[pasted text | 300 chars]") {
-		t.Error("View should show paste indicator when paste is pending")
-	}
-	if !strings.Contains(v.Content, "Enter to send") {
-		t.Error("View should show send hint when paste is pending")
-	}
-}
-
-func TestPasteNotInsertedIntoTextarea(t *testing.T) {
-	m := initialModel()
-	m = resize(m, 80, 24)
-
-	longText := strings.Repeat("x", m.config.PasteCollapseMinChars)
-	m = paste(m, longText)
-
-	if m.textarea.Value() != "" {
-		t.Error("large paste should not be inserted into textarea")
+	if !strings.Contains(v.Content, "[pasted #1 | 300 chars]") {
+		t.Error("viewport should contain paste placeholder")
 	}
 }
 
@@ -594,16 +497,89 @@ func TestPasteViewportHidesFullContent(t *testing.T) {
 	m := initialModel()
 	m = resize(m, 80, 24)
 
-	longText := strings.Repeat("UNIQUE_PASTE_CONTENT", 20) // 400 chars
+	longText := strings.Repeat("UNIQUE_PASTE_CONTENT", 20)
 	m = paste(m, longText)
 	m = sendKey(m, tea.KeyEnter)
 
 	v := m.View()
-	if !strings.Contains(v.Content, "[pasted text #1 |") {
-		t.Error("viewport should show collapsed marker")
-	}
 	if strings.Contains(v.Content, "UNIQUE_PASTE_CONTENT") {
 		t.Error("viewport should not show full paste content")
+	}
+}
+
+func TestPasteStoreRetainsContent(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	text1 := strings.Repeat("A", 300)
+	text2 := strings.Repeat("B", 400)
+
+	m = paste(m, text1)
+	m = sendKey(m, tea.KeyEnter)
+	m = paste(m, text2)
+	m = sendKey(m, tea.KeyEnter)
+
+	if m.pasteStore[1] != text1 {
+		t.Error("pasteStore[1] should contain first paste")
+	}
+	if m.pasteStore[2] != text2 {
+		t.Error("pasteStore[2] should contain second paste")
+	}
+}
+
+func TestPasteTypingContinuesAfterPaste(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "before ")
+	longText := strings.Repeat("x", m.config.PasteCollapseMinChars)
+	m = paste(m, longText)
+	m = typeString(m, " after")
+	m = sendKey(m, tea.KeyEnter)
+
+	if len(m.messages) != 1 {
+		t.Fatalf("messages count = %d, want 1", len(m.messages))
+	}
+	content := m.messages[0].content
+	if !strings.HasPrefix(content, "before ") {
+		t.Errorf("message should start with 'before ', got %q", content)
+	}
+	if !strings.Contains(content, "[pasted #1") {
+		t.Error("message should contain paste placeholder")
+	}
+	if !strings.HasSuffix(content, " after") {
+		t.Errorf("message should end with ' after', got %q", content)
+	}
+}
+
+func TestPasteMultiplePastesInOneMessage(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	text1 := strings.Repeat("A", 300)
+	text2 := strings.Repeat("B", 400)
+
+	m = typeString(m, "code: ")
+	m = paste(m, text1)
+	m = typeString(m, " and: ")
+	m = paste(m, text2)
+	m = sendKey(m, tea.KeyEnter)
+
+	if len(m.messages) != 1 {
+		t.Fatalf("messages count = %d, want 1", len(m.messages))
+	}
+	content := m.messages[0].content
+	if !strings.Contains(content, "[pasted #1 | 300 chars]") {
+		t.Error("message should contain paste #1 placeholder")
+	}
+	if !strings.Contains(content, "[pasted #2 | 400 chars]") {
+		t.Error("message should contain paste #2 placeholder")
+	}
+	if m.pasteStore[1] != text1 {
+		t.Error("pasteStore[1] should be text1")
+	}
+	if m.pasteStore[2] != text2 {
+		t.Error("pasteStore[2] should be text2")
 	}
 }
 
@@ -612,21 +588,19 @@ func TestPasteConfigThresholdRespected(t *testing.T) {
 	m.config.PasteCollapseMinChars = 50
 	m = resize(m, 80, 24)
 
-	// Paste exactly at custom threshold
+	// Paste at custom threshold — should collapse
 	text := strings.Repeat("x", 50)
 	m = paste(m, text)
-	m = sendKey(m, tea.KeyEnter)
-
-	if !m.messages[0].isPaste {
-		t.Error("paste at custom threshold should be marked")
+	if !strings.Contains(m.textarea.Value(), "[pasted #1") {
+		t.Error("paste at custom threshold should be collapsed")
 	}
 
-	// Paste below custom threshold
-	shortText := strings.Repeat("x", 49)
-	m = paste(m, shortText)
-	m = sendKey(m, tea.KeyEnter)
+	m.textarea.Reset()
 
-	if m.messages[1].isPaste {
-		t.Error("paste below custom threshold should not be marked")
+	// Paste below custom threshold — should be verbatim
+	shortText := strings.Repeat("y", 49)
+	m = paste(m, shortText)
+	if m.textarea.Value() != shortText {
+		t.Errorf("paste below threshold should be verbatim, got %q", m.textarea.Value())
 	}
 }
