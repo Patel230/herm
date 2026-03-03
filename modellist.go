@@ -200,12 +200,18 @@ func formatSWEScore(score float64) string {
 	return fmt.Sprintf("%.1f", score)
 }
 
-// padRight pads s with spaces to width w. If s is longer, it's truncated.
+// runeLen returns the number of runes in a string.
+func runeLen(s string) int {
+	return len([]rune(s))
+}
+
+// padRight pads s with spaces to width w (in runes). If s is longer, it's truncated.
 func padRight(s string, w int) string {
-	if len(s) >= w {
-		return s[:w]
+	n := runeLen(s)
+	if n >= w {
+		return string([]rune(s)[:w])
 	}
-	return s + strings.Repeat(" ", w-len(s))
+	return s + strings.Repeat(" ", w-n)
 }
 
 func (l modelList) View() string {
@@ -227,26 +233,28 @@ func (l modelList) View() string {
 		return b.String()
 	}
 
-	// Compute column widths from data
-	nameW := len("MODEL")
-	provW := len("PROVIDER")
-	priceW := len("PRICE")
-	sweW := len("SWE-BENCH")
+	// Compute column widths from data (in runes, not bytes)
+	// Headers include space for sort arrow " ▼" (2 extra chars)
+	const arrowLen = 2
+	nameW := runeLen("MODEL") + arrowLen
+	provW := runeLen("PROVIDER") + arrowLen
+	priceW := runeLen("PRICE") + arrowLen
+	sweW := runeLen("SWE-BENCH") + arrowLen
 
 	for _, m := range l.models {
-		if len(m.DisplayName) > nameW {
-			nameW = len(m.DisplayName)
+		if runeLen(m.DisplayName) > nameW {
+			nameW = runeLen(m.DisplayName)
 		}
-		if len(m.Provider) > provW {
-			provW = len(m.Provider)
+		if runeLen(m.Provider) > provW {
+			provW = runeLen(m.Provider)
 		}
 		p := fmt.Sprintf("%s / %s", formatPrice(m.PromptPrice), formatPrice(m.CompletionPrice))
-		if len(p) > priceW {
-			priceW = len(p)
+		if runeLen(p) > priceW {
+			priceW = runeLen(p)
 		}
 		s := formatSWEScore(m.SWEScore)
-		if len(s) > sweW {
-			sweW = len(s)
+		if runeLen(s) > sweW {
+			sweW = runeLen(s)
 		}
 	}
 

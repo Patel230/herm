@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -9,6 +10,24 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
+
+// TestMain runs all tests in a temp directory so that saveConfig() calls
+// never clobber the real .cpsl/config.json in the project root.
+func TestMain(m *testing.M) {
+	tmp, err := os.MkdirTemp("", "cpsl-test-*")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(tmp)
+
+	orig, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		panic(err)
+	}
+	defer os.Chdir(orig)
+
+	os.Exit(m.Run())
+}
 
 // keyPress creates a KeyPressMsg for a printable character.
 func keyPress(key rune) tea.Msg {
@@ -945,13 +964,16 @@ func TestPasteConfigThresholdRespected(t *testing.T) {
 
 // --- /model command tests ---
 
-// modelWithKey returns a model with only an Anthropic API key configured.
+// modelWithKey returns a model with only an Anthropic API key configured
+// and test models loaded.
 func modelWithKey() model {
 	m := initialModel()
 	m.config.AnthropicAPIKey = "sk-test-key"
 	m.config.GrokAPIKey = ""
 	m.config.OpenAIAPIKey = ""
 	m.config.ActiveModel = ""
+	m.models = testModels()
+	m.modelsLoaded = true
 	return m
 }
 
@@ -975,6 +997,8 @@ func TestSlashModelNoKeysShowsError(t *testing.T) {
 	m.config.AnthropicAPIKey = ""
 	m.config.GrokAPIKey = ""
 	m.config.OpenAIAPIKey = ""
+	m.models = testModels()
+	m.modelsLoaded = true
 	m = resize(m, 80, 24)
 
 	m = typeString(m, "/model")
@@ -1068,6 +1092,8 @@ func TestModelModeOnlyShowsConfiguredProviders(t *testing.T) {
 	m.config.AnthropicAPIKey = ""
 	m.config.GrokAPIKey = "grok-key"
 	m.config.OpenAIAPIKey = "openai-key"
+	m.models = testModels()
+	m.modelsLoaded = true
 	m = resize(m, 80, 24)
 
 	m = typeString(m, "/model")
@@ -1106,6 +1132,8 @@ func TestModelModeNavigationUpDown(t *testing.T) {
 	m.config.AnthropicAPIKey = "key"
 	m.config.OpenAIAPIKey = "key"
 	m.config.ActiveModel = ""
+	m.models = testModels()
+	m.modelsLoaded = true
 	m = resize(m, 80, 24)
 
 	m = typeString(m, "/model")
@@ -1173,8 +1201,10 @@ func TestModelModeNavigationBounds(t *testing.T) {
 func TestModelModeCursorStartsOnActiveModel(t *testing.T) {
 	m := initialModel()
 	m.config.AnthropicAPIKey = "key"
+	m.models = testModels()
+	m.modelsLoaded = true
 	// Set active model to second Anthropic model
-	m.config.ActiveModel = "claude-haiku-4-20250414"
+	m.config.ActiveModel = "anthropic/claude-haiku-4-20250414"
 	m = resize(m, 80, 24)
 
 	m = typeString(m, "/model")
@@ -1183,7 +1213,7 @@ func TestModelModeCursorStartsOnActiveModel(t *testing.T) {
 	// Find the index of the active model in the list
 	expectedIdx := -1
 	for i, md := range m.modelList.models {
-		if md.ID == "claude-haiku-4-20250414" {
+		if md.ID == "anthropic/claude-haiku-4-20250414" {
 			expectedIdx = i
 			break
 		}
@@ -1199,14 +1229,16 @@ func TestModelModeCursorStartsOnActiveModel(t *testing.T) {
 func TestModelModeActiveModelHighlighted(t *testing.T) {
 	m := initialModel()
 	m.config.AnthropicAPIKey = "key"
-	m.config.ActiveModel = "claude-sonnet-4-20250514"
+	m.config.ActiveModel = "anthropic/claude-sonnet-4-20250514"
+	m.models = testModels()
+	m.modelsLoaded = true
 	m = resize(m, 80, 24)
 
 	m = typeString(m, "/model")
 	m = sendKey(m, tea.KeyEnter)
 
-	if m.modelList.activeModel != "claude-sonnet-4-20250514" {
-		t.Errorf("activeModel = %q, want claude-sonnet-4-20250514", m.modelList.activeModel)
+	if m.modelList.activeModel != "anthropic/claude-sonnet-4-20250514" {
+		t.Errorf("activeModel = %q, want anthropic/claude-sonnet-4-20250514", m.modelList.activeModel)
 	}
 
 	// The view should contain the active marker
@@ -1284,6 +1316,8 @@ func TestModelModeSelectNavigatedModel(t *testing.T) {
 	m := initialModel()
 	m.config.AnthropicAPIKey = "key"
 	m.config.ActiveModel = ""
+	m.models = testModels()
+	m.modelsLoaded = true
 	m = resize(m, 80, 24)
 
 	m = typeString(m, "/model")
@@ -1309,6 +1343,8 @@ func TestModelModeVimKeys(t *testing.T) {
 	m.config.AnthropicAPIKey = "key"
 	m.config.OpenAIAPIKey = "key"
 	m.config.ActiveModel = ""
+	m.models = testModels()
+	m.modelsLoaded = true
 	m = resize(m, 80, 24)
 
 	m = typeString(m, "/model")
@@ -1328,5 +1364,405 @@ func TestModelModeVimKeys(t *testing.T) {
 	m = result.(model)
 	if m.modelList.cursor != startCursor {
 		t.Errorf("cursor after k = %d, want %d", m.modelList.cursor, startCursor)
+	}
+}
+
+// --- modelsMsg handling tests ---
+
+func TestModelsMsgSetsModels(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	if m.modelsLoaded {
+		t.Fatal("modelsLoaded should be false initially")
+	}
+
+	result, _ := m.Update(modelsMsg{models: testModels()})
+	m = result.(model)
+
+	if !m.modelsLoaded {
+		t.Error("modelsLoaded should be true after modelsMsg")
+	}
+	if m.modelsErr != nil {
+		t.Errorf("modelsErr should be nil, got %v", m.modelsErr)
+	}
+	if len(m.models) != len(testModels()) {
+		t.Errorf("models count = %d, want %d", len(m.models), len(testModels()))
+	}
+}
+
+func TestModelsMsgSetsError(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	result, _ := m.Update(modelsMsg{err: fmt.Errorf("network error")})
+	m = result.(model)
+
+	if !m.modelsLoaded {
+		t.Error("modelsLoaded should be true even on error")
+	}
+	if m.modelsErr == nil {
+		t.Error("modelsErr should be set")
+	}
+	if len(m.models) != 0 {
+		t.Errorf("models should be empty on error, got %d", len(m.models))
+	}
+}
+
+func TestSlashModelBeforeModelsLoaded(t *testing.T) {
+	m := initialModel()
+	m.config.AnthropicAPIKey = "key"
+	// modelsLoaded is false by default
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/model")
+	m = sendKey(m, tea.KeyEnter)
+
+	if m.mode != modeChat {
+		t.Errorf("mode = %d, want modeChat (models not loaded)", m.mode)
+	}
+	if len(m.messages) != 1 {
+		t.Fatalf("messages count = %d, want 1", len(m.messages))
+	}
+	if m.messages[0].kind != msgInfo {
+		t.Error("should show info message about loading")
+	}
+	if !strings.Contains(m.messages[0].content, "loading") {
+		t.Errorf("message = %q, want mention of loading", m.messages[0].content)
+	}
+}
+
+func TestModelListScrollsWithCursor(t *testing.T) {
+	// Create many models to force scrolling in a small window
+	var manyModels []ModelDef
+	for i := 0; i < 30; i++ {
+		manyModels = append(manyModels, ModelDef{
+			Provider:    ProviderAnthropic,
+			ID:          fmt.Sprintf("anthropic/model-%d", i),
+			DisplayName: fmt.Sprintf("Model %d", i),
+			PromptPrice: 1.0,
+		})
+	}
+
+	m := initialModel()
+	m.config.AnthropicAPIKey = "key"
+	m.models = manyModels
+	m.modelsLoaded = true
+	m = resize(m, 80, 20) // small height to force scrolling
+
+	m = typeString(m, "/model")
+	m = sendKey(m, tea.KeyEnter)
+
+	if m.mode != modeModel {
+		t.Fatal("should be in model mode")
+	}
+
+	vis := m.modelList.visibleRows()
+	if vis >= 30 {
+		t.Skip("window too large to test scrolling")
+	}
+
+	// Cursor starts at 0, scroll at 0
+	if m.modelList.cursor != 0 {
+		t.Errorf("cursor = %d, want 0", m.modelList.cursor)
+	}
+	if m.modelList.scroll != 0 {
+		t.Errorf("scroll = %d, want 0", m.modelList.scroll)
+	}
+
+	// Navigate past visible area
+	for i := 0; i < vis+2; i++ {
+		result, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		m = result.(model)
+	}
+
+	// Cursor should be past initial visible area, scroll should follow
+	if m.modelList.cursor != vis+2 {
+		t.Errorf("cursor = %d, want %d", m.modelList.cursor, vis+2)
+	}
+	if m.modelList.scroll == 0 {
+		t.Error("scroll should have advanced past 0")
+	}
+	// Cursor should be within visible window
+	if m.modelList.cursor < m.modelList.scroll || m.modelList.cursor >= m.modelList.scroll+vis {
+		t.Errorf("cursor %d not in visible window [%d, %d)",
+			m.modelList.cursor, m.modelList.scroll, m.modelList.scroll+vis)
+	}
+
+	// View should show scroll indicators
+	view := m.modelList.View()
+	if !strings.Contains(view, "↑") {
+		t.Error("should show scroll-up indicator")
+	}
+	if !strings.Contains(view, "↓") {
+		t.Error("should show scroll-down indicator")
+	}
+}
+
+func TestSlashModelWithFetchError(t *testing.T) {
+	m := initialModel()
+	m.config.AnthropicAPIKey = "key"
+	m.modelsLoaded = true
+	m.modelsErr = fmt.Errorf("connection refused")
+	m = resize(m, 80, 24)
+
+	m = typeString(m, "/model")
+	m = sendKey(m, tea.KeyEnter)
+
+	if m.mode != modeChat {
+		t.Errorf("mode = %d, want modeChat (fetch error)", m.mode)
+	}
+	if len(m.messages) != 1 {
+		t.Fatalf("messages count = %d, want 1", len(m.messages))
+	}
+	if m.messages[0].kind != msgError {
+		t.Error("should show error message")
+	}
+	if !strings.Contains(m.messages[0].content, "connection refused") {
+		t.Errorf("message = %q, want mention of error", m.messages[0].content)
+	}
+}
+
+// testModelsWithSWE returns test models enriched with SWE-bench scores.
+func testModelsWithSWE() []ModelDef {
+	return []ModelDef{
+		{Provider: ProviderAnthropic, ID: "anthropic/claude-opus-4", DisplayName: "Claude Opus 4", PromptPrice: 15.0, CompletionPrice: 75.0, SWEScore: 79.2},
+		{Provider: ProviderAnthropic, ID: "anthropic/claude-sonnet-4", DisplayName: "Claude Sonnet 4", PromptPrice: 3.0, CompletionPrice: 15.0, SWEScore: 65.0},
+		{Provider: ProviderOpenAI, ID: "openai/gpt-4o", DisplayName: "GPT-4o", PromptPrice: 2.5, CompletionPrice: 10.0, SWEScore: 55.0},
+		{Provider: ProviderGrok, ID: "x-ai/grok-3", DisplayName: "Grok 3", PromptPrice: 3.0, CompletionPrice: 15.0, SWEScore: 0},
+	}
+}
+
+// enterModelModeWith sets up a model with the given models and enters /model.
+func enterModelModeWith(t *testing.T, models []ModelDef) model {
+	t.Helper()
+	m := initialModel()
+	m.config.AnthropicAPIKey = "key"
+	m.config.OpenAIAPIKey = "key"
+	m.config.GrokAPIKey = "key"
+	m.models = models
+	m.modelsLoaded = true
+	m = resize(m, 120, 40)
+
+	m = typeString(m, "/model")
+	m = sendKey(m, tea.KeyEnter)
+	if m.mode != modeModel {
+		t.Fatalf("expected modeModel, got %d", m.mode)
+	}
+	return m
+}
+
+func TestSortDefaultSWEDescending(t *testing.T) {
+	m := enterModelModeWith(t, testModelsWithSWE())
+
+	if m.modelList.sortCol != colSWE {
+		t.Errorf("default sortCol = %d, want colSWE (%d)", m.modelList.sortCol, colSWE)
+	}
+	if m.modelList.sortAsc {
+		t.Error("default sort should be descending for SWE-bench")
+	}
+
+	// First model should have the highest SWE score
+	if m.modelList.models[0].SWEScore != 79.2 {
+		t.Errorf("first model SWE score = %f, want 79.2 (highest)", m.modelList.models[0].SWEScore)
+	}
+	// Last model with score 0 should be at the bottom
+	last := m.modelList.models[len(m.modelList.models)-1]
+	if last.SWEScore != 0 {
+		t.Errorf("last model SWE score = %f, want 0 (no data at bottom)", last.SWEScore)
+	}
+}
+
+func TestSortRightArrowCyclesColumn(t *testing.T) {
+	m := enterModelModeWith(t, testModelsWithSWE())
+
+	// Default is colSWE (0)
+	if m.modelList.sortCol != colSWE {
+		t.Fatalf("initial sortCol = %d, want colSWE", m.modelList.sortCol)
+	}
+
+	// Right arrow → colName
+	result, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = result.(model)
+	if m.modelList.sortCol != colName {
+		t.Errorf("after right: sortCol = %d, want colName (%d)", m.modelList.sortCol, colName)
+	}
+	if !m.modelList.sortAsc {
+		t.Error("colName should default to ascending")
+	}
+
+	// Right arrow → colProvider
+	result, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = result.(model)
+	if m.modelList.sortCol != colProvider {
+		t.Errorf("after right x2: sortCol = %d, want colProvider (%d)", m.modelList.sortCol, colProvider)
+	}
+
+	// Right arrow → colPrice
+	result, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = result.(model)
+	if m.modelList.sortCol != colPrice {
+		t.Errorf("after right x3: sortCol = %d, want colPrice (%d)", m.modelList.sortCol, colPrice)
+	}
+
+	// Right arrow → wraps to colSWE
+	result, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = result.(model)
+	if m.modelList.sortCol != colSWE {
+		t.Errorf("after right x4: sortCol = %d, want colSWE (wrap)", m.modelList.sortCol)
+	}
+	if m.modelList.sortAsc {
+		t.Error("colSWE should default to descending")
+	}
+}
+
+func TestSortLeftArrowCyclesColumn(t *testing.T) {
+	m := enterModelModeWith(t, testModelsWithSWE())
+
+	// Default is colSWE (0), left arrow → colPrice (wraps)
+	result, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	m = result.(model)
+	if m.modelList.sortCol != colPrice {
+		t.Errorf("after left: sortCol = %d, want colPrice (%d)", m.modelList.sortCol, colPrice)
+	}
+}
+
+func TestSortByNameAlphabetical(t *testing.T) {
+	m := enterModelModeWith(t, testModelsWithSWE())
+
+	// Switch to name sort
+	result, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = result.(model)
+
+	// Should be alphabetical ascending
+	for i := 1; i < len(m.modelList.models); i++ {
+		a := strings.ToLower(m.modelList.models[i-1].DisplayName)
+		b := strings.ToLower(m.modelList.models[i].DisplayName)
+		if a > b {
+			t.Errorf("name sort broken: %q > %q at index %d", a, b, i)
+		}
+	}
+}
+
+func TestSortByPriceAscending(t *testing.T) {
+	m := enterModelModeWith(t, testModelsWithSWE())
+
+	// Switch to price sort (right x3 from colSWE)
+	for range 3 {
+		result, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+		m = result.(model)
+	}
+	if m.modelList.sortCol != colPrice {
+		t.Fatalf("sortCol = %d, want colPrice", m.modelList.sortCol)
+	}
+
+	// Should be price ascending (cheapest first)
+	for i := 1; i < len(m.modelList.models); i++ {
+		if m.modelList.models[i-1].PromptPrice > m.modelList.models[i].PromptPrice {
+			t.Errorf("price sort broken: %f > %f at index %d",
+				m.modelList.models[i-1].PromptPrice, m.modelList.models[i].PromptPrice, i)
+		}
+	}
+}
+
+func TestSortCursorPreserved(t *testing.T) {
+	m := enterModelModeWith(t, testModelsWithSWE())
+
+	// Move cursor to a specific model
+	result, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = result.(model)
+	selectedID := m.modelList.selected().ID
+
+	// Change sort column
+	result, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = result.(model)
+
+	// Cursor should still point to the same model
+	if m.modelList.selected().ID != selectedID {
+		t.Errorf("cursor moved to %q after sort, want %q", m.modelList.selected().ID, selectedID)
+	}
+}
+
+func TestSortSWEZeroScoresAtBottom(t *testing.T) {
+	models := []ModelDef{
+		{Provider: ProviderAnthropic, ID: "anthropic/a", DisplayName: "A", SWEScore: 0},
+		{Provider: ProviderAnthropic, ID: "anthropic/b", DisplayName: "B", SWEScore: 50.0},
+		{Provider: ProviderAnthropic, ID: "anthropic/c", DisplayName: "C", SWEScore: 30.0},
+	}
+	m := enterModelModeWith(t, models)
+
+	// Default SWE sort: B (50) then C (30) then A (0)
+	if m.modelList.models[0].ID != "anthropic/b" {
+		t.Errorf("first = %q, want anthropic/b (score 50)", m.modelList.models[0].ID)
+	}
+	if m.modelList.models[1].ID != "anthropic/c" {
+		t.Errorf("second = %q, want anthropic/c (score 30)", m.modelList.models[1].ID)
+	}
+	if m.modelList.models[2].ID != "anthropic/a" {
+		t.Errorf("third = %q, want anthropic/a (score 0, bottom)", m.modelList.models[2].ID)
+	}
+}
+
+func TestTableViewHasHeaderAndSeparator(t *testing.T) {
+	m := enterModelModeWith(t, testModelsWithSWE())
+	view := m.modelList.View()
+
+	if !strings.Contains(view, "MODEL") {
+		t.Error("view should contain MODEL header")
+	}
+	if !strings.Contains(view, "PROVIDER") {
+		t.Error("view should contain PROVIDER header")
+	}
+	if !strings.Contains(view, "PRICE") {
+		t.Error("view should contain PRICE header")
+	}
+	if !strings.Contains(view, "SWE-BENCH") {
+		t.Error("view should contain SWE-BENCH header")
+	}
+	if !strings.Contains(view, "─") {
+		t.Error("view should contain separator line")
+	}
+	if !strings.Contains(view, "▼") {
+		t.Error("view should contain sort direction indicator")
+	}
+	if !strings.Contains(view, "←/→") {
+		t.Error("hint should mention ←/→ for sort")
+	}
+}
+
+func TestTableViewShowsSWEScores(t *testing.T) {
+	m := enterModelModeWith(t, testModelsWithSWE())
+	view := m.modelList.View()
+
+	if !strings.Contains(view, "79.2") {
+		t.Error("view should show SWE score 79.2")
+	}
+	if !strings.Contains(view, "65.0") {
+		t.Error("view should show SWE score 65.0")
+	}
+	if !strings.Contains(view, "—") {
+		t.Error("view should show — for models without SWE score")
+	}
+}
+
+func TestTableViewSortArrowChanges(t *testing.T) {
+	m := enterModelModeWith(t, testModelsWithSWE())
+
+	// Default: SWE-BENCH with ▼
+	view := m.modelList.View()
+	if !strings.Contains(view, "SWE-BENCH ▼") {
+		t.Error("default view should show SWE-BENCH ▼")
+	}
+
+	// Switch to name sort (ascending ▲)
+	result, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = result.(model)
+	view = m.modelList.View()
+	if !strings.Contains(view, "MODEL ▲") {
+		t.Error("name sort view should show MODEL ▲")
+	}
+	// SWE-BENCH should no longer have arrow
+	if strings.Contains(view, "SWE-BENCH ▼") || strings.Contains(view, "SWE-BENCH ▲") {
+		t.Error("SWE-BENCH should not have arrow when not active sort")
 	}
 }

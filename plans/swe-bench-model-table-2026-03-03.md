@@ -49,7 +49,7 @@ Multiple entries may reference the same underlying model (different agent system
 
 - [x] 2a: Add `sortColumn` and `sortAsc` fields to `modelList`. Define sort column constants (colName, colProvider, colPrice, colSWE). Add left/right arrow key handling in `modelList.Update()` to cycle sort column. Add a `sortModels()` method that sorts the model slice by current column/direction. Default: `colSWE` descending.
 - [x] 2b: Redesign `modelList.View()` as a columnar table — header row with column names (active column highlighted), separator line, model rows with aligned columns (name, provider, price, score). Update hint line to include `←/→` for sort. Adjust `modelListChrome` constant for new header/separator rows.
-- [ ] 2c: Add tests for sort behavior — left/right arrow changes sort column, models reorder correctly by each column, default sort is SWE-bench descending, cursor position preserved after re-sort.
+- [x] 2c: Add tests for sort behavior — left/right arrow changes sort column, models reorder correctly by each column, default sort is SWE-bench descending, cursor position preserved after re-sort.
 
 ## Phase 3: Integration Tests
 
