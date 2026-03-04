@@ -51,7 +51,7 @@ The status bar content is fetched once at startup (alongside container boot) and
 ## Phase 1: Status Bar
 
 - [x] 1a: Add `statusInfo` struct (Branch string, PRNumber int, WorktreeName string, ActiveCount int) to the model. Add `fetchStatusCmd(worktreePath string)` that runs `git rev-parse --abbrev-ref HEAD`, `gh pr view --json number -q .number`, and counts active worktrees via `listWorktrees()`. Returns a `statusInfoMsg`. Wire into `Init()` after container ready (chain from `containerReadyMsg` handler). Cache in model field.
-- [ ] 1b: Add `renderStatusBar()` method that produces a single styled line: left-aligned branch + PR, right-aligned worktree info. Use lipgloss for layout (Place or JoinHorizontal). Subtle purple theme consistent with existing UI. Integrate into `View()` between viewport and autocomplete/input. Adjust `viewportHeight()` to account for the status bar line.
+- [x] 1b: Add `renderStatusBar()` method that produces a single styled line: left-aligned branch + PR, right-aligned worktree info. Use lipgloss for layout (Place or JoinHorizontal). Subtle purple theme consistent with existing UI. Integrate into `View()` between viewport and autocomplete/input. Adjust `viewportHeight()` to account for the status bar line.
 - [ ] 1c: Tests for status bar: model-level test that `statusInfoMsg` updates fields correctly, `renderStatusBar()` output contains branch name, viewport height reduced by 1 when status bar is present.
 
 ## Phase 2: `/worktrees` Command

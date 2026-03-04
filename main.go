@@ -951,7 +951,7 @@ func (m model) autocompleteHeight() int {
 }
 
 func (m model) viewportHeight() int {
-	h := m.height - m.inputBoxHeight() - m.autocompleteHeight()
+	h := m.height - m.inputBoxHeight() - m.autocompleteHeight() - m.statusBarHeight()
 	if h < 1 {
 		h = 1
 	}
@@ -1020,6 +1020,53 @@ func (m *model) updateViewportContent() {
 	m.viewport.SetContent(content)
 }
 
+func (m model) statusBarHeight() int {
+	if m.status.Branch == "" {
+		return 0
+	}
+	return 1
+}
+
+func (m model) renderStatusBar() string {
+	if m.status.Branch == "" {
+		return ""
+	}
+
+	leftStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#9B6ADE")).
+		Bold(true)
+	dimStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#6B34B0"))
+
+	// Left side: branch + optional PR
+	left := leftStyle.Render(m.status.Branch)
+	if m.status.PRNumber > 0 {
+		left += dimStyle.Render(fmt.Sprintf(" PR #%d", m.status.PRNumber))
+	}
+
+	// Right side: worktree name + active count
+	right := dimStyle.Render(m.status.WorktreeName)
+	if m.status.ActiveCount > 0 {
+		right += dimStyle.Render(fmt.Sprintf(" (%d active)", m.status.ActiveCount))
+	}
+
+	// Fill the space between left and right
+	leftW := lipgloss.Width(left)
+	rightW := lipgloss.Width(right)
+	gap := m.width - leftW - rightW - 2 // 1 padding each side
+	if gap < 1 {
+		gap = 1
+	}
+
+	bar := " " + left + strings.Repeat(" ", gap) + right + " "
+
+	barStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("#1A0A2E")).
+		Width(m.width)
+
+	return barStyle.Render(bar)
+}
+
 func (m model) renderAutocomplete() string {
 	matches := m.autocompleteMatches()
 	if len(matches) == 0 {
@@ -1071,21 +1118,26 @@ func (m model) View() tea.View {
 
 	inputBox := inputBorderStyle.Render(m.textarea.View())
 
+	statusBar := m.renderStatusBar()
 	autocomplete := m.renderAutocomplete()
 	acHeight := m.autocompleteHeight()
 
 	var fullView string
+	viewportView := m.viewport.View()
+	if statusBar != "" {
+		viewportView += "\n" + statusBar
+	}
 	if autocomplete != "" {
-		fullView = m.viewport.View() + "\n" + autocomplete + "\n" + inputBox
+		fullView = viewportView + "\n" + autocomplete + "\n" + inputBox
 	} else {
-		fullView = m.viewport.View() + "\n" + inputBox
+		fullView = viewportView + "\n" + inputBox
 	}
 
 	v := tea.NewView(fullView)
 
 	c := m.textarea.Cursor()
 	if c != nil {
-		c.Y += m.viewport.Height() + acHeight + 1 // +1 for top border
+		c.Y += m.viewport.Height() + m.statusBarHeight() + acHeight + 1 // +1 for top border
 		c.X += 1                                    // +1 for left border
 		v.Cursor = c
 	}
