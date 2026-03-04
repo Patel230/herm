@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -139,6 +140,7 @@ type model struct {
 	worktreePath   string
 	containerReady bool
 	containerErr   error
+	status         statusInfo
 }
 
 // autocompleteMatches returns matching commands for the current textarea input,
@@ -211,6 +213,19 @@ type containerReadyMsg struct {
 	worktreePath string
 }
 
+// statusInfo holds cached status bar data.
+type statusInfo struct {
+	Branch       string
+	PRNumber     int    // 0 = no PR
+	WorktreeName string
+	ActiveCount  int
+}
+
+// statusInfoMsg carries the result of the async status bar fetch.
+type statusInfoMsg struct {
+	info statusInfo
+}
+
 // containerErrMsg signals that the container failed to start.
 type containerErrMsg struct {
 	err error
@@ -278,6 +293,44 @@ func bootContainerCmd(cfg Config) tea.Msg {
 	}
 
 	return containerReadyMsg{client: client, worktreePath: workspace}
+}
+
+// fetchStatusCmd gathers status bar info: branch name, PR number, worktree
+// name, and active worktree count. Runs git/gh commands in the worktree dir.
+func fetchStatusCmd(worktreePath string) tea.Msg {
+	var info statusInfo
+
+	// Branch name from the worktree.
+	info.Branch = worktreeBranch(worktreePath)
+
+	// PR number from gh (optional, fails silently).
+	ghCmd := exec.Command("gh", "pr", "view", "--json", "number", "-q", ".number")
+	ghCmd.Dir = worktreePath
+	if out, err := ghCmd.Output(); err == nil {
+		if n, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil {
+			info.PRNumber = n
+		}
+	}
+
+	// Worktree name is the base directory name.
+	info.WorktreeName = filepath.Base(worktreePath)
+
+	// Count active (locked) worktrees.
+	repoRoot := gitRepoRoot()
+	if repoRoot != "" {
+		if projectID, err := ensureProjectID(repoRoot); err == nil {
+			baseDir := worktreeBaseDir(projectID)
+			if wts, err := listWorktrees(baseDir); err == nil {
+				for _, wt := range wts {
+					if wt.Active {
+						info.ActiveCount++
+					}
+				}
+			}
+		}
+	}
+
+	return statusInfoMsg{info: info}
 }
 
 // fetchModelsCmd returns a tea.Cmd that fetches models from OpenRouter.
@@ -403,12 +456,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Handle async status bar result regardless of mode
+	if msg, ok := msg.(statusInfoMsg); ok {
+		m.status = msg.info
+		return m, nil
+	}
+
 	// Handle async container startup result regardless of mode
 	if msg, ok := msg.(containerReadyMsg); ok {
 		m.container = msg.client
 		m.worktreePath = msg.worktreePath
 		m.containerReady = true
-		return m, nil
+		wtPath := msg.worktreePath
+		return m, func() tea.Msg {
+			return fetchStatusCmd(wtPath)
+		}
 	}
 	if msg, ok := msg.(containerErrMsg); ok {
 		m.containerErr = msg.err
