@@ -513,6 +513,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c":
+			m.cleanup()
 			return m, tea.Quit
 		case "tab":
 			if matches := m.autocompleteMatches(); len(matches) > 0 {
@@ -781,6 +782,16 @@ func (m model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			m.viewport.GotoBottom()
 		}
 		return m, nil
+	}
+}
+
+// cleanup stops the container and unlocks the worktree.
+func (m *model) cleanup() {
+	if m.container != nil {
+		_ = m.container.Stop()
+	}
+	if m.worktreePath != "" {
+		_ = unlockWorktree(m.worktreePath)
 	}
 }
 
