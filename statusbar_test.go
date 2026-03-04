@@ -136,6 +136,39 @@ func TestStatusBarVisibleInView(t *testing.T) {
 	}
 }
 
+func TestRenderStatusBarDiffStats(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 120, 24)
+	m.status = statusInfo{
+		Branch:  "feature/test",
+		DiffAdd: 42,
+		DiffDel: 7,
+	}
+
+	bar := m.renderStatusBar()
+
+	if !strings.Contains(bar, "+42") {
+		t.Error("status bar should contain '+42' for additions")
+	}
+	if !strings.Contains(bar, "-7") {
+		t.Error("status bar should contain '-7' for deletions")
+	}
+}
+
+func TestRenderStatusBarNoDiffStatsWhenZero(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+	m.status = statusInfo{
+		Branch: "main",
+	}
+
+	bar := m.renderStatusBar()
+
+	if strings.Contains(bar, "+0") {
+		t.Error("status bar should not show diff stats when both are zero")
+	}
+}
+
 func TestContainerReadyChainsFetchStatus(t *testing.T) {
 	m := initialModel()
 	m = resize(m, 80, 24)

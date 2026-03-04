@@ -225,6 +225,8 @@ type statusInfo struct {
 	WorktreeName string
 	ActiveCount  int
 	TotalCount   int
+	DiffAdd      int
+	DiffDel      int
 }
 
 // statusInfoMsg carries the result of the async status bar fetch.
@@ -334,6 +336,23 @@ func fetchStatusCmd(worktreePath string) tea.Msg {
 	if out, err := ghCmd.Output(); err == nil {
 		if n, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil {
 			info.PRNumber = n
+		}
+	}
+
+	// Diff stats: insertions/deletions vs default branch.
+	diffCmd := exec.Command("git", "diff", "--shortstat", "HEAD")
+	diffCmd.Dir = worktreePath
+	if out, err := diffCmd.Output(); err == nil {
+		line := strings.TrimSpace(string(out))
+		if re := regexp.MustCompile(`(\d+) insertion`); re.MatchString(line) {
+			if n, err := strconv.Atoi(re.FindStringSubmatch(line)[1]); err == nil {
+				info.DiffAdd = n
+			}
+		}
+		if re := regexp.MustCompile(`(\d+) deletion`); re.MatchString(line) {
+			if n, err := strconv.Atoi(re.FindStringSubmatch(line)[1]); err == nil {
+				info.DiffDel = n
+			}
 		}
 	}
 
@@ -1409,6 +1428,14 @@ func (m model) renderStatusBar() string {
 		if m.status.PRNumber > 0 {
 			left += dimStyle.Render(fmt.Sprintf(" PR #%d", m.status.PRNumber))
 		}
+	}
+
+	// Diff stats next to branch info
+	if m.status.DiffAdd > 0 || m.status.DiffDel > 0 {
+		addStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6FE7B8"))
+		delStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B"))
+		left += " " + addStyle.Render(fmt.Sprintf("+%d", m.status.DiffAdd)) +
+			delStyle.Render(fmt.Sprintf("/-%d", m.status.DiffDel))
 	}
 
 	// Right side: worktree name + active count
