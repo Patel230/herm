@@ -169,6 +169,46 @@ func TestRenderStatusBarNoDiffStatsWhenZero(t *testing.T) {
 	}
 }
 
+func TestRenderStatusBarTruncatesNarrow(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 40, 24)
+	m.status = statusInfo{
+		Branch:       "feature/very-long-branch-name-here",
+		WorktreeName: "cpsl-worktree-long-name",
+	}
+
+	bar := m.renderStatusBar()
+
+	if !strings.Contains(bar, "…") {
+		t.Error("status bar should truncate with … on narrow terminal")
+	}
+	// Original names should NOT fit at 40 chars
+	if strings.Contains(bar, "feature/very-long-branch-name-here") {
+		t.Error("branch name should be truncated at narrow width")
+	}
+}
+
+func TestRenderStatusBarNoTruncateWide(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 120, 24)
+	m.status = statusInfo{
+		Branch:       "feature/login",
+		WorktreeName: "cpsl-abc",
+	}
+
+	bar := m.renderStatusBar()
+
+	if strings.Contains(bar, "…") {
+		t.Error("status bar should not truncate on wide terminal with short names")
+	}
+	if !strings.Contains(bar, "feature/login") {
+		t.Error("full branch name should be visible")
+	}
+	if !strings.Contains(bar, "cpsl-abc") {
+		t.Error("full worktree name should be visible")
+	}
+}
+
 func TestContainerReadyChainsFetchStatus(t *testing.T) {
 	m := initialModel()
 	m = resize(m, 80, 24)

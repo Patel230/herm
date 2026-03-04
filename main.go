@@ -1402,6 +1402,20 @@ func (m model) statusBarHeight() int {
 	return 1
 }
 
+func truncateWithEllipsis(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	if maxLen <= 0 {
+		return ""
+	}
+	if maxLen == 1 {
+		return "…"
+	}
+	return string(runes[:maxLen-1]) + "…"
+}
+
 func (m model) renderStatusBar() string {
 	if m.status.Branch == "" && m.mode != modeShell {
 		return ""
@@ -1413,6 +1427,68 @@ func (m model) renderStatusBar() string {
 	dimStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#6B34B0"))
 
+	// Compute fixed-width elements to determine name budgets
+	var leftFixedW int
+	if m.mode == modeShell {
+		leftFixedW = 5 // "SHELL"
+		if m.status.Branch != "" {
+			leftFixedW += 2 // "  " prefix before branch
+		}
+	} else {
+		leftFixedW = 2 // " " icon + space
+	}
+
+	var prText string
+	if m.mode != modeShell && m.status.PRNumber > 0 {
+		prText = fmt.Sprintf(" PR #%d", m.status.PRNumber)
+		leftFixedW += len([]rune(prText))
+	}
+
+	var diffW int
+	if m.status.DiffAdd > 0 || m.status.DiffDel > 0 {
+		diffW = len(fmt.Sprintf(" +%d/-%d", m.status.DiffAdd, m.status.DiffDel))
+		leftFixedW += diffW
+	}
+
+	rightFixedW := 2 // " " icon + space
+	var countText string
+	if m.status.TotalCount > 1 {
+		countText = fmt.Sprintf(" (%d/%d)", m.status.ActiveCount, m.status.TotalCount)
+		rightFixedW += len([]rune(countText))
+	}
+
+	// Available space for branch + worktree names
+	// 3 = 2 side padding + 1 minimum gap
+	overhead := leftFixedW + rightFixedW + 3
+	available := m.width - overhead
+	if available < 4 {
+		available = 4
+	}
+
+	// Allocate space between branch and worktree names
+	branchNeed := len([]rune(m.status.Branch))
+	wtNeed := len([]rune(m.status.WorktreeName))
+
+	branchBudget := branchNeed
+	wtBudget := wtNeed
+	if branchNeed+wtNeed > available {
+		half := available / 3
+		if half < 2 {
+			half = 2
+		}
+		if branchNeed <= half {
+			wtBudget = available - branchNeed
+		} else if wtNeed <= half {
+			branchBudget = available - wtNeed
+		} else {
+			branchBudget = available * 3 / 5
+			wtBudget = available - branchBudget
+		}
+	}
+
+	branchName := truncateWithEllipsis(m.status.Branch, branchBudget)
+	wtName := truncateWithEllipsis(m.status.WorktreeName, wtBudget)
+
 	// Left side: shell mode indicator or branch + optional PR
 	var left string
 	if m.mode == modeShell {
@@ -1420,13 +1496,13 @@ func (m model) renderStatusBar() string {
 			Foreground(lipgloss.Color("#6FE7B8")).
 			Bold(true)
 		left = shellStyle.Render("SHELL")
-		if m.status.Branch != "" {
-			left += dimStyle.Render("  " + m.status.Branch)
+		if branchName != "" {
+			left += dimStyle.Render("  " + branchName)
 		}
 	} else {
-		left = leftStyle.Render(" " + m.status.Branch)
+		left = leftStyle.Render(" " + branchName)
 		if m.status.PRNumber > 0 {
-			left += dimStyle.Render(fmt.Sprintf(" PR #%d", m.status.PRNumber))
+			left += dimStyle.Render(prText)
 		}
 	}
 
@@ -1439,9 +1515,9 @@ func (m model) renderStatusBar() string {
 	}
 
 	// Right side: worktree name + active count
-	right := dimStyle.Render(" " + m.status.WorktreeName)
+	right := dimStyle.Render(" " + wtName)
 	if m.status.TotalCount > 1 {
-		right += dimStyle.Render(fmt.Sprintf(" (%d/%d)", m.status.ActiveCount, m.status.TotalCount))
+		right += dimStyle.Render(countText)
 	}
 
 	// Fill the space between left and right
