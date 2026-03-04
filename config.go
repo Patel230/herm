@@ -11,11 +11,14 @@ const configDir = ".cpsl"
 const configFile = "config.json"
 
 type Config struct {
-	PasteCollapseMinChars int    `json:"paste_collapse_min_chars"`
-	AnthropicAPIKey       string `json:"anthropic_api_key,omitempty"`
-	GrokAPIKey            string `json:"grok_api_key,omitempty"`
-	OpenAIAPIKey          string `json:"openai_api_key,omitempty"`
-	ActiveModel           string `json:"active_model,omitempty"`
+	PasteCollapseMinChars int             `json:"paste_collapse_min_chars"`
+	AnthropicAPIKey       string          `json:"anthropic_api_key,omitempty"`
+	GrokAPIKey            string          `json:"grok_api_key,omitempty"`
+	OpenAIAPIKey          string          `json:"openai_api_key,omitempty"`
+	ActiveModel           string          `json:"active_model,omitempty"`
+	ModelSortDirs         map[string]bool `json:"model_sort_dirs,omitempty"` // column name → ascending
+	ContainerServiceBin   string          `json:"container_service_bin,omitempty"`
+	ContainerImagePath    string          `json:"container_image_path,omitempty"`
 }
 
 // configuredProviders returns a set of provider names that have API keys configured.
@@ -34,15 +37,15 @@ func (c Config) configuredProviders() map[string]bool {
 }
 
 // availableModels returns the models whose provider has a configured API key.
-func (c Config) availableModels() []ModelDef {
-	return filterModelsByProviders(c.configuredProviders())
+func (c Config) availableModels(models []ModelDef) []ModelDef {
+	return filterModelsByProviders(models, c.configuredProviders())
 }
 
 // resolveActiveModel returns a valid active model ID. If the current ActiveModel
 // is invalid or its provider has no key, it falls back to the first available
 // model, or empty string if no keys are configured.
-func (c Config) resolveActiveModel() string {
-	available := c.availableModels()
+func (c Config) resolveActiveModel(models []ModelDef) string {
+	available := c.availableModels(models)
 	if len(available) == 0 {
 		return ""
 	}
@@ -56,10 +59,44 @@ func (c Config) resolveActiveModel() string {
 	return available[0].ID
 }
 
+const (
+	defaultContainerServiceBin = "~/.cpsl/service/container-service"
+	defaultContainerImagePath  = "~/.cpsl/service/oci-image"
+)
+
 func defaultConfig() Config {
 	return Config{
 		PasteCollapseMinChars: 200,
 	}
+}
+
+// containerConfig returns a ContainerConfig with paths resolved.
+// Empty config fields fall back to defaults; ~ is expanded to $HOME.
+func (c Config) containerConfig() ContainerConfig {
+	bin := c.ContainerServiceBin
+	if bin == "" {
+		bin = defaultContainerServiceBin
+	}
+	img := c.ContainerImagePath
+	if img == "" {
+		img = defaultContainerImagePath
+	}
+	return ContainerConfig{
+		ServiceBinary: expandHome(bin),
+		ImagePath:     expandHome(img),
+	}
+}
+
+// expandHome replaces a leading ~ with the user's home directory.
+func expandHome(path string) string {
+	if len(path) == 0 || path[0] != '~' {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return filepath.Join(home, path[1:])
 }
 
 func configPath() string {

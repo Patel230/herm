@@ -61,7 +61,7 @@ Alpine Linux VM (arm64)
 
 ## Phase 3: App Integration — `/exec`, Startup, Shutdown
 
-- [ ] 3a: Config + model fields: add `ContainerServiceBin`, `ContainerImagePath` to `Config` with defaults. Add `/exec` to `commands` slice. Add fields to app model: `container *ContainerClient`, `worktreePath string`, `containerReady bool`, `containerErr error`. Add message types: `containerReadyMsg`, `containerErrMsg`, `execResultMsg{CommandResult, error}`.
+- [x] 3a: Config + model fields: add `ContainerServiceBin`, `ContainerImagePath` to `Config` with defaults. Add `/exec` to `commands` slice. Add fields to app model: `container *ContainerClient`, `worktreePath string`, `containerReady bool`, `containerErr error`. Add message types: `containerReadyMsg`, `containerErrMsg`, `execResultMsg{CommandResult, error}`.
 - [ ] 3b: Startup wiring: in `Init()`, run worktree selection. If a clean worktree is auto-selected (or cwd if not a git repo), fire async `tea.Cmd` to create client, call `Start()`, return `containerReadyMsg`. Handle `containerReadyMsg`/`containerErrMsg` in `Update()`.
 - [ ] 3c: `/exec` handler in `handleCommand()`: parse command text after `/exec `. If container not ready, show info/error message. Otherwise fire async `tea.Cmd` calling `client.Exec(command, 120)`, returns `execResultMsg`. Handle in `Update()` — append stdout, stderr, exit code to messages (use `msgSuccess` for exit 0, `msgError` for non-zero).
 - [ ] 3d: Shutdown: on `ctrl+c` / `tea.Quit`, if container is running, call `Stop()` and `unlockWorktree()`. The container client's `Stop()` sends `container.stop` then kills the subprocess.

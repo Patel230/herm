@@ -83,7 +83,7 @@ type message struct {
 }
 
 // commands is the list of available slash commands.
-var commands = []string{"/config", "/model"}
+var commands = []string{"/config", "/exec", "/model"}
 
 // filterCommands returns commands matching the given prefix.
 func filterCommands(prefix string) []string {
@@ -132,8 +132,12 @@ type model struct {
 	models       []ModelDef
 	modelsErr    error
 	modelsLoaded bool
-	sweScores    map[string]float64
-	sweLoaded    bool
+	sweScores      map[string]float64
+	sweLoaded      bool
+	container      *ContainerClient
+	worktreePath   string
+	containerReady bool
+	containerErr   error
 }
 
 // autocompleteMatches returns matching commands for the current textarea input,
@@ -197,6 +201,20 @@ type modelsMsg struct {
 // sweScoresMsg carries the result of the async SWE-bench fetch.
 type sweScoresMsg struct {
 	scores map[string]float64
+	err    error
+}
+
+// containerReadyMsg signals that the container has started successfully.
+type containerReadyMsg struct{}
+
+// containerErrMsg signals that the container failed to start.
+type containerErrMsg struct {
+	err error
+}
+
+// execResultMsg carries the result of a /exec command.
+type execResultMsg struct {
+	result CommandResult
 	err    error
 }
 
@@ -557,7 +575,7 @@ func (m model) enterModelMode() (tea.Model, tea.Cmd) {
 	}
 	m.mode = modeModel
 	activeModel := m.config.resolveActiveModel(m.models)
-	m.modelList = newModelList(available, activeModel, m.width, m.height)
+	m.modelList = newModelList(available, activeModel, m.width, m.height, m.config.ModelSortDirs)
 	m.textarea.Reset()
 	m.textarea.SetHeight(minInputHeight)
 	m.textarea.Blur()
@@ -567,6 +585,8 @@ func (m model) enterModelMode() (tea.Model, tea.Cmd) {
 // exitModelMode returns to chat mode, optionally saving the selected model.
 func (m model) exitModelMode(save bool) (tea.Model, tea.Cmd) {
 	m.mode = modeChat
+	// Always persist sort preferences
+	m.config.ModelSortDirs = m.modelList.sortDirsMap()
 	if save {
 		selected := m.modelList.selected()
 		m.config.ActiveModel = selected.ID
@@ -582,6 +602,8 @@ func (m model) exitModelMode(save bool) (tea.Model, tea.Cmd) {
 			})
 		}
 	} else {
+		// Save sort preferences even on cancel
+		_ = saveConfig(m.config)
 		m.messages = append(m.messages, message{
 			content: "Model selection cancelled.",
 			kind:    msgInfo,
