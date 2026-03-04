@@ -51,7 +51,7 @@ Alpine Linux VM (arm64)
 
 - [x] 1a: Add `container.go` with types: `ContainerConfig` (ServiceBinary, ImagePath, SocketDir paths), `MountSpec` (Source, Destination, ReadOnly), `CommandResult` (Stdout, Stderr, ExitCode), `ContainerStatus` (State, Uptime), and `ContainerError` (typed error with codes: BinaryNotFound, ImageNotFound, SpawnFailed, Socket, Protocol, Service, Timeout). Add private JSON-RPC request/response structs matching the protocol.
 - [x] 1b: Implement `ContainerClient` — `NewContainerClient(config)`, `IsAvailable() bool`, `Start(workspace string, mounts []MountSpec) error` (spawns subprocess with `--socket-path` and `--image-path` args, polls for socket up to 30s, sends `container.start` with workspace/mounts), `Exec(command string, timeout int) (CommandResult, error)` (sends `container.exec`), `Stop() error` (sends `container.stop`, kills subprocess), `Status() (ContainerStatus, error)`. Unix socket dial + write request + read response per call (same pattern as Rust client).
-- [ ] 1c: Tests in `container_test.go` — mock Unix socket server that speaks JSON-RPC. Test: full start/exec/stop lifecycle, error responses from service, binary-not-found, serialization round-trips. No real container needed.
+- [x] 1c: Tests in `container_test.go` — mock Unix socket server that speaks JSON-RPC. Test: full start/exec/stop lifecycle, error responses from service, binary-not-found, serialization round-trips. No real container needed.
 
 ## Phase 2: Worktree Manager
 
