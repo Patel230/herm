@@ -17,8 +17,7 @@ type Config struct {
 	OpenAIAPIKey          string          `json:"openai_api_key,omitempty"`
 	ActiveModel           string          `json:"active_model,omitempty"`
 	ModelSortDirs         map[string]bool `json:"model_sort_dirs,omitempty"` // column name → ascending
-	ContainerServiceBin   string          `json:"container_service_bin,omitempty"`
-	ContainerImagePath    string          `json:"container_image_path,omitempty"`
+	ContainerImage        string          `json:"container_image,omitempty"`
 }
 
 // configuredProviders returns a set of provider names that have API keys configured.
@@ -59,10 +58,7 @@ func (c Config) resolveActiveModel(models []ModelDef) string {
 	return available[0].ID
 }
 
-const (
-	defaultContainerServiceBin = "~/.cpsl/service/container-service"
-	defaultContainerImagePath  = "~/.cpsl/service/oci-image"
-)
+const defaultContainerImage = "alpine:latest"
 
 func defaultConfig() Config {
 	return Config{
@@ -70,33 +66,13 @@ func defaultConfig() Config {
 	}
 }
 
-// containerConfig returns a ContainerConfig with paths resolved.
-// Empty config fields fall back to defaults; ~ is expanded to $HOME.
+// containerConfig returns a ContainerConfig with the image resolved.
 func (c Config) containerConfig() ContainerConfig {
-	bin := c.ContainerServiceBin
-	if bin == "" {
-		bin = defaultContainerServiceBin
-	}
-	img := c.ContainerImagePath
+	img := c.ContainerImage
 	if img == "" {
-		img = defaultContainerImagePath
+		img = defaultContainerImage
 	}
-	return ContainerConfig{
-		ServiceBinary: expandHome(bin),
-		ImagePath:     expandHome(img),
-	}
-}
-
-// expandHome replaces a leading ~ with the user's home directory.
-func expandHome(path string) string {
-	if len(path) == 0 || path[0] != '~' {
-		return path
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return path
-	}
-	return filepath.Join(home, path[1:])
+	return ContainerConfig{Image: img}
 }
 
 func configPath() string {

@@ -240,8 +240,7 @@ func bootContainerCmd(cfg Config) tea.Msg {
 
 	if !client.IsAvailable() {
 		return containerErrMsg{err: fmt.Errorf(
-			"container service not found (expected binary at %s and image at %s)",
-			ccfg.ServiceBinary, ccfg.ImagePath)}
+			"Docker is not running. Please start Docker Desktop and try again.")}
 	}
 
 	// Determine workspace path.
@@ -255,8 +254,6 @@ func bootContainerCmd(cfg Config) tea.Msg {
 		if selected != "" {
 			workspace = selected
 		} else {
-			// Dirty worktrees only, no clean option — use cwd for now.
-			// Phase 4 adds the selection UI.
 			cwd, _ := os.Getwd()
 			workspace = cwd
 		}
@@ -277,7 +274,7 @@ func bootContainerCmd(cfg Config) tea.Msg {
 	}}
 
 	if err := client.Start(workspace, mounts); err != nil {
-		return containerErrMsg{err: err}
+		return containerErrMsg{err: fmt.Errorf("starting container: %w", err)}
 	}
 
 	return containerReadyMsg{client: client, worktreePath: workspace}

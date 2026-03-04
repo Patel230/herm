@@ -1,63 +1,57 @@
 package main
 
 import (
-	"bufio"
-	"encoding/json"
-	"net"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 )
 
-// mockContainerClient creates a ContainerClient connected to a mock socket
-// server that returns the given stdout/stderr/exitCode for any exec call.
-func mockContainerClient(t *testing.T, stdout, stderr string, exitCode int) (*ContainerClient, func()) {
+// mockContainerClient creates a ContainerClient backed by fakeDockerCommand
+// that returns the given stdout/stderr/exitCode for exec calls.
+func mockContainerClient(t *testing.T, stdout, stderr string, exitCode int) *ContainerClient {
 	t.Helper()
-	sockPath, cleanup := mockServer(t, func(req jsonRPCRequest) jsonRPCResponse {
-		switch req.Method {
-		case "container.exec":
-			result, _ := json.Marshal(CommandResult{
-				Stdout:   stdout,
-				Stderr:   stderr,
-				ExitCode: exitCode,
-			})
-			return jsonRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: result}
-		case "container.stop":
-			result, _ := json.Marshal(map[string]string{"status": "stopped"})
-			return jsonRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: result}
-		default:
-			return jsonRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: &jsonRPCError{Code: -32601, Message: "method not found"}}
+	orig := dockerCommand
+	t.Cleanup(func() { dockerCommand = orig })
+
+	dockerCommand = fakeDockerCommand(func(args []string) (string, string, int) {
+		if len(args) >= 2 {
+			switch args[1] {
+			case "run":
+				return "mock-container-id\n", "", 0
+			case "exec":
+				return stdout, stderr, exitCode
+			case "stop", "rm":
+				return "", "", 0
+			}
 		}
+		return "", "unknown", 1
 	})
 
-	c := &ContainerClient{config: ContainerConfig{}}
-	conn, err := net.Dial("unix", sockPath)
-	if err != nil {
-		t.Fatalf("dial: %v", err)
+	c := NewContainerClient(ContainerConfig{Image: "alpine:latest"})
+	if err := c.Start("/workspace", []MountSpec{{
+		Source:      "/workspace",
+		Destination: "/workspace",
+	}}); err != nil {
+		t.Fatalf("mockContainerClient Start: %v", err)
 	}
-	c.conn = conn
-	c.reader = bufio.NewReader(conn)
-	c.running = true
-
-	return c, func() { c.Stop(); cleanup() }
+	return c
 }
 
 // modelWithContainer creates a ready model with a mock container.
-func modelWithContainer(t *testing.T, stdout, stderr string, exitCode int) (model, func()) {
+func modelWithContainer(t *testing.T, stdout, stderr string, exitCode int) model {
 	t.Helper()
-	client, cleanup := mockContainerClient(t, stdout, stderr, exitCode)
+	client := mockContainerClient(t, stdout, stderr, exitCode)
 	m := initialModel()
 	m = resize(m, 80, 24)
 	m.container = client
 	m.containerReady = true
 	m.worktreePath = "/tmp/test-worktree"
-	return m, cleanup
+	return m
 }
 
 func TestExecEchoHello(t *testing.T) {
-	m, cleanup := modelWithContainer(t, "hello\n", "", 0)
-	defer cleanup()
+	m := modelWithContainer(t, "hello\n", "", 0)
 
 	// Type /exec echo hello and send
 	m = typeString(m, "/exec echo hello")
@@ -100,8 +94,7 @@ func TestExecEchoHello(t *testing.T) {
 }
 
 func TestExecNonZeroExit(t *testing.T) {
-	m, cleanup := modelWithContainer(t, "", "file not found\n", 1)
-	defer cleanup()
+	m := modelWithContainer(t, "", "file not found\n", 1)
 
 	m = typeString(m, "/exec cat missing.txt")
 	result, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -160,7 +153,7 @@ func TestExecContainerError(t *testing.T) {
 	m = resize(m, 80, 24)
 
 	// Simulate container error from startup
-	result, _ := m.Update(containerErrMsg{err: &ContainerError{Code: ErrBinaryNotFound, Message: "not found"}})
+	result, _ := m.Update(containerErrMsg{err: &ContainerError{Code: ErrDockerNotFound, Message: "not found"}})
 	m = result.(model)
 
 	m = typeString(m, "/exec echo hello")
@@ -185,8 +178,7 @@ func TestExecContainerError(t *testing.T) {
 }
 
 func TestExecNoCommand(t *testing.T) {
-	m, cleanup := modelWithContainer(t, "", "", 0)
-	defer cleanup()
+	m := modelWithContainer(t, "", "", 0)
 
 	m = typeString(m, "/exec")
 	result, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -216,8 +208,7 @@ func TestExecAutocomplete(t *testing.T) {
 }
 
 func TestShutdownCleanup(t *testing.T) {
-	m, cleanup := modelWithContainer(t, "", "", 0)
-	defer cleanup()
+	m := modelWithContainer(t, "", "", 0)
 
 	// Verify container is running
 	if !m.containerReady {
@@ -241,8 +232,10 @@ func TestContainerReadyMsg(t *testing.T) {
 		t.Fatal("should not be ready initially")
 	}
 
-	client, cleanup := mockContainerClient(t, "", "", 0)
-	defer cleanup()
+	client := &ContainerClient{
+		config:  ContainerConfig{Image: "alpine:latest"},
+		running: true,
+	}
 
 	result, _ := m.Update(containerReadyMsg{client: client, worktreePath: "/tmp/test-wt"})
 	m = result.(model)
