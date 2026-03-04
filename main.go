@@ -68,6 +68,7 @@ const (
 	modeChat appMode = iota
 	modeConfig
 	modeModel
+	modeWorktrees
 )
 
 type msgKind int
@@ -85,7 +86,7 @@ type message struct {
 }
 
 // commands is the list of available slash commands.
-var commands = []string{"/config", "/exec", "/model"}
+var commands = []string{"/config", "/exec", "/model", "/worktrees"}
 
 // filterCommands returns commands matching the given prefix.
 func filterCommands(prefix string) []string {
@@ -131,6 +132,7 @@ type model struct {
 	mode         appMode
 	configForm   configForm
 	modelList    modelList
+	worktreeListC worktreeList
 	models       []ModelDef
 	modelsErr    error
 	modelsLoaded bool
@@ -224,6 +226,12 @@ type statusInfo struct {
 // statusInfoMsg carries the result of the async status bar fetch.
 type statusInfoMsg struct {
 	info statusInfo
+}
+
+// worktreeListMsg carries the result of the async worktree list fetch.
+type worktreeListMsg struct {
+	items []WorktreeInfo
+	err   error
 }
 
 // containerErrMsg signals that the container failed to start.
@@ -462,6 +470,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Handle async worktree list result regardless of mode
+	if msg, ok := msg.(worktreeListMsg); ok {
+		if msg.err != nil {
+			m.messages = append(m.messages, message{
+				content: fmt.Sprintf("Error listing worktrees: %v", msg.err),
+				kind:    msgError,
+			})
+			m.mode = modeChat
+			if m.ready {
+				m.viewport.SetHeight(m.viewportHeight())
+				m.updateViewportContent()
+				m.viewport.GotoBottom()
+			}
+			return m, m.textarea.Focus()
+		}
+		m.worktreeListC = newWorktreeList(msg.items, m.worktreePath, m.width, m.height)
+		return m, nil
+	}
+
 	// Handle async container startup result regardless of mode
 	if msg, ok := msg.(containerReadyMsg); ok {
 		m.container = msg.client
@@ -521,6 +548,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Model selection mode: delegate to model list
 	if m.mode == modeModel {
 		return m.updateModelMode(msg)
+	}
+
+	// Worktree list mode: delegate to worktree list
+	if m.mode == modeWorktrees {
+		return m.updateWorktreeMode(msg)
 	}
 
 	var cmds []tea.Cmd
@@ -817,6 +849,80 @@ func (m model) updateModelMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// enterWorktreeMode switches to the worktree list mode.
+func (m model) enterWorktreeMode() (tea.Model, tea.Cmd) {
+	m.mode = modeWorktrees
+	m.worktreeListC = newWorktreeList(nil, m.worktreePath, m.width, m.height)
+	m.textarea.Reset()
+	m.textarea.SetHeight(minInputHeight)
+	m.textarea.Blur()
+
+	// Fetch worktree list async
+	repoRoot := gitRepoRoot()
+	return m, func() tea.Msg {
+		if repoRoot == "" {
+			return worktreeListMsg{err: fmt.Errorf("not in a git repository")}
+		}
+		projectID, err := ensureProjectID(repoRoot)
+		if err != nil {
+			return worktreeListMsg{err: err}
+		}
+		baseDir := worktreeBaseDir(projectID)
+		items, err := listWorktrees(baseDir)
+		return worktreeListMsg{items: items, err: err}
+	}
+}
+
+// exitWorktreeMode returns to chat mode.
+func (m model) exitWorktreeMode() (tea.Model, tea.Cmd) {
+	m.mode = modeChat
+	if m.ready {
+		m.viewport.SetHeight(m.viewportHeight())
+		m.updateViewportContent()
+		m.viewport.GotoBottom()
+	}
+	return m, m.textarea.Focus()
+}
+
+// updateWorktreeMode handles input while the worktree list is active.
+func (m model) updateWorktreeMode(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.worktreeListC.width = msg.Width
+		m.worktreeListC.height = msg.Height
+		return m, nil
+
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "esc", "ctrl+c":
+			return m.exitWorktreeMode()
+		}
+	}
+
+	var cmd tea.Cmd
+	m.worktreeListC, cmd = m.worktreeListC.Update(msg)
+	return m, cmd
+}
+
+// viewWorktrees renders the worktree list screen.
+func (m model) viewWorktrees() tea.View {
+	formBorder := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForegroundBlend(borderGradientColors...).
+		Width(m.width).
+		Height(m.height - 2).
+		Padding(1, 0)
+
+	formContent := m.worktreeListC.View()
+	rendered := formBorder.Render(formContent)
+
+	v := tea.NewView(rendered)
+	v.AltScreen = true
+	return v
+}
+
 // handleCommand processes slash commands and returns the updated model.
 func (m model) handleCommand(input string) (tea.Model, tea.Cmd) {
 	cmd := strings.Fields(input)[0] // e.g. "/config"
@@ -828,6 +934,8 @@ func (m model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		return m.handleExec(input)
 	case "/model":
 		return m.enterModelMode()
+	case "/worktrees":
+		return m.enterWorktreeMode()
 	default:
 		m.messages = append(m.messages, message{
 			content: fmt.Sprintf("Unknown command: %s", cmd),
@@ -1109,6 +1217,10 @@ func (m model) View() tea.View {
 
 	if m.mode == modeModel {
 		return m.viewModel()
+	}
+
+	if m.mode == modeWorktrees {
+		return m.viewWorktrees()
 	}
 
 	inputBorderStyle := lipgloss.NewStyle().
