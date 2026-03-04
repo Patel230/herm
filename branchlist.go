@@ -207,7 +207,7 @@ func (l branchList) View() string {
 
 			// Current branch marker
 			if branch == l.currentBranch {
-				marker := lipgloss.NewStyle().Foreground(lipgloss.Color("#9B6ADE")).Bold(true).Render(" ← current")
+				marker := lipgloss.NewStyle().Foreground(lipgloss.Color("#6FE7B8")).Bold(true).Render(" ●")
 				row.WriteString(marker)
 			}
 

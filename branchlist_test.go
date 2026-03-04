@@ -147,8 +147,8 @@ func TestBranchListCurrentMarked(t *testing.T) {
 	bl := newBranchList(branches, "main", 80, 24)
 	view := bl.View()
 
-	if !strings.Contains(view, "current") {
-		t.Error("view should contain 'current' marker for the current branch")
+	if !strings.Contains(view, "●") {
+		t.Error("view should contain '●' marker for the current branch")
 	}
 }
 

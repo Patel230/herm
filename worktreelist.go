@@ -155,7 +155,7 @@ func (l worktreeList) View() string {
 
 		// Current session marker
 		if wt.Path == l.currentPath {
-			marker := lipgloss.NewStyle().Foreground(lipgloss.Color("#9B6ADE")).Bold(true).Render(" ← current")
+			marker := lipgloss.NewStyle().Foreground(lipgloss.Color("#6FE7B8")).Bold(true).Render(" ●")
 			row.WriteString(marker)
 		}
 

@@ -81,8 +81,8 @@ func TestWorktreeListCurrentMarked(t *testing.T) {
 	wl := newWorktreeList(items, "/wt/a", 80, 24)
 	view := wl.View()
 
-	if !strings.Contains(view, "current") {
-		t.Error("view should contain 'current' marker for the current worktree")
+	if !strings.Contains(view, "●") {
+		t.Error("view should contain '●' marker for the current worktree")
 	}
 }
 
