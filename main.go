@@ -88,7 +88,7 @@ type message struct {
 }
 
 // commands is the list of available slash commands.
-var commands = []string{"/branches", "/config", "/container-shell", "/model", "/worktrees"}
+var commands = []string{"/branches", "/config", "/model", "/shell", "/worktrees"}
 
 // filterCommands returns commands matching the given prefix.
 func filterCommands(prefix string) []string {
@@ -1110,7 +1110,7 @@ func (m model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		return m.enterBranchMode()
 	case "/config":
 		return m.enterConfigMode()
-	case "/container-shell":
+	case "/shell":
 		return m.enterShellMode()
 	case "/model":
 		return m.enterModelMode()
@@ -1142,7 +1142,7 @@ func (m *model) cleanup() {
 	}
 }
 
-// enterShellMode switches to the container shell mode.
+// enterShellMode switches to the shell mode.
 func (m model) enterShellMode() (tea.Model, tea.Cmd) {
 	// Check container state.
 	if m.containerErr != nil {
@@ -1177,9 +1177,9 @@ func (m model) enterShellMode() (tea.Model, tea.Cmd) {
 	m.mode = modeShell
 	m.textarea.Reset()
 	m.textarea.SetHeight(minInputHeight)
-	m.textarea.Placeholder = "container $"
+	m.textarea.Placeholder = "shell $"
 	m.messages = append(m.messages, message{
-		content: "Entering container shell mode. Ctrl+C to exit.",
+		content: "Entering shell mode. Ctrl+C to exit.",
 		kind:    msgInfo,
 	})
 	if m.ready {
@@ -1197,7 +1197,7 @@ func (m model) exitShellMode() (tea.Model, tea.Cmd) {
 	m.textarea.SetHeight(minInputHeight)
 	m.textarea.Placeholder = "Type a message..."
 	m.messages = append(m.messages, message{
-		content: "Exited container shell mode.",
+		content: "Exited shell mode.",
 		kind:    msgInfo,
 	})
 	if m.ready {
@@ -1208,7 +1208,7 @@ func (m model) exitShellMode() (tea.Model, tea.Cmd) {
 	return m, m.textarea.Focus()
 }
 
-// updateShellMode handles input while in container shell mode.
+// updateShellMode handles input while in shell mode.
 func (m model) updateShellMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:

@@ -815,8 +815,8 @@ func TestFilterCommandsExactMatch(t *testing.T) {
 
 func TestFilterCommandsPartialMatch(t *testing.T) {
 	matches := filterCommands("/con")
-	if len(matches) != 2 || matches[0] != "/config" || matches[1] != "/container-shell" {
-		t.Errorf("filterCommands(/con) = %v, want [/config /container-shell]", matches)
+	if len(matches) != 1 || matches[0] != "/config" {
+		t.Errorf("filterCommands(/con) = %v, want [/config]", matches)
 	}
 }
 

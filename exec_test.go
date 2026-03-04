@@ -50,10 +50,10 @@ func modelWithContainer(t *testing.T, stdout, stderr string, exitCode int) model
 	return m
 }
 
-// enterShell enters /container-shell mode on a model with a ready container.
+// enterShell enters /shell mode on a model with a ready container.
 func enterShell(t *testing.T, m model) model {
 	t.Helper()
-	m = typeString(m, "/container-shell")
+	m = typeString(m, "/shell")
 	m = sendKey(m, tea.KeyEnter)
 	if m.mode != modeShell {
 		t.Fatalf("mode = %d, want modeShell", m.mode)
@@ -154,7 +154,7 @@ func TestShellModeContainerNotReady(t *testing.T) {
 	m = resize(m, 80, 24)
 	// containerReady is false by default
 
-	m = typeString(m, "/container-shell")
+	m = typeString(m, "/shell")
 	result, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = result.(model)
 
@@ -189,7 +189,7 @@ func TestShellModeContainerError(t *testing.T) {
 	result, _ := m.Update(containerErrMsg{err: &ContainerError{Code: ErrDockerNotFound, Message: "not found"}})
 	m = result.(model)
 
-	m = typeString(m, "/container-shell")
+	m = typeString(m, "/shell")
 	result, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = result.(model)
 
@@ -249,17 +249,17 @@ func TestShellModeAutocomplete(t *testing.T) {
 	m := initialModel()
 	m = resize(m, 80, 24)
 
-	m = typeString(m, "/co")
+	m = typeString(m, "/sh")
 	matches := m.autocompleteMatches()
 	found := false
 	for _, match := range matches {
-		if match == "/container-shell" {
+		if match == "/shell" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("autocompleteMatches = %v, should contain /container-shell", matches)
+		t.Errorf("autocompleteMatches = %v, should contain /shell", matches)
 	}
 }
 
@@ -267,8 +267,8 @@ func TestShellModePlaceholderChanges(t *testing.T) {
 	m := modelWithContainer(t, "", "", 0)
 	m = enterShell(t, m)
 
-	if m.textarea.Placeholder != "container $" {
-		t.Errorf("placeholder = %q, want 'container $'", m.textarea.Placeholder)
+	if m.textarea.Placeholder != "shell $" {
+		t.Errorf("placeholder = %q, want 'shell $'", m.textarea.Placeholder)
 	}
 }
 

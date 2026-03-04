@@ -427,10 +427,10 @@ func TestFullFlowTabEnterExecutesCommand(t *testing.T) {
 	// Type partial command
 	m = typeString(m, "/con")
 
-	// Autocomplete should show /config and /container-shell
+	// Autocomplete should show /config
 	matches := m.autocompleteMatches()
-	if len(matches) != 2 || matches[0] != "/config" {
-		t.Fatalf("autocompleteMatches = %v, want [/config /container-shell]", matches)
+	if len(matches) != 1 || matches[0] != "/config" {
+		t.Fatalf("autocompleteMatches = %v, want [/config]", matches)
 	}
 
 	// Tab accepts the top match (/config)
