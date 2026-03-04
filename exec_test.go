@@ -245,6 +245,18 @@ func TestShellModeCtrlCExits(t *testing.T) {
 	}
 }
 
+func TestAutocompleteEnterTriggersFirstMatch(t *testing.T) {
+	m := modelWithContainer(t, "", "", 0)
+
+	// Type partial command "/sh" and press Enter — should resolve to "/shell"
+	m = typeString(m, "/sh")
+	m = sendKey(m, tea.KeyEnter)
+
+	if m.mode != modeShell {
+		t.Errorf("mode = %d, want modeShell; Enter on '/sh' should trigger first match '/shell'", m.mode)
+	}
+}
+
 func TestShellModeAutocomplete(t *testing.T) {
 	m := initialModel()
 	m = resize(m, 80, 24)

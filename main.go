@@ -718,6 +718,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			val := strings.TrimSpace(m.textarea.Value())
 			if val != "" {
 				if strings.HasPrefix(val, "/") {
+					if matches := filterCommands(val); len(matches) > 0 {
+						val = matches[0]
+					}
 					return m.handleCommand(val)
 				}
 				content := expandPastes(val, m.pasteStore)
