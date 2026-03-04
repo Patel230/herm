@@ -418,6 +418,42 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Handle async exec result regardless of mode
+	if msg, ok := msg.(execResultMsg); ok {
+		if msg.err != nil {
+			m.messages = append(m.messages, message{
+				content: fmt.Sprintf("Exec error: %v", msg.err),
+				kind:    msgError,
+			})
+		} else {
+			kind := msgSuccess
+			if msg.result.ExitCode != 0 {
+				kind = msgError
+			}
+			output := strings.TrimRight(msg.result.Stdout, "\n")
+			if msg.result.Stderr != "" {
+				if output != "" {
+					output += "\n"
+				}
+				output += strings.TrimRight(msg.result.Stderr, "\n")
+			}
+			if output == "" {
+				output = fmt.Sprintf("(exit %d)", msg.result.ExitCode)
+			} else if msg.result.ExitCode != 0 {
+				output += fmt.Sprintf("\n(exit %d)", msg.result.ExitCode)
+			}
+			m.messages = append(m.messages, message{
+				content: output,
+				kind:    msgKind(kind),
+			})
+		}
+		if m.ready {
+			m.updateViewportContent()
+			m.viewport.GotoBottom()
+		}
+		return m, nil
+	}
+
 	// Config mode: delegate to config form
 	if m.mode == modeConfig {
 		return m.updateConfigMode(msg)
@@ -728,6 +764,8 @@ func (m model) handleCommand(input string) (tea.Model, tea.Cmd) {
 	switch cmd {
 	case "/config":
 		return m.enterConfigMode()
+	case "/exec":
+		return m.handleExec(input)
 	case "/model":
 		return m.enterModelMode()
 	default:
@@ -743,6 +781,77 @@ func (m model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			m.viewport.GotoBottom()
 		}
 		return m, nil
+	}
+}
+
+// handleExec processes the /exec command.
+func (m model) handleExec(input string) (tea.Model, tea.Cmd) {
+	// Parse the command text after "/exec ".
+	parts := strings.SplitN(input, " ", 2)
+	if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+		m.messages = append(m.messages, message{
+			content: "Usage: /exec <command>",
+			kind:    msgError,
+		})
+		m.textarea.Reset()
+		m.textarea.SetHeight(minInputHeight)
+		if m.ready {
+			m.viewport.SetHeight(m.viewportHeight())
+			m.updateViewportContent()
+			m.viewport.GotoBottom()
+		}
+		return m, nil
+	}
+	execCmd := strings.TrimSpace(parts[1])
+
+	// Check container state.
+	if m.containerErr != nil {
+		m.messages = append(m.messages, message{
+			content: fmt.Sprintf("Container error: %v", m.containerErr),
+			kind:    msgError,
+		})
+		m.textarea.Reset()
+		m.textarea.SetHeight(minInputHeight)
+		if m.ready {
+			m.viewport.SetHeight(m.viewportHeight())
+			m.updateViewportContent()
+			m.viewport.GotoBottom()
+		}
+		return m, nil
+	}
+	if !m.containerReady {
+		m.messages = append(m.messages, message{
+			content: "Container is starting... please try again in a moment.",
+			kind:    msgInfo,
+		})
+		m.textarea.Reset()
+		m.textarea.SetHeight(minInputHeight)
+		if m.ready {
+			m.viewport.SetHeight(m.viewportHeight())
+			m.updateViewportContent()
+			m.viewport.GotoBottom()
+		}
+		return m, nil
+	}
+
+	// Show the command being run.
+	m.messages = append(m.messages, message{
+		content: fmt.Sprintf("$ %s", execCmd),
+		kind:    msgUser,
+	})
+	m.textarea.Reset()
+	m.textarea.SetHeight(minInputHeight)
+	if m.ready {
+		m.viewport.SetHeight(m.viewportHeight())
+		m.updateViewportContent()
+		m.viewport.GotoBottom()
+	}
+
+	// Fire async exec.
+	client := m.container
+	return m, func() tea.Msg {
+		result, err := client.Exec(execCmd, 120)
+		return execResultMsg{result: result, err: err}
 	}
 }
 
