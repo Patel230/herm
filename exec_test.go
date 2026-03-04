@@ -50,106 +50,7 @@ func modelWithContainer(t *testing.T, stdout, stderr string, exitCode int) model
 	return m
 }
 
-// enterShell enters /shell mode on a model with a ready container.
-func enterShell(t *testing.T, m model) model {
-	t.Helper()
-	m = typeString(m, "/shell")
-	m = sendKey(m, tea.KeyEnter)
-	if m.mode != modeShell {
-		t.Fatalf("mode = %d, want modeShell", m.mode)
-	}
-	return m
-}
-
-func TestShellModeEchoHello(t *testing.T) {
-	m := modelWithContainer(t, "hello\n", "", 0)
-	m = enterShell(t, m)
-
-	// Type command in shell mode and send
-	m = typeString(m, "echo hello")
-	result, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = result.(model)
-
-	// Should show the command being run
-	found := false
-	for _, msg := range m.messages {
-		if msg.content == "$ echo hello" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("should show '$ echo hello' message")
-	}
-
-	// Should still be in shell mode
-	if m.mode != modeShell {
-		t.Errorf("mode = %d, want modeShell (should stay in shell mode)", m.mode)
-	}
-
-	// Execute the async cmd to get the result
-	if cmd == nil {
-		t.Fatal("expected non-nil cmd for async exec")
-	}
-	msg := cmd()
-
-	// Feed the result back
-	result, _ = m.Update(msg)
-	m = result.(model)
-
-	// Should have the output message
-	foundOutput := false
-	for _, msg := range m.messages {
-		if msg.kind == msgSuccess && strings.Contains(msg.content, "hello") {
-			foundOutput = true
-			break
-		}
-	}
-	if !foundOutput {
-		t.Errorf("should show exec output 'hello', messages: %+v", m.messages)
-	}
-
-	// Should still be in shell mode after result
-	if m.mode != modeShell {
-		t.Errorf("mode = %d, want modeShell after exec result", m.mode)
-	}
-}
-
-func TestShellModeNonZeroExit(t *testing.T) {
-	m := modelWithContainer(t, "", "file not found\n", 1)
-	m = enterShell(t, m)
-
-	m = typeString(m, "cat missing.txt")
-	result, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = result.(model)
-
-	if cmd == nil {
-		t.Fatal("expected non-nil cmd")
-	}
-	msg := cmd()
-
-	result, _ = m.Update(msg)
-	m = result.(model)
-
-	// Should show error-style output with exit code
-	foundError := false
-	for _, msg := range m.messages {
-		if msg.kind == msgError && strings.Contains(msg.content, "exit 1") {
-			foundError = true
-			break
-		}
-	}
-	if !foundError {
-		t.Errorf("should show error with exit code, messages: %+v", m.messages)
-	}
-
-	// Should still be in shell mode
-	if m.mode != modeShell {
-		t.Errorf("mode = %d, want modeShell after error result", m.mode)
-	}
-}
-
-func TestShellModeContainerNotReady(t *testing.T) {
+func TestShellContainerNotReady(t *testing.T) {
 	m := initialModel()
 	m = resize(m, 80, 24)
 	// containerReady is false by default
@@ -175,13 +76,13 @@ func TestShellModeContainerNotReady(t *testing.T) {
 		t.Errorf("mode = %d, want modeChat when container not ready", m.mode)
 	}
 
-	// No async cmd should be returned
+	// No cmd should be returned
 	if cmd != nil {
 		t.Error("should not return cmd when container not ready")
 	}
 }
 
-func TestShellModeContainerError(t *testing.T) {
+func TestShellContainerError(t *testing.T) {
 	m := initialModel()
 	m = resize(m, 80, 24)
 
@@ -215,49 +116,61 @@ func TestShellModeContainerError(t *testing.T) {
 	}
 }
 
-func TestShellModeCtrlCExits(t *testing.T) {
+func TestShellReturnsCmd(t *testing.T) {
 	m := modelWithContainer(t, "", "", 0)
-	m = enterShell(t, m)
 
-	// Ctrl+C should exit shell mode
-	result, _ := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	m = typeString(m, "/shell")
+	result, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = result.(model)
 
-	if m.mode != modeChat {
-		t.Errorf("mode = %d, want modeChat after Ctrl+C", m.mode)
+	// enterShellMode should return a tea.Cmd (ExecProcess)
+	if cmd == nil {
+		t.Error("enterShellMode should return a cmd for tea.ExecProcess")
 	}
 
-	// Should show exit message
-	foundExit := false
+	// Should stay in chat mode (TUI suspends, not a mode switch)
+	if m.mode != modeChat {
+		t.Errorf("mode = %d, want modeChat (shell uses ExecProcess, not mode switch)", m.mode)
+	}
+}
+
+func TestShellExitMsgSuccess(t *testing.T) {
+	m := modelWithContainer(t, "", "", 0)
+
+	result, _ := m.Update(shellExitMsg{err: nil})
+	m = result.(model)
+
+	foundInfo := false
 	for _, msg := range m.messages {
-		if msg.kind == msgInfo && strings.Contains(msg.content, "Exited") {
-			foundExit = true
+		if msg.kind == msgInfo && strings.Contains(msg.content, "Shell session ended") {
+			foundInfo = true
 			break
 		}
 	}
-	if !foundExit {
-		t.Error("should show exit message after Ctrl+C")
-	}
-
-	// Placeholder should be restored
-	if m.textarea.Placeholder != "Type a message..." {
-		t.Errorf("placeholder = %q, want 'Type a message...'", m.textarea.Placeholder)
+	if !foundInfo {
+		t.Errorf("should show shell ended message, messages: %+v", m.messages)
 	}
 }
 
-func TestAutocompleteEnterTriggersFirstMatch(t *testing.T) {
+func TestShellExitMsgError(t *testing.T) {
 	m := modelWithContainer(t, "", "", 0)
 
-	// Type partial command "/sh" and press Enter — should resolve to "/shell"
-	m = typeString(m, "/sh")
-	m = sendKey(m, tea.KeyEnter)
+	result, _ := m.Update(shellExitMsg{err: &ContainerError{Code: ErrExecFailed, Message: "connection lost"}})
+	m = result.(model)
 
-	if m.mode != modeShell {
-		t.Errorf("mode = %d, want modeShell; Enter on '/sh' should trigger first match '/shell'", m.mode)
+	foundErr := false
+	for _, msg := range m.messages {
+		if msg.kind == msgError && strings.Contains(msg.content, "connection lost") {
+			foundErr = true
+			break
+		}
+	}
+	if !foundErr {
+		t.Errorf("should show shell error message, messages: %+v", m.messages)
 	}
 }
 
-func TestShellModeAutocomplete(t *testing.T) {
+func TestShellAutocomplete(t *testing.T) {
 	m := initialModel()
 	m = resize(m, 80, 24)
 
@@ -275,68 +188,38 @@ func TestShellModeAutocomplete(t *testing.T) {
 	}
 }
 
-func TestShellModePlaceholderChanges(t *testing.T) {
+func TestAutocompleteEnterTriggersFirstMatch(t *testing.T) {
 	m := modelWithContainer(t, "", "", 0)
-	m = enterShell(t, m)
 
-	if m.textarea.Placeholder != "shell $" {
-		t.Errorf("placeholder = %q, want 'shell $'", m.textarea.Placeholder)
-	}
-}
-
-func TestShellModeStatusBarShowsShell(t *testing.T) {
-	m := modelWithContainer(t, "", "", 0)
-	m.status = statusInfo{Branch: "main", WorktreeName: "test-wt"}
-	m = enterShell(t, m)
-
-	bar := m.renderStatusBar()
-	if !strings.Contains(bar, "SHELL") {
-		t.Errorf("status bar should contain 'SHELL', got %q", bar)
-	}
-}
-
-func TestShellModeStaysAfterExecResult(t *testing.T) {
-	m := modelWithContainer(t, "output\n", "", 0)
-	m = enterShell(t, m)
-
-	// Send a command
-	m = typeString(m, "ls")
+	// Type partial command "/sh" and press Enter — should resolve to "/shell"
+	m = typeString(m, "/sh")
 	result, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = result.(model)
 
-	if m.mode != modeShell {
-		t.Fatalf("mode = %d, want modeShell before exec result", m.mode)
-	}
-
-	// Process exec result
-	if cmd != nil {
-		msg := cmd()
-		result, _ = m.Update(msg)
-		m = result.(model)
-	}
-
-	// Should still be in shell mode after result
-	if m.mode != modeShell {
-		t.Errorf("mode = %d, want modeShell after exec result", m.mode)
+	// Should return a cmd (ExecProcess from /shell)
+	if cmd == nil {
+		t.Error("Enter on '/sh' should trigger /shell and return ExecProcess cmd")
 	}
 }
 
-func TestShellModeEmptyCommandIgnored(t *testing.T) {
-	m := modelWithContainer(t, "", "", 0)
-	m = enterShell(t, m)
+func TestContainerIDGetter(t *testing.T) {
+	orig := dockerCommand
+	t.Cleanup(func() { dockerCommand = orig })
 
-	msgCount := len(m.messages)
+	dockerCommand = fakeDockerCommand(func(args []string) (string, string, int) {
+		if len(args) >= 2 && args[1] == "run" {
+			return "test-container-123\n", "", 0
+		}
+		return "", "", 0
+	})
 
-	// Press Enter with empty input
-	result, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = result.(model)
-
-	// Should not add any messages
-	if len(m.messages) != msgCount {
-		t.Errorf("empty Enter should not add messages, got %d want %d", len(m.messages), msgCount)
+	c := NewContainerClient(ContainerConfig{Image: "alpine:latest"})
+	if err := c.Start("/workspace", nil); err != nil {
+		t.Fatalf("Start: %v", err)
 	}
-	if cmd != nil {
-		t.Error("empty Enter should not return a cmd")
+
+	if got := c.ContainerID(); got != "test-container-123" {
+		t.Errorf("ContainerID() = %q, want %q", got, "test-container-123")
 	}
 }
 

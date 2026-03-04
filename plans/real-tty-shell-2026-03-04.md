@@ -48,9 +48,9 @@ Currently `/shell` enters a custom `modeShell` that reads one command at a time 
 - [x] 2b: Remove the `updateShellMode` dispatch from the main `Update` switch, remove shell-related message types if no longer used
 
 ## Phase 3: Update tests
-- [ ] 3a: Remove tests for old shell mode behavior (command echo, exec result in viewport, Ctrl+C exit, placeholder changes, shell status bar) since that UX no longer exists
-- [ ] 3b: Add tests for new behavior: container validation still works (not ready, error cases), `enterShellMode` returns a `tea.Cmd` (we can't fully test ExecProcess in unit tests but can verify the flow), `shellExitMsg` handling restores chat mode
-- [ ] 3c: Verify existing tests still pass — autocomplete for `/shell` command, container ready/error guards
+- [x] 3a: Remove tests for old shell mode behavior (command echo, exec result in viewport, Ctrl+C exit, placeholder changes, shell status bar) since that UX no longer exists
+- [x] 3b: Add tests for new behavior: container validation still works (not ready, error cases), `enterShellMode` returns a `tea.Cmd` (we can't fully test ExecProcess in unit tests but can verify the flow), `shellExitMsg` handling restores chat mode
+- [x] 3c: Verify existing tests still pass — autocomplete for `/shell` command, container ready/error guards
 
 ## Success criteria
 
