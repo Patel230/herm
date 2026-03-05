@@ -6,60 +6,83 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/langdag/langdag/pkg/langdag"
 	"github.com/langdag/langdag/pkg/types"
 )
 
-// newLangdagClient creates a langdag client configured from the app config.
-// Returns nil if no API keys are configured.
-func newLangdagClient(cfg Config) (*langdag.Client, error) {
-	apiKeys := make(map[string]string)
-	if cfg.AnthropicAPIKey != "" {
-		apiKeys["anthropic"] = cfg.AnthropicAPIKey
-	}
-	if cfg.OpenAIAPIKey != "" {
-		apiKeys["openai"] = cfg.OpenAIAPIKey
-	}
-	if cfg.GeminiAPIKey != "" {
-		apiKeys["gemini"] = cfg.GeminiAPIKey
-	}
-	if cfg.GrokAPIKey != "" {
-		// Grok uses the OpenAI-compatible API; langdag routes via the openai provider.
-		// If OpenAI key is already set, prefer it; otherwise map grok key as openai.
-		if _, ok := apiKeys["openai"]; !ok {
-			apiKeys["openai"] = cfg.GrokAPIKey
-		}
-	}
-
-	if len(apiKeys) == 0 {
-		return nil, nil
-	}
-
-	// Default provider: prefer anthropic, then openai, then gemini.
-	defaultProvider := ""
-	for _, p := range []string{"anthropic", "openai", "gemini"} {
-		if _, ok := apiKeys[p]; ok {
-			defaultProvider = p
-			break
-		}
-	}
-
+// langdagStoragePath returns the path to the langdag SQLite database.
+func langdagStoragePath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		home = "."
 	}
 	dbDir := filepath.Join(home, ".cpsl")
-	if err := os.MkdirAll(dbDir, 0o755); err != nil {
-		return nil, fmt.Errorf("creating db dir: %w", err)
+	_ = os.MkdirAll(dbDir, 0o755)
+	return filepath.Join(dbDir, "conversations.db")
+}
+
+// newLangdagClient creates a langdag client configured from the app config.
+// Returns nil if no API keys are configured.
+func newLangdagClient(cfg Config) (*langdag.Client, error) {
+	// Use the first available provider as default.
+	if cfg.AnthropicAPIKey != "" {
+		return newLangdagClientForProvider(cfg, ProviderAnthropic)
+	}
+	if cfg.OpenAIAPIKey != "" {
+		return newLangdagClientForProvider(cfg, ProviderOpenAI)
+	}
+	if cfg.GrokAPIKey != "" {
+		return newLangdagClientForProvider(cfg, ProviderGrok)
+	}
+	if cfg.GeminiAPIKey != "" {
+		return newLangdagClientForProvider(cfg, ProviderGemini)
+	}
+	return nil, nil
+}
+
+// newLangdagClientForProvider creates a langdag client configured for a specific provider.
+func newLangdagClientForProvider(cfg Config, provider string) (*langdag.Client, error) {
+	langdagCfg := langdag.Config{
+		StoragePath: langdagStoragePath(),
 	}
 
-	return langdag.New(langdag.Config{
-		StoragePath: filepath.Join(dbDir, "conversations.db"),
-		Provider:    defaultProvider,
-		APIKeys:     apiKeys,
-	})
+	switch provider {
+	case ProviderAnthropic:
+		langdagCfg.Provider = "anthropic"
+		langdagCfg.APIKeys = map[string]string{"anthropic": cfg.AnthropicAPIKey}
+	case ProviderOpenAI:
+		langdagCfg.Provider = "openai"
+		langdagCfg.APIKeys = map[string]string{"openai": cfg.OpenAIAPIKey}
+	case ProviderGrok:
+		// Grok uses OpenAI-compatible API at api.x.ai
+		langdagCfg.Provider = "openai"
+		langdagCfg.APIKeys = map[string]string{"openai": cfg.GrokAPIKey}
+		langdagCfg.OpenAIConfig = &langdag.OpenAIConfig{
+			BaseURL: "https://api.x.ai/v1",
+		}
+	case ProviderGemini:
+		langdagCfg.Provider = "gemini"
+		langdagCfg.APIKeys = map[string]string{"gemini": cfg.GeminiAPIKey}
+	default:
+		return nil, fmt.Errorf("unsupported provider: %s", provider)
+	}
+
+	return langdag.New(langdagCfg)
+}
+
+// nativeModelID strips the OpenRouter provider prefix from a model ID,
+// returning just the model name that the native API expects.
+// e.g. "anthropic/claude-sonnet-4.6" → "claude-sonnet-4.6"
+func nativeModelID(openRouterID string) string {
+	for prefix := range providerPrefixes {
+		if strings.HasPrefix(openRouterID, prefix) {
+			return strings.TrimPrefix(openRouterID, prefix)
+		}
+	}
+	return openRouterID
 }
 
 // maxToolIterations caps the agent loop to prevent runaway tool calls.

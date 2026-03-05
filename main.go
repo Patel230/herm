@@ -151,9 +151,10 @@ type model struct {
 	containerReady bool
 	containerErr   error
 	status         statusInfo
-	langdagClient  *langdag.Client
-	agent          *Agent
-	agentNodeID    string // last assistant node ID for conversation continuity
+	langdagClient    *langdag.Client
+	langdagProvider  string // current provider the langdag client is configured for
+	agent            *Agent
+	agentNodeID      string // last assistant node ID for conversation continuity
 	agentRunning     bool   // true while the agent loop is executing
 	awaitingApproval bool   // true when waiting for user y/n on a tool call
 	approvalDesc     string // human-readable description of the pending approval
@@ -281,8 +282,9 @@ type shellExitMsg struct {
 
 // langdagReadyMsg signals that the langdag client has been initialized.
 type langdagReadyMsg struct {
-	client *langdag.Client
-	err    error
+	client   *langdag.Client
+	provider string
+	err      error
 }
 
 // agentEventMsg wraps an AgentEvent for the bubbletea Update loop.
@@ -438,7 +440,7 @@ func (m model) Init() tea.Cmd {
 		return resolveWorkspaceCmd(cfg)
 	}, func() tea.Msg {
 		client, err := newLangdagClient(cfg)
-		return langdagReadyMsg{client: client, err: err}
+		return langdagReadyMsg{client: client, provider: cfg.defaultLangdagProvider(), err: err}
 	})
 }
 
@@ -552,6 +554,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			log.Printf("warning: langdag init: %v", msg.err)
 		} else {
 			m.langdagClient = msg.client
+			m.langdagProvider = msg.provider
 		}
 		return m, nil
 	}
@@ -896,11 +899,12 @@ func (m model) exitConfigMode(save bool) (tea.Model, tea.Cmd) {
 			if m.langdagClient != nil {
 				m.langdagClient.Close()
 				m.langdagClient = nil
+				m.langdagProvider = ""
 			}
 			cfg := m.config
 			cmds = append(cmds, func() tea.Msg {
 				client, err := newLangdagClient(cfg)
-				return langdagReadyMsg{client: client, err: err}
+				return langdagReadyMsg{client: client, provider: cfg.defaultLangdagProvider(), err: err}
 			})
 		}
 	} else {
@@ -1254,11 +1258,42 @@ func (m model) startAgent(userMessage string) (tea.Model, tea.Cmd) {
 		tools = append(tools, NewGitTool(m.worktreePath))
 	}
 
-	// Resolve model
-	activeModel := ""
+	// Resolve model and determine its provider
+	openRouterID := ""
 	if m.modelsLoaded {
-		activeModel = m.config.resolveActiveModel(m.models)
+		openRouterID = m.config.resolveActiveModel(m.models)
 	}
+
+	// Look up the model definition to get the provider
+	var modelProvider string
+	if modelDef := findModelByID(m.models, openRouterID); modelDef != nil {
+		modelProvider = modelDef.Provider
+	}
+
+	// Ensure the langdag client is configured for the correct provider.
+	// Recreate it if the provider changed (e.g. switching from Anthropic to Grok).
+	if modelProvider != "" && modelProvider != m.langdagProvider {
+		if m.langdagClient != nil {
+			m.langdagClient.Close()
+		}
+		client, err := newLangdagClientForProvider(m.config, modelProvider)
+		if err != nil {
+			m.messages = append(m.messages, message{
+				content: fmt.Sprintf("Error initializing %s provider: %v", modelProvider, err),
+				kind:    msgError,
+			})
+			if m.ready {
+				m.updateViewportContent()
+				m.viewport.GotoBottom()
+			}
+			return m, nil
+		}
+		m.langdagClient = client
+		m.langdagProvider = modelProvider
+	}
+
+	// Strip the OpenRouter prefix to get the native model ID
+	nativeModel := nativeModelID(openRouterID)
 
 	// Build system prompt
 	workDir := "/workspace"
@@ -1266,7 +1301,7 @@ func (m model) startAgent(userMessage string) (tea.Model, tea.Cmd) {
 
 	// Create a fresh agent for each turn (the agent loop is stateless between turns;
 	// conversation continuity is handled by parentNodeID via langdag).
-	agent := NewAgent(m.langdagClient, tools, systemPrompt, activeModel)
+	agent := NewAgent(m.langdagClient, tools, systemPrompt, nativeModel)
 	m.agent = agent
 	m.agentRunning = true
 

@@ -39,6 +39,23 @@ func (c Config) configuredProviders() map[string]bool {
 	return providers
 }
 
+// defaultLangdagProvider returns the provider that newLangdagClient will use.
+func (c Config) defaultLangdagProvider() string {
+	if c.AnthropicAPIKey != "" {
+		return ProviderAnthropic
+	}
+	if c.OpenAIAPIKey != "" {
+		return ProviderOpenAI
+	}
+	if c.GrokAPIKey != "" {
+		return ProviderGrok
+	}
+	if c.GeminiAPIKey != "" {
+		return ProviderGemini
+	}
+	return ""
+}
+
 // availableModels returns the models whose provider has a configured API key.
 func (c Config) availableModels(models []ModelDef) []ModelDef {
 	return filterModelsByProviders(models, c.configuredProviders())
