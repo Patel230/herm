@@ -17,6 +17,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
+	"github.com/langdag/langdag/pkg/langdag"
 	"github.com/rivo/uniseg"
 )
 
@@ -145,6 +146,9 @@ type model struct {
 	containerReady bool
 	containerErr   error
 	status         statusInfo
+	langdagClient  *langdag.Client
+	agent          *Agent
+	agentNodeID    string // last assistant node ID for conversation continuity
 }
 
 // autocompleteMatches returns matching commands for the current textarea input,
@@ -265,6 +269,12 @@ type containerErrMsg struct {
 // shellExitMsg is sent when the interactive shell session ends.
 type shellExitMsg struct {
 	err error
+}
+
+// langdagReadyMsg signals that the langdag client has been initialized.
+type langdagReadyMsg struct {
+	client *langdag.Client
+	err    error
 }
 
 // gitRepoRoot returns the git repository root, or empty string if not in a repo.
@@ -402,6 +412,9 @@ func (m model) Init() tea.Cmd {
 	cfg := m.config
 	return tea.Batch(textarea.Blink, fetchModelsCmd, fetchSWEScoresCmd, func() tea.Msg {
 		return resolveWorkspaceCmd(cfg)
+	}, func() tea.Msg {
+		client, err := newLangdagClient(cfg)
+		return langdagReadyMsg{client: client, err: err}
 	})
 }
 
@@ -505,6 +518,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.modelsLoaded && m.models != nil {
 				matchSWEScores(m.models, m.sweScores)
 			}
+		}
+		return m, nil
+	}
+
+	// Handle langdag client initialization regardless of mode
+	if msg, ok := msg.(langdagReadyMsg); ok {
+		if msg.err != nil {
+			log.Printf("warning: langdag init: %v", msg.err)
+		} else {
+			m.langdagClient = msg.client
 		}
 		return m, nil
 	}
@@ -772,6 +795,7 @@ func (m model) enterConfigMode() (tea.Model, tea.Cmd) {
 // exitConfigMode returns to chat mode, optionally saving config changes.
 func (m model) exitConfigMode(save bool) (tea.Model, tea.Cmd) {
 	m.mode = modeChat
+	var cmds []tea.Cmd
 	if save {
 		m.configForm.applyTo(&m.config)
 		if err := saveConfig(m.config); err != nil {
@@ -783,6 +807,16 @@ func (m model) exitConfigMode(save bool) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, message{
 				content: "Config saved.",
 				kind:    msgSuccess,
+			})
+			// Reinitialize langdag client with new API keys
+			if m.langdagClient != nil {
+				m.langdagClient.Close()
+				m.langdagClient = nil
+			}
+			cfg := m.config
+			cmds = append(cmds, func() tea.Msg {
+				client, err := newLangdagClient(cfg)
+				return langdagReadyMsg{client: client, err: err}
 			})
 		}
 	} else {
@@ -796,7 +830,8 @@ func (m model) exitConfigMode(save bool) (tea.Model, tea.Cmd) {
 		m.updateViewportContent()
 		m.viewport.GotoBottom()
 	}
-	return m, m.textarea.Focus()
+	cmds = append(cmds, m.textarea.Focus())
+	return m, tea.Batch(cmds...)
 }
 
 // updateConfigMode handles input while the config form is active.
@@ -1155,10 +1190,13 @@ func (m model) handleCommand(input string) (tea.Model, tea.Cmd) {
 	}
 }
 
-// cleanup stops the container and unlocks the worktree.
+// cleanup stops the container, closes langdag client, and unlocks the worktree.
 func (m *model) cleanup() {
 	if m.container != nil {
 		_ = m.container.Stop()
+	}
+	if m.langdagClient != nil {
+		_ = m.langdagClient.Close()
 	}
 	if m.worktreePath != "" {
 		_ = unlockWorktree(m.worktreePath)
