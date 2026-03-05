@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"image/color"
 	"log"
@@ -76,10 +77,13 @@ const (
 type msgKind int
 
 const (
-	msgUser    msgKind = iota // normal user message
-	msgError                  // error feedback (e.g. unknown command)
-	msgSuccess                // success feedback (e.g. config saved)
-	msgInfo                   // informational feedback (e.g. config discarded)
+	msgUser      msgKind = iota // normal user message
+	msgError                    // error feedback (e.g. unknown command)
+	msgSuccess                  // success feedback (e.g. config saved)
+	msgInfo                     // informational feedback (e.g. config discarded)
+	msgAssistant                // LLM assistant response (streaming)
+	msgToolCall                 // tool invocation summary
+	msgToolResult               // tool execution result
 )
 
 type message struct {
@@ -149,6 +153,7 @@ type model struct {
 	langdagClient  *langdag.Client
 	agent          *Agent
 	agentNodeID    string // last assistant node ID for conversation continuity
+	agentRunning   bool   // true while the agent loop is executing
 }
 
 // autocompleteMatches returns matching commands for the current textarea input,
@@ -275,6 +280,22 @@ type shellExitMsg struct {
 type langdagReadyMsg struct {
 	client *langdag.Client
 	err    error
+}
+
+// agentEventMsg wraps an AgentEvent for the bubbletea Update loop.
+type agentEventMsg struct {
+	event AgentEvent
+}
+
+// listenForAgentEvent returns a tea.Cmd that reads the next event from the agent channel.
+func listenForAgentEvent(events <-chan AgentEvent) tea.Cmd {
+	return func() tea.Msg {
+		event, ok := <-events
+		if !ok {
+			return agentEventMsg{AgentEvent{Type: EventDone}}
+		}
+		return agentEventMsg{event}
+	}
 }
 
 // gitRepoRoot returns the git repository root, or empty string if not in a repo.
@@ -532,6 +553,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Handle agent events regardless of mode
+	if msg, ok := msg.(agentEventMsg); ok {
+		return m.handleAgentEvent(msg.event)
+	}
+
 	// Handle async status bar result regardless of mode
 	if msg, ok := msg.(statusInfoMsg); ok {
 		m.status = msg.info
@@ -737,6 +763,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
+			if m.agentRunning {
+				return m, nil // ignore input while agent is working
+			}
 			val := strings.TrimSpace(m.textarea.Value())
 			if val != "" {
 				if strings.HasPrefix(val, "/") {
@@ -746,14 +775,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m.handleCommand(val)
 				}
 				content := expandPastes(val, m.pasteStore)
-				m.messages = append(m.messages, message{content: content})
+				m.messages = append(m.messages, message{content: content, kind: msgUser})
 				m.textarea.Reset()
 				m.textarea.SetHeight(minInputHeight)
-				if m.ready {
-					m.viewport.SetHeight(m.viewportHeight())
-					m.updateViewportContent()
-					m.viewport.GotoBottom()
+
+				// Start agent if an LLM provider is configured
+				if m.langdagClient == nil {
+					m.messages = append(m.messages, message{
+						content: "No API keys configured. Use /config to add a key first.",
+						kind:    msgError,
+					})
+					if m.ready {
+						m.viewport.SetHeight(m.viewportHeight())
+						m.updateViewportContent()
+						m.viewport.GotoBottom()
+					}
+					return m, nil
 				}
+
+				return m.startAgent(content)
 			}
 			return m, nil
 		}
@@ -1159,6 +1199,154 @@ func (m model) viewBranches() tea.View {
 	return v
 }
 
+// startAgent creates (or reuses) an Agent and kicks off the agent loop for the given user message.
+func (m model) startAgent(userMessage string) (tea.Model, tea.Cmd) {
+	// Build tools list based on available resources
+	var tools []Tool
+	if m.containerReady && m.container != nil {
+		tools = append(tools, NewBashTool(m.container, 120))
+	}
+	if m.worktreePath != "" {
+		tools = append(tools, NewGitTool(m.worktreePath))
+	}
+
+	// Resolve model
+	activeModel := ""
+	if m.modelsLoaded {
+		activeModel = m.config.resolveActiveModel(m.models)
+	}
+
+	// Build system prompt
+	workDir := "/workspace"
+	systemPrompt := buildSystemPrompt(tools, workDir)
+
+	// Create a fresh agent for each turn (the agent loop is stateless between turns;
+	// conversation continuity is handled by parentNodeID via langdag).
+	agent := NewAgent(m.langdagClient, tools, systemPrompt, activeModel)
+	m.agent = agent
+	m.agentRunning = true
+
+	// Add a placeholder assistant message for streaming
+	m.messages = append(m.messages, message{content: "", kind: msgAssistant})
+
+	if m.ready {
+		m.viewport.SetHeight(m.viewportHeight())
+		m.updateViewportContent()
+		m.viewport.GotoBottom()
+	}
+
+	// Start agent loop in background
+	parentNodeID := m.agentNodeID
+	go agent.Run(context.Background(), userMessage, parentNodeID)
+
+	// Start listening for agent events
+	return m, listenForAgentEvent(agent.Events())
+}
+
+// handleAgentEvent processes a single agent event and returns the updated model.
+func (m model) handleAgentEvent(event AgentEvent) (tea.Model, tea.Cmd) {
+	switch event.Type {
+	case EventTextDelta:
+		// Append text to the last assistant message
+		if len(m.messages) > 0 && m.messages[len(m.messages)-1].kind == msgAssistant {
+			m.messages[len(m.messages)-1].content += event.Text
+		}
+		if m.ready {
+			m.updateViewportContent()
+			m.viewport.GotoBottom()
+		}
+		return m, listenForAgentEvent(m.agent.Events())
+
+	case EventToolCallStart:
+		// Show tool invocation summary
+		summary := fmt.Sprintf("▶ %s", event.ToolName)
+		if event.ToolInput != nil {
+			// Try to extract a short description from the input
+			input := string(event.ToolInput)
+			if len(input) > 80 {
+				input = input[:80] + "..."
+			}
+			summary += ": " + input
+		}
+		m.messages = append(m.messages, message{content: summary, kind: msgToolCall})
+		if m.ready {
+			m.updateViewportContent()
+			m.viewport.GotoBottom()
+		}
+		return m, listenForAgentEvent(m.agent.Events())
+
+	case EventToolResult:
+		// Show tool result (collapsed if long)
+		result := event.ToolResult
+		lines := strings.Split(result, "\n")
+		if len(lines) > 6 {
+			result = strings.Join(lines[:3], "\n") + "\n..." + fmt.Sprintf("\n(%d lines total)", len(lines))
+		}
+		kind := msgToolResult
+		if event.IsError {
+			kind = msgError
+		}
+		m.messages = append(m.messages, message{content: result, kind: kind})
+		// Add a new placeholder for the next assistant text
+		m.messages = append(m.messages, message{content: "", kind: msgAssistant})
+		if m.ready {
+			m.updateViewportContent()
+			m.viewport.GotoBottom()
+		}
+		return m, listenForAgentEvent(m.agent.Events())
+
+	case EventToolCallDone:
+		// Already handled by EventToolResult; just keep listening
+		return m, listenForAgentEvent(m.agent.Events())
+
+	case EventApprovalReq:
+		// Show approval request — will be fully implemented in 4c
+		m.messages = append(m.messages, message{
+			content: fmt.Sprintf("⚠ Approval needed: %s (auto-approving for now)", event.ApprovalDesc),
+			kind:    msgInfo,
+		})
+		if m.ready {
+			m.updateViewportContent()
+			m.viewport.GotoBottom()
+		}
+		// Auto-approve for now (4c will add proper y/n flow)
+		if m.agent != nil {
+			m.agent.Approve(ApprovalResponse{Approved: true})
+		}
+		return m, listenForAgentEvent(m.agent.Events())
+
+	case EventDone:
+		m.agentRunning = false
+		if event.NodeID != "" {
+			m.agentNodeID = event.NodeID
+		}
+		// Remove trailing empty assistant message if present
+		if len(m.messages) > 0 && m.messages[len(m.messages)-1].kind == msgAssistant && m.messages[len(m.messages)-1].content == "" {
+			m.messages = m.messages[:len(m.messages)-1]
+		}
+		if m.ready {
+			m.updateViewportContent()
+			m.viewport.GotoBottom()
+		}
+		return m, nil
+
+	case EventError:
+		errMsg := "Agent error"
+		if event.Error != nil {
+			errMsg = event.Error.Error()
+		}
+		m.messages = append(m.messages, message{content: errMsg, kind: msgError})
+		if m.ready {
+			m.updateViewportContent()
+			m.viewport.GotoBottom()
+		}
+		return m, listenForAgentEvent(m.agent.Events())
+	}
+
+	// Unknown event type — keep listening
+	return m, listenForAgentEvent(m.agent.Events())
+}
+
 // handleCommand processes slash commands and returns the updated model.
 func (m model) handleCommand(input string) (tea.Model, tea.Cmd) {
 	cmd := strings.Fields(input)[0] // e.g. "/config"
@@ -1192,6 +1380,9 @@ func (m model) handleCommand(input string) (tea.Model, tea.Cmd) {
 
 // cleanup stops the container, closes langdag client, and unlocks the worktree.
 func (m *model) cleanup() {
+	if m.agent != nil {
+		m.agent.Cancel()
+	}
 	if m.container != nil {
 		_ = m.container.Stop()
 	}
@@ -1302,6 +1493,19 @@ func (m *model) updateViewportContent() {
 			Foreground(lipgloss.Color("#E0E0E0")).
 			PaddingLeft(2)
 
+		assistantStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#B88AFF")).
+			PaddingLeft(2)
+
+		toolCallStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#666666")).
+			PaddingLeft(4).
+			Italic(true)
+
+		toolResultStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#555555")).
+			PaddingLeft(4)
+
 		errorStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FF6B6B")).
 			PaddingLeft(2).
@@ -1320,9 +1524,19 @@ func (m *model) updateViewportContent() {
 		var parts []string
 		parts = append(parts, centeredLogo, "")
 		for _, msg := range m.messages {
+			// Skip empty assistant messages (streaming placeholders)
+			if msg.kind == msgAssistant && msg.content == "" {
+				continue
+			}
 			wrapped := lipgloss.NewStyle().Width(m.width - 4).Render(msg.content)
 			var style lipgloss.Style
 			switch msg.kind {
+			case msgAssistant:
+				style = assistantStyle
+			case msgToolCall:
+				style = toolCallStyle
+			case msgToolResult:
+				style = toolResultStyle
 			case msgError:
 				style = errorStyle
 			case msgSuccess:
@@ -1333,6 +1547,16 @@ func (m *model) updateViewportContent() {
 				style = msgStyle
 			}
 			parts = append(parts, style.Render(wrapped), "")
+		}
+
+		// Show working indicator while agent is running
+		if m.agentRunning {
+			indicator := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#B88AFF")).
+				PaddingLeft(2).
+				Italic(true).
+				Render("thinking...")
+			parts = append(parts, indicator)
 		}
 		content = strings.Join(parts, "\n")
 	}

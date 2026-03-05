@@ -31,8 +31,8 @@ func TestFullFlowPasteAndConfigThreshold(t *testing.T) {
 	// --- Step 2: Send the pasted message ---
 	m = sendKey(m, tea.KeyEnter)
 
-	if len(m.messages) != 1 {
-		t.Fatalf("messages count = %d, want 1", len(m.messages))
+	if len(m.messages) != 2 {
+		t.Fatalf("messages count = %d, want 2", len(m.messages))
 	}
 	// Sent message should have expanded content, not the placeholder
 	if m.messages[0].content != longText {
@@ -130,7 +130,7 @@ func TestFullFlowConfigDiscardPreservesThreshold(t *testing.T) {
 // normal messages and paste messages, verifying the message feed integrity.
 func TestFullFlowMultiplePastesThenMessages(t *testing.T) {
 	m := initialModel()
-	m = resize(m, 80, 24)
+	m = resize(m, 80, 200)
 
 	// Send a normal message
 	m = typeString(m, "hello everyone")
@@ -151,20 +151,20 @@ func TestFullFlowMultiplePastesThenMessages(t *testing.T) {
 	m = sendKey(m, tea.KeyEnter)
 
 	// Verify all messages present and in order
-	if len(m.messages) != 4 {
-		t.Fatalf("messages count = %d, want 4", len(m.messages))
+	if len(m.messages) != 8 {
+		t.Fatalf("messages count = %d, want 8", len(m.messages))
 	}
 	if m.messages[0].content != "hello everyone" {
 		t.Errorf("messages[0] = %q, want %q", m.messages[0].content, "hello everyone")
 	}
-	if m.messages[1].content != paste1 {
-		t.Error("messages[1] should contain expanded paste #1")
+	if m.messages[2].content != paste1 {
+		t.Error("messages[2] should contain expanded paste #1")
 	}
-	if m.messages[2].content != "that was a big paste" {
-		t.Errorf("messages[2] = %q, want %q", m.messages[2].content, "that was a big paste")
+	if m.messages[4].content != "that was a big paste" {
+		t.Errorf("messages[4] = %q, want %q", m.messages[4].content, "that was a big paste")
 	}
-	if m.messages[3].content != paste2 {
-		t.Error("messages[3] should contain expanded paste #2")
+	if m.messages[6].content != paste2 {
+		t.Error("messages[6] should contain expanded paste #2")
 	}
 
 	// Viewport should show all expanded content
@@ -259,16 +259,18 @@ func TestFullFlowConfigSaveAndVerifyWithPaste(t *testing.T) {
 
 	// Verify messages
 	// messages[0] = "Config saved." (system)
-	// messages[1] = expanded paste (50 Q's)
-	// messages[2] = verbatim paste (49 R's)
-	if len(m.messages) != 3 {
-		t.Fatalf("messages count = %d, want 3", len(m.messages))
+	// messages[1] = expanded paste (50 Q's) (user)
+	// messages[2] = error (no API keys)
+	// messages[3] = verbatim paste (49 R's) (user)
+	// messages[4] = error (no API keys)
+	if len(m.messages) != 5 {
+		t.Fatalf("messages count = %d, want 5", len(m.messages))
 	}
 	if m.messages[1].content != exactText {
 		t.Error("message[1] should contain expanded paste content")
 	}
-	if m.messages[2].content != belowText {
-		t.Error("message[2] should contain verbatim paste content")
+	if m.messages[3].content != belowText {
+		t.Error("message[3] should contain verbatim paste content")
 	}
 }
 
@@ -320,8 +322,8 @@ func TestFullFlowPasteWithSurroundingText(t *testing.T) {
 	m = typeString(m, " done")
 	m = sendKey(m, tea.KeyEnter)
 
-	if len(m.messages) != 1 {
-		t.Fatalf("messages count = %d, want 1", len(m.messages))
+	if len(m.messages) != 2 {
+		t.Fatalf("messages count = %d, want 2", len(m.messages))
 	}
 
 	content := m.messages[0].content
@@ -490,8 +492,8 @@ func TestFullFlowEscDismissesAutocomplete(t *testing.T) {
 	m = typeString(m, "hello")
 	m = sendKey(m, tea.KeyEnter)
 
-	if len(m.messages) != 1 {
-		t.Fatalf("messages count = %d, want 1", len(m.messages))
+	if len(m.messages) != 2 {
+		t.Fatalf("messages count = %d, want 2", len(m.messages))
 	}
 	if m.messages[0].content != "hello" {
 		t.Errorf("message = %q, want hello", m.messages[0].content)

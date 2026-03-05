@@ -121,8 +121,8 @@ func TestEnterSendsMessage(t *testing.T) {
 	m = typeString(m, "hello world")
 	m = sendKey(m, tea.KeyEnter)
 
-	if len(m.messages) != 1 {
-		t.Fatalf("messages count = %d, want 1", len(m.messages))
+	if len(m.messages) != 2 {
+		t.Fatalf("messages count = %d, want 2", len(m.messages))
 	}
 	if m.messages[0].content != "hello world" {
 		t.Errorf("message = %q, want %q", m.messages[0].content, "hello world")
@@ -165,14 +165,14 @@ func TestMultipleMessages(t *testing.T) {
 	m = typeString(m, "third")
 	m = sendKey(m, tea.KeyEnter)
 
-	if len(m.messages) != 3 {
-		t.Fatalf("messages count = %d, want 3", len(m.messages))
+	if len(m.messages) != 6 {
+		t.Fatalf("messages count = %d, want 6", len(m.messages))
 	}
 	if m.messages[0].content != "first" {
 		t.Errorf("messages[0] = %q, want %q", m.messages[0].content, "first")
 	}
-	if m.messages[2].content != "third" {
-		t.Errorf("messages[2] = %q, want %q", m.messages[2].content, "third")
+	if m.messages[4].content != "third" {
+		t.Errorf("messages[4] = %q, want %q", m.messages[4].content, "third")
 	}
 }
 
@@ -335,8 +335,8 @@ func TestMessageTrimmed(t *testing.T) {
 	m = typeString(m, "  hello  ")
 	m = sendKey(m, tea.KeyEnter)
 
-	if len(m.messages) != 1 {
-		t.Fatalf("messages count = %d, want 1", len(m.messages))
+	if len(m.messages) != 2 {
+		t.Fatalf("messages count = %d, want 2", len(m.messages))
 	}
 	if m.messages[0].content != "hello" {
 		t.Errorf("message = %q, want %q (should be trimmed)", m.messages[0].content, "hello")
@@ -482,18 +482,18 @@ func TestPasteCounterIncrements(t *testing.T) {
 	if m.pasteCount != 3 {
 		t.Errorf("pasteCount = %d, want 3", m.pasteCount)
 	}
-	if len(m.messages) != 4 {
-		t.Fatalf("messages count = %d, want 4", len(m.messages))
+	if len(m.messages) != 8 {
+		t.Fatalf("messages count = %d, want 8", len(m.messages))
 	}
 	// Messages should contain expanded paste content
 	if m.messages[0].content != longText {
 		t.Error("messages[0] should contain expanded paste content")
 	}
-	if m.messages[2].content != "hello" {
-		t.Errorf("messages[2] = %q, want %q", m.messages[2].content, "hello")
+	if m.messages[4].content != "hello" {
+		t.Errorf("messages[4] = %q, want %q", m.messages[4].content, "hello")
 	}
-	if m.messages[3].content != longText {
-		t.Error("messages[3] should contain expanded paste content")
+	if m.messages[6].content != longText {
+		t.Error("messages[6] should contain expanded paste content")
 	}
 }
 
@@ -545,8 +545,8 @@ func TestPasteTypingContinuesAfterPaste(t *testing.T) {
 	m = typeString(m, " after")
 	m = sendKey(m, tea.KeyEnter)
 
-	if len(m.messages) != 1 {
-		t.Fatalf("messages count = %d, want 1", len(m.messages))
+	if len(m.messages) != 2 {
+		t.Fatalf("messages count = %d, want 2", len(m.messages))
 	}
 	content := m.messages[0].content
 	if !strings.HasPrefix(content, "before ") {
@@ -574,8 +574,8 @@ func TestPasteMultiplePastesInOneMessage(t *testing.T) {
 	m = paste(m, text2)
 	m = sendKey(m, tea.KeyEnter)
 
-	if len(m.messages) != 1 {
-		t.Fatalf("messages count = %d, want 1", len(m.messages))
+	if len(m.messages) != 2 {
+		t.Fatalf("messages count = %d, want 2", len(m.messages))
 	}
 	content := m.messages[0].content
 	// Both pastes should be expanded in the sent message
@@ -642,8 +642,8 @@ func TestSlashInNormalTextNotTreatedAsCommand(t *testing.T) {
 	if m.mode != modeChat {
 		t.Error("text with / in middle should stay in chat mode")
 	}
-	if len(m.messages) != 1 {
-		t.Fatalf("messages count = %d, want 1", len(m.messages))
+	if len(m.messages) != 2 {
+		t.Fatalf("messages count = %d, want 2", len(m.messages))
 	}
 	if m.messages[0].content != "use a/b path" {
 		t.Errorf("message = %q, want %q", m.messages[0].content, "use a/b path")
