@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"image/color"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -19,7 +20,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
-	"github.com/langdag/langdag/pkg/langdag"
+	"langdag.com/langdag"
 	"github.com/rivo/uniseg"
 )
 
@@ -93,7 +94,7 @@ type message struct {
 }
 
 // commands is the list of available slash commands.
-var commands = []string{"/branches", "/config", "/model", "/shell", "/worktrees"}
+var commands = []string{"/branches", "/clear", "/config", "/model", "/shell", "/worktrees"}
 
 // filterCommands returns commands matching the given prefix.
 func filterCommands(prefix string) []string {
@@ -158,6 +159,7 @@ type model struct {
 	agentRunning     bool   // true while the agent loop is executing
 	awaitingApproval bool   // true when waiting for user y/n on a tool call
 	approvalDesc     string // human-readable description of the pending approval
+	autocompleteIdx  int    // currently selected autocomplete item
 }
 
 // autocompleteMatches returns matching commands for the current textarea input,
@@ -789,10 +791,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			m.cleanup()
 			return m, tea.Quit
+		case "up":
+			if matches := m.autocompleteMatches(); len(matches) > 0 {
+				m.autocompleteIdx--
+				if m.autocompleteIdx < 0 {
+					m.autocompleteIdx = len(matches) - 1
+				}
+				return m, nil
+			}
+		case "down":
+			if matches := m.autocompleteMatches(); len(matches) > 0 {
+				m.autocompleteIdx++
+				if m.autocompleteIdx >= len(matches) {
+					m.autocompleteIdx = 0
+				}
+				return m, nil
+			}
 		case "tab":
 			if matches := m.autocompleteMatches(); len(matches) > 0 {
-				m.textarea.SetValue(matches[0])
+				idx := m.autocompleteIdx
+				if idx >= len(matches) {
+					idx = 0
+				}
+				m.textarea.SetValue(matches[idx])
 				m.textarea.CursorEnd()
+				m.autocompleteIdx = 0
 				m.recalcTextareaHeight()
 				if m.ready {
 					m.viewport.SetHeight(m.viewportHeight())
@@ -803,6 +826,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if strings.HasPrefix(m.textarea.Value(), "/") {
 				m.textarea.Reset()
 				m.textarea.SetHeight(minInputHeight)
+				m.autocompleteIdx = 0
 				if m.ready {
 					m.viewport.SetHeight(m.viewportHeight())
 				}
@@ -816,8 +840,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if val != "" {
 				if strings.HasPrefix(val, "/") {
 					if matches := filterCommands(val); len(matches) > 0 {
-						val = matches[0]
+						idx := m.autocompleteIdx
+						if idx >= len(matches) {
+							idx = 0
+						}
+						val = matches[idx]
 					}
+					m.autocompleteIdx = 0
 					return m.handleCommand(val)
 				}
 				content := expandPastes(val, m.pasteStore)
@@ -851,9 +880,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.textarea.SetHeight(maxInputHeight)
 
 	// Update textarea (may receive modified PasteMsg with placeholder)
+	prevVal := m.textarea.Value()
 	var taCmd tea.Cmd
 	m.textarea, taCmd = m.textarea.Update(taMsg)
 	cmds = append(cmds, taCmd)
+
+	// Reset autocomplete selection when input changes
+	if m.textarea.Value() != prevVal {
+		m.autocompleteIdx = 0
+	}
 
 	// Now set the correct height based on actual content
 	m.recalcTextareaHeight()
@@ -1413,6 +1448,17 @@ func (m model) handleCommand(input string) (tea.Model, tea.Cmd) {
 	switch cmd {
 	case "/branches":
 		return m.enterBranchMode()
+	case "/clear":
+		m.messages = nil
+		m.agentNodeID = ""
+		m.textarea.Reset()
+		m.textarea.SetHeight(minInputHeight)
+		if m.ready {
+			m.viewport.SetHeight(m.viewportHeight())
+			m.updateViewportContent()
+			m.viewport.GotoBottom()
+		}
+		return m, nil
 	case "/config":
 		return m.enterConfigMode()
 	case "/shell":
@@ -1811,9 +1857,13 @@ func (m model) renderAutocomplete() string {
 		PaddingLeft(1).
 		PaddingRight(1).
 		Width(m.width)
+	idx := m.autocompleteIdx
+	if idx >= len(matches) {
+		idx = 0
+	}
 	var lines []string
 	for i, cmd := range matches {
-		if i == 0 {
+		if i == idx {
 			lines = append(lines, highlightStyle.Render(cmd))
 		} else {
 			lines = append(lines, normalStyle.Render(cmd))
@@ -1892,6 +1942,7 @@ func (m model) View() tea.View {
 	}
 
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 
@@ -1934,6 +1985,10 @@ func (m model) viewModel() tea.View {
 }
 
 func main() {
+	// Silence the default logger so library log.Printf calls (e.g. langdag)
+	// don't corrupt the bubbletea TUI output.
+	log.SetOutput(io.Discard)
+
 	p := tea.NewProgram(initialModel())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

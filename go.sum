@@ -14,8 +14,8 @@ cloud.google.com/go/compute/metadata v0.5.0/go.mod h1:aHnloV2TPI38yx4s9+wAZhHykW
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/MakeNowJust/heredoc v1.0.0 h1:cXCdzVdstXyiTqTvfqk9SDHpKNjxuom+DOlyEeQ4pzQ=
 github.com/MakeNowJust/heredoc v1.0.0/go.mod h1:mG5amYoWBHf8vpLOuehzbGGw0EHxpZZ6lCpQ4fNJ8LE=
-github.com/aduermael/langdag v0.0.0-20260304235725-2944fbfe8f94 h1:rMxyFOhtK8nXo3CS3Urd2vblls1Xg61bgUbr01XTlxg=
-github.com/aduermael/langdag v0.0.0-20260304235725-2944fbfe8f94/go.mod h1:g+NmzZ8xBQaE6KKTzb5FKHuMKA19HVXOkPVZjEil1Sc=
+github.com/aduermael/langdag v0.1.1 h1:VHoPg7Kyy26DZxVgXsX/CHmuFV/d1GgdXJV+R+VqHpo=
+github.com/aduermael/langdag v0.1.1/go.mod h1:ssI+s82B1hMYfoo9+iQrt4MXcoyXYCYm9GVnnrdgWSU=
 github.com/anthropics/anthropic-sdk-go v1.20.0 h1:KE6gQiAT1aBHMh3Dmp1WgqnyZZLJNo2oX3ka004oDLE=
 github.com/anthropics/anthropic-sdk-go v1.20.0/go.mod h1:WTz31rIUHUHqai2UslPpw5CwXrQP3geYBioRV4WOLvE=
 github.com/atotto/clipboard v0.1.4 h1:EH0zSVneZPSuFR11BlR9YppQTVDbh5+16AmcJi4g1z4=

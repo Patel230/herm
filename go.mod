@@ -6,11 +6,11 @@ require (
 	charm.land/bubbles/v2 v2.0.0
 	charm.land/bubbletea/v2 v2.0.1
 	charm.land/lipgloss/v2 v2.0.0
-	github.com/langdag/langdag v0.0.0-00010101000000-000000000000
 	github.com/rivo/uniseg v0.4.7
+	langdag.com/langdag v0.1.0
 )
 
-replace github.com/langdag/langdag => github.com/aduermael/langdag v0.0.0-20260304235725-2944fbfe8f94
+replace langdag.com/langdag => github.com/aduermael/langdag v0.1.1
 
 require (
 	cloud.google.com/go/auth v0.7.2 // indirect

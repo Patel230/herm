@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/langdag/langdag/pkg/langdag"
-	"github.com/langdag/langdag/pkg/types"
+	"langdag.com/langdag"
+	"langdag.com/langdag/types"
 )
 
 // langdagStoragePath returns the path to the langdag SQLite database.
@@ -222,6 +222,7 @@ func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID st
 	opts := []langdag.PromptOption{
 		langdag.WithSystemPrompt(a.systemPrompt),
 		langdag.WithMaxTokens(8192),
+		langdag.WithTools(a.toolDefs),
 	}
 	if a.model != "" {
 		opts = append(opts, langdag.WithModel(a.model))
@@ -241,7 +242,7 @@ func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID st
 		return
 	}
 
-	// Process streaming response
+	// Process streaming response, collecting tool calls from content blocks.
 	var toolCalls []types.ContentBlock
 	for chunk := range result.Stream {
 		if chunk.Error != nil {
@@ -255,25 +256,16 @@ func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID st
 		if chunk.Content != "" {
 			a.emit(AgentEvent{Type: EventTextDelta, Text: chunk.Content})
 		}
+		if chunk.ContentBlock != nil && chunk.ContentBlock.Type == "tool_use" {
+			toolCalls = append(toolCalls, *chunk.ContentBlock)
+		}
 	}
 
-	// After streaming, get the full node to check for tool calls
 	nodeID := result.NodeID
 	if nodeID == "" {
-		// NodeID may come from the last stream chunk
 		a.emit(AgentEvent{Type: EventDone})
 		return
 	}
-
-	node, err := a.client.GetNode(ctx, nodeID)
-	if err != nil {
-		a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("get node: %w", err)})
-		a.emit(AgentEvent{Type: EventDone})
-		return
-	}
-
-	// Extract tool calls from the assistant response content blocks
-	toolCalls = extractToolCalls(node)
 
 	// Tool loop
 	for iteration := 0; iteration < maxToolIterations && len(toolCalls) > 0; iteration++ {
@@ -387,7 +379,8 @@ func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID st
 			break
 		}
 
-		// Stream the follow-up response
+		// Stream the follow-up response, collecting tool calls.
+		toolCalls = nil
 		for chunk := range result.Stream {
 			if chunk.Error != nil {
 				a.emit(AgentEvent{Type: EventError, Error: chunk.Error})
@@ -400,42 +393,16 @@ func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID st
 			if chunk.Content != "" {
 				a.emit(AgentEvent{Type: EventTextDelta, Text: chunk.Content})
 			}
+			if chunk.ContentBlock != nil && chunk.ContentBlock.Type == "tool_use" {
+				toolCalls = append(toolCalls, *chunk.ContentBlock)
+			}
 		}
 
 		nodeID = result.NodeID
 		if nodeID == "" {
 			break
 		}
-
-		node, err = a.client.GetNode(ctx, nodeID)
-		if err != nil {
-			a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("get node: %w", err)})
-			break
-		}
-
-		toolCalls = extractToolCalls(node)
 	}
 
 	a.emit(AgentEvent{Type: EventDone, NodeID: nodeID})
-}
-
-// extractToolCalls pulls tool_use content blocks from a node.
-func extractToolCalls(node *types.Node) []types.ContentBlock {
-	if node == nil || node.Content == "" {
-		return nil
-	}
-
-	// The node content may be a JSON array of content blocks or plain text.
-	var blocks []types.ContentBlock
-	if err := json.Unmarshal([]byte(node.Content), &blocks); err != nil {
-		return nil
-	}
-
-	var calls []types.ContentBlock
-	for _, b := range blocks {
-		if b.Type == "tool_use" {
-			calls = append(calls, b)
-		}
-	}
-	return calls
 }
