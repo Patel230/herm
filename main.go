@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"image/color"
 	"log"
@@ -1258,16 +1259,8 @@ func (m model) handleAgentEvent(event AgentEvent) (tea.Model, tea.Cmd) {
 		return m, listenForAgentEvent(m.agent.Events())
 
 	case EventToolCallStart:
-		// Show tool invocation summary
-		summary := fmt.Sprintf("▶ %s", event.ToolName)
-		if event.ToolInput != nil {
-			// Try to extract a short description from the input
-			input := string(event.ToolInput)
-			if len(input) > 80 {
-				input = input[:80] + "..."
-			}
-			summary += ": " + input
-		}
+		// Show tool invocation with a human-readable summary of the input
+		summary := toolCallSummary(event.ToolName, event.ToolInput)
 		m.messages = append(m.messages, message{content: summary, kind: msgToolCall})
 		if m.ready {
 			m.updateViewportContent()
@@ -1277,11 +1270,7 @@ func (m model) handleAgentEvent(event AgentEvent) (tea.Model, tea.Cmd) {
 
 	case EventToolResult:
 		// Show tool result (collapsed if long)
-		result := event.ToolResult
-		lines := strings.Split(result, "\n")
-		if len(lines) > 6 {
-			result = strings.Join(lines[:3], "\n") + "\n..." + fmt.Sprintf("\n(%d lines total)", len(lines))
-		}
+		result := collapseToolResult(event.ToolResult)
 		kind := msgToolResult
 		if event.IsError {
 			kind = msgError
@@ -1680,6 +1669,51 @@ func (m model) renderStatusBar() string {
 	barStyle := lipgloss.NewStyle().Width(m.width)
 
 	return barStyle.Render(bar)
+}
+
+// toolCallSummary returns a human-readable one-line summary of a tool invocation.
+func toolCallSummary(toolName string, input json.RawMessage) string {
+	switch toolName {
+	case "bash":
+		var in struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.Command != "" {
+			cmd := in.Command
+			if len(cmd) > 120 {
+				cmd = cmd[:120] + "..."
+			}
+			return fmt.Sprintf("▶ bash: %s", cmd)
+		}
+	case "git":
+		var in struct {
+			Subcommand string   `json:"subcommand"`
+			Args       []string `json:"args,omitempty"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.Subcommand != "" {
+			parts := append([]string{"git", in.Subcommand}, in.Args...)
+			cmd := strings.Join(parts, " ")
+			if len(cmd) > 120 {
+				cmd = cmd[:120] + "..."
+			}
+			return fmt.Sprintf("▶ %s", cmd)
+		}
+	}
+
+	// Fallback for unknown tools
+	return fmt.Sprintf("▶ %s", toolName)
+}
+
+// collapseToolResult truncates long tool output for display.
+func collapseToolResult(result string) string {
+	lines := strings.Split(result, "\n")
+	if len(lines) <= 10 {
+		return result
+	}
+	// Show first 4 and last 3 lines with a separator
+	head := strings.Join(lines[:4], "\n")
+	tail := strings.Join(lines[len(lines)-3:], "\n")
+	return fmt.Sprintf("%s\n  ... (%d lines omitted)\n%s", head, len(lines)-7, tail)
 }
 
 func (m model) renderAutocomplete() string {
