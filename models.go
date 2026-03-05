@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -17,14 +16,8 @@ const (
 	ProviderGemini    = "gemini"
 )
 
-// providerPrefixes maps OpenRouter ID prefixes to internal provider names.
-var providerPrefixes = map[string]string{
-	"anthropic/": ProviderAnthropic,
-	"openai/":    ProviderOpenAI,
-	"x-ai/":     ProviderGrok,
-}
-
 // ModelDef describes a model available for selection.
+// IDs are native API model identifiers (not OpenRouter format).
 type ModelDef struct {
 	Provider        string
 	ID              string
@@ -32,6 +25,44 @@ type ModelDef struct {
 	PromptPrice     float64 // USD per million input tokens
 	CompletionPrice float64 // USD per million output tokens
 	SWEScore        float64 // SWE-bench Verified score (0 = no data)
+}
+
+// builtinModels returns the hardcoded list of supported models with native API IDs and prices.
+func builtinModels() []ModelDef {
+	return []ModelDef{
+		// Anthropic
+		{ProviderAnthropic, "claude-opus-4-1-20250620", "Claude Opus 4.1", 15.0, 75.0, 0},
+		{ProviderAnthropic, "claude-opus-4-0-20250514", "Claude Opus 4", 15.0, 75.0, 0},
+		{ProviderAnthropic, "claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet", 6.0, 30.0, 0},
+		{ProviderAnthropic, "claude-opus-4-6-20250801", "Claude Opus 4.6", 5.0, 25.0, 0},
+		{ProviderAnthropic, "claude-opus-4-5-20250620", "Claude Opus 4.5", 5.0, 25.0, 0},
+		{ProviderAnthropic, "claude-sonnet-4-6-20250801", "Claude Sonnet 4.6", 3.0, 15.0, 0},
+		{ProviderAnthropic, "claude-sonnet-4-5-20250514", "Claude Sonnet 4.5", 3.0, 15.0, 0},
+		{ProviderAnthropic, "claude-sonnet-4-0-20250514", "Claude Sonnet 4", 3.0, 15.0, 0},
+		{ProviderAnthropic, "claude-3-7-sonnet-20250219", "Claude 3.7 Sonnet", 3.0, 15.0, 0},
+		{ProviderAnthropic, "claude-haiku-4-5-20250414", "Claude Haiku 4.5", 1.0, 5.0, 0},
+		{ProviderAnthropic, "claude-3-5-haiku-20241022", "Claude 3.5 Haiku", 0.80, 4.0, 0},
+		{ProviderAnthropic, "claude-3-haiku-20240307", "Claude 3 Haiku", 0.25, 1.25, 0},
+
+		// Grok (x.ai)
+		{ProviderGrok, "grok-4", "Grok 4", 3.0, 15.0, 0},
+		{ProviderGrok, "grok-3", "Grok 3", 3.0, 15.0, 0},
+		{ProviderGrok, "grok-3-beta", "Grok 3 Beta", 3.0, 15.0, 0},
+		{ProviderGrok, "grok-3-mini", "Grok 3 Mini", 0.30, 0.50, 0},
+		{ProviderGrok, "grok-3-mini-beta", "Grok 3 Mini Beta", 0.30, 0.50, 0},
+		{ProviderGrok, "grok-4-1-fast", "Grok 4.1 Fast", 0.20, 0.50, 0},
+		{ProviderGrok, "grok-4-fast", "Grok 4 Fast", 0.20, 0.50, 0},
+		{ProviderGrok, "grok-code-fast-1", "Grok Code Fast 1", 0.20, 1.50, 0},
+
+		// OpenAI
+		{ProviderOpenAI, "gpt-4o", "GPT-4o", 2.50, 10.0, 0},
+		{ProviderOpenAI, "gpt-4o-mini", "GPT-4o Mini", 0.15, 0.60, 0},
+		{ProviderOpenAI, "o3-mini", "o3-mini", 1.10, 4.40, 0},
+
+		// Gemini
+		{ProviderGemini, "gemini-2.5-pro", "Gemini 2.5 Pro", 1.25, 10.0, 0},
+		{ProviderGemini, "gemini-2.5-flash", "Gemini 2.5 Flash", 0.15, 0.60, 0},
+	}
 }
 
 // filterModelsByProviders returns models whose provider is in the given set.
@@ -55,108 +86,9 @@ func findModelByID(models []ModelDef, id string) *ModelDef {
 	return nil
 }
 
-// OpenRouter API types
-
-type openRouterResponse struct {
-	Data []openRouterModel `json:"data"`
-}
-
-type openRouterModel struct {
-	ID      string             `json:"id"`
-	Name    string             `json:"name"`
-	Pricing openRouterPricing  `json:"pricing"`
-}
-
-type openRouterPricing struct {
-	Prompt     string `json:"prompt"`
-	Completion string `json:"completion"`
-}
-
 // formatPrice formats a per-million-token price as "$X.XX".
 func formatPrice(price float64) string {
 	return fmt.Sprintf("$%.2f", price)
-}
-
-// parsePrice converts an OpenRouter price string (USD per token) to USD per million tokens.
-func parsePrice(s string) float64 {
-	v, err := strconv.ParseFloat(s, 64)
-	if err != nil {
-		return 0
-	}
-	return v * 1_000_000
-}
-
-// knownProviderNames lists display-name prefixes that OpenRouter prepends to
-// model names. These are stripped by cleanDisplayName to avoid duplicating the
-// PROVIDER column.
-var knownProviderNames = []string{
-	"Anthropic",
-	"OpenAI",
-	"xAI",
-	"X AI",
-}
-
-// cleanDisplayName strips a leading provider prefix (e.g. "Anthropic: ") from
-// an OpenRouter display name so it doesn't duplicate the PROVIDER column.
-func cleanDisplayName(name, provider string) string {
-	for _, prefix := range knownProviderNames {
-		// Match "Provider: rest" (colon-space separator)
-		if strings.HasPrefix(strings.ToLower(name), strings.ToLower(prefix)+": ") {
-			return name[len(prefix)+2:]
-		}
-	}
-	return name
-}
-
-// parseOpenRouterModels converts raw OpenRouter API models into ModelDefs,
-// filtering to only supported providers.
-func parseOpenRouterModels(data []openRouterModel) []ModelDef {
-	var result []ModelDef
-	for _, m := range data {
-		var provider string
-		for prefix, prov := range providerPrefixes {
-			if strings.HasPrefix(m.ID, prefix) {
-				provider = prov
-				break
-			}
-		}
-		if provider == "" {
-			continue
-		}
-		result = append(result, ModelDef{
-			Provider:        provider,
-			ID:              m.ID,
-			DisplayName:     cleanDisplayName(m.Name, provider),
-			PromptPrice:     parsePrice(m.Pricing.Prompt),
-			CompletionPrice: parsePrice(m.Pricing.Completion),
-		})
-	}
-	return result
-}
-
-// fetchModels fetches the model list from the OpenRouter API.
-func fetchModels() ([]ModelDef, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get("https://openrouter.ai/api/v1/models")
-	if err != nil {
-		return nil, fmt.Errorf("fetching models: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("OpenRouter API returned status %d", resp.StatusCode)
-	}
-
-	var body openRouterResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return nil, fmt.Errorf("decoding models response: %w", err)
-	}
-
-	models := parseOpenRouterModels(body.Data)
-	if len(models) == 0 {
-		return nil, fmt.Errorf("no supported models found")
-	}
-	return models, nil
 }
 
 // SWE-bench leaderboard types
@@ -209,20 +141,13 @@ func parseSWEScores(resp sweBenchResponse) map[string]float64 {
 }
 
 // matchSWEScores enriches models with SWE-bench scores by fuzzy-matching
-// OpenRouter model IDs against SWE-bench model tags.
+// model IDs against SWE-bench model tags.
 func matchSWEScores(models []ModelDef, scores map[string]float64) {
 	for i := range models {
-		// Extract suffix after provider prefix (e.g. "anthropic/" → "claude-opus-4-5-20251101")
-		suffix := models[i].ID
-		for prefix := range providerPrefixes {
-			if strings.HasPrefix(models[i].ID, prefix) {
-				suffix = strings.TrimPrefix(models[i].ID, prefix)
-				break
-			}
-		}
-		// Try exact match on suffix first, then check if either contains the other
+		id := models[i].ID
+		// Try exact match first, then check if either contains the other
 		for tag, score := range scores {
-			if tag == suffix || strings.Contains(tag, suffix) || strings.Contains(suffix, tag) {
+			if tag == id || strings.Contains(tag, id) || strings.Contains(id, tag) {
 				if score > models[i].SWEScore {
 					models[i].SWEScore = score
 				}

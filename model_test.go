@@ -1131,7 +1131,7 @@ func TestModelModeNavigationUpDown(t *testing.T) {
 	m := initialModel()
 	m.config.AnthropicAPIKey = "key"
 	m.config.OpenAIAPIKey = "key"
-	m.config.ActiveModel = "anthropic/claude-opus-4-20250514" // most expensive → cursor starts near top
+	m.config.ActiveModel = "claude-opus-4-0-20250514" // most expensive → cursor starts near top
 	m.models = testModels()
 	m.modelsLoaded = true
 	m = resize(m, 80, 24)
@@ -1204,7 +1204,7 @@ func TestModelModeCursorStartsOnActiveModel(t *testing.T) {
 	m.models = testModels()
 	m.modelsLoaded = true
 	// Set active model to second Anthropic model
-	m.config.ActiveModel = "anthropic/claude-haiku-4-20250414"
+	m.config.ActiveModel = "claude-haiku-4-5-20250414"
 	m = resize(m, 80, 24)
 
 	m = typeString(m, "/model")
@@ -1213,7 +1213,7 @@ func TestModelModeCursorStartsOnActiveModel(t *testing.T) {
 	// Find the index of the active model in the list
 	expectedIdx := -1
 	for i, md := range m.modelList.models {
-		if md.ID == "anthropic/claude-haiku-4-20250414" {
+		if md.ID == "claude-haiku-4-5-20250414" {
 			expectedIdx = i
 			break
 		}
@@ -1229,7 +1229,7 @@ func TestModelModeCursorStartsOnActiveModel(t *testing.T) {
 func TestModelModeActiveModelHighlighted(t *testing.T) {
 	m := initialModel()
 	m.config.AnthropicAPIKey = "key"
-	m.config.ActiveModel = "anthropic/claude-sonnet-4-20250514"
+	m.config.ActiveModel = "claude-sonnet-4-0-20250514"
 	m.models = testModels()
 	m.modelsLoaded = true
 	m = resize(m, 80, 24)
@@ -1237,8 +1237,8 @@ func TestModelModeActiveModelHighlighted(t *testing.T) {
 	m = typeString(m, "/model")
 	m = sendKey(m, tea.KeyEnter)
 
-	if m.modelList.activeModel != "anthropic/claude-sonnet-4-20250514" {
-		t.Errorf("activeModel = %q, want anthropic/claude-sonnet-4-20250514", m.modelList.activeModel)
+	if m.modelList.activeModel != "claude-sonnet-4-0-20250514" {
+		t.Errorf("activeModel = %q, want claude-sonnet-4-0-20250514", m.modelList.activeModel)
 	}
 
 	// The view should contain the active marker
@@ -1526,10 +1526,10 @@ func TestSlashModelWithFetchError(t *testing.T) {
 // testModelsWithSWE returns test models enriched with SWE-bench scores.
 func testModelsWithSWE() []ModelDef {
 	return []ModelDef{
-		{Provider: ProviderAnthropic, ID: "anthropic/claude-opus-4", DisplayName: "Claude Opus 4", PromptPrice: 15.0, CompletionPrice: 75.0},
-		{Provider: ProviderAnthropic, ID: "anthropic/claude-sonnet-4", DisplayName: "Claude Sonnet 4", PromptPrice: 3.0, CompletionPrice: 15.0},
-		{Provider: ProviderOpenAI, ID: "openai/gpt-4o", DisplayName: "GPT-4o", PromptPrice: 2.5, CompletionPrice: 10.0},
-		{Provider: ProviderGrok, ID: "x-ai/grok-3", DisplayName: "Grok 3", PromptPrice: 3.0, CompletionPrice: 15.0},
+		{Provider: ProviderAnthropic, ID: "claude-opus-4-0-20250514", DisplayName: "Claude Opus 4", PromptPrice: 15.0, CompletionPrice: 75.0},
+		{Provider: ProviderAnthropic, ID: "claude-sonnet-4-0-20250514", DisplayName: "Claude Sonnet 4", PromptPrice: 3.0, CompletionPrice: 15.0},
+		{Provider: ProviderOpenAI, ID: "gpt-4o", DisplayName: "GPT-4o", PromptPrice: 2.5, CompletionPrice: 10.0},
+		{Provider: ProviderGrok, ID: "grok-3", DisplayName: "Grok 3", PromptPrice: 3.0, CompletionPrice: 15.0},
 	}
 }
 

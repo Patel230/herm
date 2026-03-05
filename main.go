@@ -422,10 +422,9 @@ func fetchStatusCmd(worktreePath string) tea.Msg {
 	return statusInfoMsg{info: info}
 }
 
-// fetchModelsCmd returns a tea.Cmd that fetches models from OpenRouter.
+// fetchModelsCmd returns the hardcoded model list.
 func fetchModelsCmd() tea.Msg {
-	models, err := fetchModels()
-	return modelsMsg{models: models, err: err}
+	return modelsMsg{models: builtinModels()}
 }
 
 // fetchSWEScoresCmd returns a tea.Cmd that fetches SWE-bench scores.
@@ -1259,14 +1258,14 @@ func (m model) startAgent(userMessage string) (tea.Model, tea.Cmd) {
 	}
 
 	// Resolve model and determine its provider
-	openRouterID := ""
+	modelID := ""
 	if m.modelsLoaded {
-		openRouterID = m.config.resolveActiveModel(m.models)
+		modelID = m.config.resolveActiveModel(m.models)
 	}
 
 	// Look up the model definition to get the provider
 	var modelProvider string
-	if modelDef := findModelByID(m.models, openRouterID); modelDef != nil {
+	if modelDef := findModelByID(m.models, modelID); modelDef != nil {
 		modelProvider = modelDef.Provider
 	}
 
@@ -1292,16 +1291,14 @@ func (m model) startAgent(userMessage string) (tea.Model, tea.Cmd) {
 		m.langdagProvider = modelProvider
 	}
 
-	// Strip the OpenRouter prefix to get the native model ID
-	nativeModel := nativeModelID(openRouterID)
-
 	// Build system prompt
 	workDir := "/workspace"
 	systemPrompt := buildSystemPrompt(tools, workDir)
 
 	// Create a fresh agent for each turn (the agent loop is stateless between turns;
 	// conversation continuity is handled by parentNodeID via langdag).
-	agent := NewAgent(m.langdagClient, tools, systemPrompt, nativeModel)
+	// Model IDs are already native API format (e.g. "claude-sonnet-4-6-20250801").
+	agent := NewAgent(m.langdagClient, tools, systemPrompt, modelID)
 	m.agent = agent
 	m.agentRunning = true
 

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 
 	"github.com/langdag/langdag/pkg/langdag"
@@ -71,18 +70,6 @@ func newLangdagClientForProvider(cfg Config, provider string) (*langdag.Client, 
 	}
 
 	return langdag.New(langdagCfg)
-}
-
-// nativeModelID strips the OpenRouter provider prefix from a model ID,
-// returning just the model name that the native API expects.
-// e.g. "anthropic/claude-sonnet-4.6" → "claude-sonnet-4.6"
-func nativeModelID(openRouterID string) string {
-	for prefix := range providerPrefixes {
-		if strings.HasPrefix(openRouterID, prefix) {
-			return strings.TrimPrefix(openRouterID, prefix)
-		}
-	}
-	return openRouterID
 }
 
 // maxToolIterations caps the agent loop to prevent runaway tool calls.

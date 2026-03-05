@@ -1,21 +1,20 @@
 package main
 
 import (
-	"math"
 	"testing"
 )
 
-// testModels returns a known model list for testing (OpenRouter-format IDs).
+// testModels returns a known model list for testing (native API IDs).
 func testModels() []ModelDef {
 	return []ModelDef{
-		{Provider: ProviderAnthropic, ID: "anthropic/claude-sonnet-4-20250514", DisplayName: "Claude Sonnet 4", PromptPrice: 3.0, CompletionPrice: 15.0},
-		{Provider: ProviderAnthropic, ID: "anthropic/claude-haiku-4-20250414", DisplayName: "Claude Haiku 4", PromptPrice: 0.8, CompletionPrice: 4.0},
-		{Provider: ProviderAnthropic, ID: "anthropic/claude-opus-4-20250514", DisplayName: "Claude Opus 4", PromptPrice: 15.0, CompletionPrice: 75.0},
-		{Provider: ProviderGrok, ID: "x-ai/grok-3", DisplayName: "Grok 3", PromptPrice: 3.0, CompletionPrice: 15.0},
-		{Provider: ProviderGrok, ID: "x-ai/grok-3-mini", DisplayName: "Grok 3 Mini", PromptPrice: 0.3, CompletionPrice: 0.5},
-		{Provider: ProviderOpenAI, ID: "openai/gpt-4o", DisplayName: "GPT-4o", PromptPrice: 2.5, CompletionPrice: 10.0},
-		{Provider: ProviderOpenAI, ID: "openai/gpt-4o-mini", DisplayName: "GPT-4o Mini", PromptPrice: 0.15, CompletionPrice: 0.6},
-		{Provider: ProviderOpenAI, ID: "openai/o3-mini", DisplayName: "o3-mini", PromptPrice: 1.1, CompletionPrice: 4.4},
+		{Provider: ProviderAnthropic, ID: "claude-sonnet-4-0-20250514", DisplayName: "Claude Sonnet 4", PromptPrice: 3.0, CompletionPrice: 15.0},
+		{Provider: ProviderAnthropic, ID: "claude-haiku-4-5-20250414", DisplayName: "Claude Haiku 4.5", PromptPrice: 0.8, CompletionPrice: 4.0},
+		{Provider: ProviderAnthropic, ID: "claude-opus-4-0-20250514", DisplayName: "Claude Opus 4", PromptPrice: 15.0, CompletionPrice: 75.0},
+		{Provider: ProviderGrok, ID: "grok-3", DisplayName: "Grok 3", PromptPrice: 3.0, CompletionPrice: 15.0},
+		{Provider: ProviderGrok, ID: "grok-3-mini", DisplayName: "Grok 3 Mini", PromptPrice: 0.3, CompletionPrice: 0.5},
+		{Provider: ProviderOpenAI, ID: "gpt-4o", DisplayName: "GPT-4o", PromptPrice: 2.5, CompletionPrice: 10.0},
+		{Provider: ProviderOpenAI, ID: "gpt-4o-mini", DisplayName: "GPT-4o Mini", PromptPrice: 0.15, CompletionPrice: 0.6},
+		{Provider: ProviderOpenAI, ID: "o3-mini", DisplayName: "o3-mini", PromptPrice: 1.1, CompletionPrice: 4.4},
 	}
 }
 
@@ -55,9 +54,9 @@ func TestFilterModelsByProvidersEmpty(t *testing.T) {
 }
 
 func TestFindModelByIDFound(t *testing.T) {
-	m := findModelByID(testModels(), "openai/gpt-4o")
+	m := findModelByID(testModels(), "gpt-4o")
 	if m == nil {
-		t.Fatal("expected to find openai/gpt-4o")
+		t.Fatal("expected to find gpt-4o")
 	}
 	if m.Provider != ProviderOpenAI {
 		t.Errorf("provider = %q, want openai", m.Provider)
@@ -123,22 +122,22 @@ func TestAvailableModelsFilters(t *testing.T) {
 func TestResolveActiveModelValid(t *testing.T) {
 	cfg := Config{
 		AnthropicAPIKey: "key",
-		ActiveModel:     "anthropic/claude-sonnet-4-20250514",
+		ActiveModel:     "claude-sonnet-4-0-20250514",
 	}
 	resolved := cfg.resolveActiveModel(testModels())
-	if resolved != "anthropic/claude-sonnet-4-20250514" {
-		t.Errorf("resolveActiveModel = %q, want anthropic/claude-sonnet-4-20250514", resolved)
+	if resolved != "claude-sonnet-4-0-20250514" {
+		t.Errorf("resolveActiveModel = %q, want claude-sonnet-4-0-20250514", resolved)
 	}
 }
 
 func TestResolveActiveModelMissingKeyFallback(t *testing.T) {
 	cfg := Config{
 		GrokAPIKey:  "key",
-		ActiveModel: "anthropic/claude-sonnet-4-20250514",
+		ActiveModel: "claude-sonnet-4-0-20250514",
 	}
 	models := testModels()
 	resolved := cfg.resolveActiveModel(models)
-	if resolved == "anthropic/claude-sonnet-4-20250514" {
+	if resolved == "claude-sonnet-4-0-20250514" {
 		t.Error("should not resolve to a model whose provider has no key")
 	}
 	if resolved == "" {
@@ -174,99 +173,6 @@ func TestResolveActiveModelInvalidID(t *testing.T) {
 	}
 }
 
-// --- parsePrice tests ---
-
-func TestParsePriceNormal(t *testing.T) {
-	// $3 per million tokens: "0.000003" per token * 1M = 3.0
-	got := parsePrice("0.000003")
-	if math.Abs(got-3.0) > 0.001 {
-		t.Errorf("parsePrice(0.000003) = %f, want 3.0", got)
-	}
-}
-
-func TestParsePriceZero(t *testing.T) {
-	got := parsePrice("0")
-	if got != 0 {
-		t.Errorf("parsePrice(0) = %f, want 0", got)
-	}
-}
-
-func TestParsePriceInvalid(t *testing.T) {
-	got := parsePrice("not-a-number")
-	if got != 0 {
-		t.Errorf("parsePrice(not-a-number) = %f, want 0", got)
-	}
-}
-
-func TestParsePriceEmpty(t *testing.T) {
-	got := parsePrice("")
-	if got != 0 {
-		t.Errorf("parsePrice(\"\") = %f, want 0", got)
-	}
-}
-
-// --- parseOpenRouterModels tests ---
-
-func TestParseOpenRouterModelsFiltersProviders(t *testing.T) {
-	data := []openRouterModel{
-		{ID: "anthropic/claude-sonnet-4", Name: "Claude Sonnet 4", Pricing: openRouterPricing{Prompt: "0.000003", Completion: "0.000015"}},
-		{ID: "openai/gpt-4o", Name: "GPT-4o", Pricing: openRouterPricing{Prompt: "0.0000025", Completion: "0.00001"}},
-		{ID: "x-ai/grok-3", Name: "Grok 3", Pricing: openRouterPricing{Prompt: "0.000003", Completion: "0.000015"}},
-		{ID: "google/gemini-pro", Name: "Gemini Pro", Pricing: openRouterPricing{Prompt: "0.000001", Completion: "0.000002"}},
-		{ID: "meta-llama/llama-3", Name: "Llama 3", Pricing: openRouterPricing{Prompt: "0.000001", Completion: "0.000001"}},
-	}
-
-	models := parseOpenRouterModels(data)
-
-	if len(models) != 3 {
-		t.Fatalf("expected 3 models (anthropic, openai, x-ai), got %d", len(models))
-	}
-
-	providers := map[string]bool{}
-	for _, m := range models {
-		providers[m.Provider] = true
-	}
-	if !providers[ProviderAnthropic] || !providers[ProviderOpenAI] || !providers[ProviderGrok] {
-		t.Errorf("expected all 3 supported providers, got %v", providers)
-	}
-}
-
-func TestParseOpenRouterModelsPricing(t *testing.T) {
-	data := []openRouterModel{
-		{ID: "anthropic/claude-sonnet-4", Name: "Claude Sonnet 4", Pricing: openRouterPricing{Prompt: "0.000003", Completion: "0.000015"}},
-	}
-
-	models := parseOpenRouterModels(data)
-	if len(models) != 1 {
-		t.Fatalf("expected 1 model, got %d", len(models))
-	}
-
-	m := models[0]
-	if math.Abs(m.PromptPrice-3.0) > 0.001 {
-		t.Errorf("PromptPrice = %f, want 3.0", m.PromptPrice)
-	}
-	if math.Abs(m.CompletionPrice-15.0) > 0.001 {
-		t.Errorf("CompletionPrice = %f, want 15.0", m.CompletionPrice)
-	}
-}
-
-func TestParseOpenRouterModelsEmpty(t *testing.T) {
-	models := parseOpenRouterModels(nil)
-	if len(models) != 0 {
-		t.Errorf("expected 0 models for nil input, got %d", len(models))
-	}
-}
-
-func TestParseOpenRouterModelsUnknownPrefixOnly(t *testing.T) {
-	data := []openRouterModel{
-		{ID: "google/gemini-pro", Name: "Gemini Pro", Pricing: openRouterPricing{Prompt: "0.000001", Completion: "0.000002"}},
-	}
-	models := parseOpenRouterModels(data)
-	if len(models) != 0 {
-		t.Errorf("expected 0 models for unsupported provider, got %d", len(models))
-	}
-}
-
 // --- formatPrice tests ---
 
 func TestFormatPriceWhole(t *testing.T) {
@@ -287,6 +193,45 @@ func TestFormatPriceZero(t *testing.T) {
 	got := formatPrice(0)
 	if got != "$0.00" {
 		t.Errorf("formatPrice(0) = %q, want $0.00", got)
+	}
+}
+
+// --- builtinModels tests ---
+
+func TestBuiltinModelsNotEmpty(t *testing.T) {
+	models := builtinModels()
+	if len(models) == 0 {
+		t.Error("builtinModels should return at least one model")
+	}
+}
+
+func TestBuiltinModelsHaveRequiredFields(t *testing.T) {
+	for _, m := range builtinModels() {
+		if m.Provider == "" {
+			t.Errorf("model %q has empty provider", m.ID)
+		}
+		if m.ID == "" {
+			t.Errorf("model %q has empty ID", m.DisplayName)
+		}
+		if m.DisplayName == "" {
+			t.Errorf("model %q has empty display name", m.ID)
+		}
+		if m.PromptPrice <= 0 {
+			t.Errorf("model %q has non-positive prompt price", m.ID)
+		}
+		if m.CompletionPrice <= 0 {
+			t.Errorf("model %q has non-positive completion price", m.ID)
+		}
+	}
+}
+
+func TestBuiltinModelsHaveMultipleProviders(t *testing.T) {
+	providers := make(map[string]bool)
+	for _, m := range builtinModels() {
+		providers[m.Provider] = true
+	}
+	if len(providers) < 2 {
+		t.Errorf("expected at least 2 providers in builtin models, got %d", len(providers))
 	}
 }
 
@@ -397,14 +342,14 @@ func TestParseSWEScoresNoModelTag(t *testing.T) {
 
 // --- matchSWEScores tests ---
 
-func TestMatchSWEScoresExactSuffix(t *testing.T) {
+func TestMatchSWEScoresExactMatch(t *testing.T) {
 	models := []ModelDef{
-		{Provider: ProviderAnthropic, ID: "anthropic/claude-opus-4-5-20251101"},
-		{Provider: ProviderOpenAI, ID: "openai/gpt-4o-2024-11-20"},
+		{Provider: ProviderAnthropic, ID: "claude-opus-4-5-20250620"},
+		{Provider: ProviderOpenAI, ID: "gpt-4o"},
 	}
 	scores := map[string]float64{
-		"claude-opus-4-5-20251101": 79.2,
-		"gpt-4o-2024-11-20":       55.0,
+		"claude-opus-4-5-20250620": 79.2,
+		"gpt-4o":                   55.0,
 	}
 
 	matchSWEScores(models, scores)
@@ -419,7 +364,7 @@ func TestMatchSWEScoresExactSuffix(t *testing.T) {
 
 func TestMatchSWEScoresSubstringMatch(t *testing.T) {
 	models := []ModelDef{
-		{Provider: ProviderOpenAI, ID: "openai/o3-mini"},
+		{Provider: ProviderOpenAI, ID: "o3-mini"},
 	}
 	scores := map[string]float64{
 		"o3-mini-2025-01-31": 49.3,
@@ -434,7 +379,7 @@ func TestMatchSWEScoresSubstringMatch(t *testing.T) {
 
 func TestMatchSWEScoresNoMatch(t *testing.T) {
 	models := []ModelDef{
-		{Provider: ProviderGrok, ID: "x-ai/grok-3"},
+		{Provider: ProviderGrok, ID: "grok-3"},
 	}
 	scores := map[string]float64{
 		"claude-opus-4-5": 79.2,
@@ -449,41 +394,17 @@ func TestMatchSWEScoresNoMatch(t *testing.T) {
 
 func TestMatchSWEScoresTakesBestScore(t *testing.T) {
 	models := []ModelDef{
-		{Provider: ProviderAnthropic, ID: "anthropic/claude-sonnet-4"},
+		{Provider: ProviderAnthropic, ID: "claude-sonnet-4-0-20250514"},
 	}
 	scores := map[string]float64{
+		"claude-sonnet-4-0-20250514": 65.0,
 		"claude-sonnet-4":            60.0,
-		"claude-sonnet-4-20250514":   65.0,
 	}
 
 	matchSWEScores(models, scores)
 
 	if models[0].SWEScore != 65.0 {
 		t.Errorf("SWEScore = %f, want 65.0 (best match)", models[0].SWEScore)
-	}
-}
-
-// --- cleanDisplayName tests ---
-
-func TestCleanDisplayName(t *testing.T) {
-	tests := []struct {
-		name     string
-		provider string
-		want     string
-	}{
-		{"Anthropic: Claude Opus 4", ProviderAnthropic, "Claude Opus 4"},
-		{"OpenAI: GPT-4o", ProviderOpenAI, "GPT-4o"},
-		{"xAI: Grok 3", ProviderGrok, "Grok 3"},
-		{"X AI: Grok 3 Mini", ProviderGrok, "Grok 3 Mini"},
-		{"GPT-4o", ProviderOpenAI, "GPT-4o"},           // no prefix
-		{"Claude Sonnet 4", ProviderAnthropic, "Claude Sonnet 4"}, // no prefix
-		{"anthropic: lower case", ProviderAnthropic, "lower case"}, // case-insensitive
-	}
-	for _, tt := range tests {
-		got := cleanDisplayName(tt.name, tt.provider)
-		if got != tt.want {
-			t.Errorf("cleanDisplayName(%q, %q) = %q, want %q", tt.name, tt.provider, got, tt.want)
-		}
 	}
 }
 
