@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	tea "charm.land/bubbletea/v2"
@@ -76,21 +77,23 @@ const (
 	modeBranches
 )
 
-type msgKind int
+type chatMsgKind int
 
 const (
-	msgUser      msgKind = iota // normal user message
-	msgError                    // error feedback (e.g. unknown command)
-	msgSuccess                  // success feedback (e.g. config saved)
-	msgInfo                     // informational feedback (e.g. config discarded)
-	msgAssistant                // LLM assistant response (streaming)
-	msgToolCall                 // tool invocation summary
-	msgToolResult               // tool execution result
+	msgUser chatMsgKind = iota
+	msgAssistant
+	msgToolCall
+	msgToolResult
+	msgInfo
+	msgSuccess
+	msgError
 )
 
-type message struct {
-	content string
-	kind    msgKind
+type chatMessage struct {
+	kind      chatMsgKind
+	content   string
+	isError   bool // for tool results
+	leadBlank bool // blank line before this message
 }
 
 // commands is the list of available slash commands.
@@ -129,11 +132,10 @@ func expandPastes(s string, store map[int]string) string {
 
 type model struct {
 	textarea     textarea.Model
-	viewport     viewport.Model
 	width        int
 	height       int
-	messages     []message
-	ready        bool
+	ready        bool // true after first WindowSizeMsg
+	messages     []chatMessage
 	config       Config
 	pasteCount   int
 	pasteStore   map[int]string // paste ID → actual content
@@ -160,6 +162,11 @@ type model struct {
 	awaitingApproval bool   // true when waiting for user y/n on a tool call
 	approvalDesc     string // human-readable description of the pending approval
 	autocompleteIdx  int    // currently selected autocomplete item
+	streamingText    string // accumulated text from EventTextDelta (trailing incomplete line)
+	pendingToolCall  string // tool call summary waiting for result
+	needsTextSep     bool   // true when next assistant text output needs a blank line before it
+	viewport         viewport.Model
+	userScrolled     bool   // true when user has scrolled up from bottom
 }
 
 // autocompleteMatches returns matching commands for the current textarea input,
@@ -207,12 +214,158 @@ func initialModel() model {
 		log.Printf("warning: loading config: %v (using defaults)", err)
 	}
 
+	vp := viewport.New()
+	vp.MouseWheelEnabled = false
+	vp.FillHeight = true
+	vp.KeyMap = viewport.KeyMap{} // disable default keys — they conflict with textarea
+
 	return model{
 		textarea: ta,
-		messages: []message{},
+		viewport: vp,
 		config:   cfg,
 	}
 }
+
+// --- Styling helpers ---
+
+func styledUserMsg(content string, width int) string {
+	style := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#E0E0E0"))
+	if width > 0 {
+		style = style.Width(width)
+	}
+	return style.Render("❯ " + content)
+}
+
+func styledAssistantText(content string, width int) string {
+	style := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#B88AFF"))
+	if width > 0 {
+		style = style.Width(width)
+	}
+	return style.Render(content)
+}
+
+func styledToolCall(summary string, width int) string {
+	style := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#666666")).
+		Italic(true)
+	if width > 0 {
+		style = style.Width(width)
+	}
+	return style.Render(summary)
+}
+
+func styledToolResult(result string, isError bool, width int) string {
+	if isError {
+		return styledError(result, width)
+	}
+	style := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#555555"))
+	if width > 0 {
+		style = style.Width(width)
+	}
+	return style.Render(result)
+}
+
+func styledError(msg string, width int) string {
+	style := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FF6B6B")).
+		Italic(true)
+	if width > 0 {
+		style = style.Width(width)
+	}
+	return style.Render(msg)
+}
+
+func styledSuccess(msg string, width int) string {
+	style := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#6FE7B8")).
+		Italic(true)
+	if width > 0 {
+		style = style.Width(width)
+	}
+	return style.Render(msg)
+}
+
+func styledInfo(msg string, width int) string {
+	style := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#8B7BA8")).
+		Italic(true)
+	if width > 0 {
+		style = style.Width(width)
+	}
+	return style.Render(msg)
+}
+
+// renderMessages renders all stored chat messages with current width.
+func (m model) renderMessages() string {
+	if len(m.messages) == 0 {
+		return ""
+	}
+	var parts []string
+	for _, msg := range m.messages {
+		if msg.leadBlank {
+			parts = append(parts, "")
+		}
+		var rendered string
+		switch msg.kind {
+		case msgUser:
+			rendered = styledUserMsg(msg.content, m.width)
+		case msgAssistant:
+			rendered = styledAssistantText(msg.content, m.width)
+		case msgToolCall:
+			rendered = styledToolCall(msg.content, m.width)
+		case msgToolResult:
+			rendered = styledToolResult(msg.content, msg.isError, m.width)
+		case msgInfo:
+			rendered = styledInfo(msg.content, m.width)
+		case msgSuccess:
+			rendered = styledSuccess(msg.content, m.width)
+		case msgError:
+			rendered = styledError(msg.content, m.width)
+		}
+		parts = append(parts, rendered)
+	}
+	return strings.Join(parts, "\n")
+}
+
+// renderStreamingText renders the trailing incomplete line with assistant styling.
+func (m model) renderStreamingText() string {
+	if m.streamingText == "" {
+		return ""
+	}
+	return styledAssistantText(m.streamingText, m.width)
+}
+
+// debugLog writes a timestamped event entry to ~/.cpsl-debug.log when CPSL_DEBUG is set.
+var debugEnabled = os.Getenv("CPSL_DEBUG") != ""
+
+func debugLog(format string, args ...any) {
+	if !debugEnabled {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(home, ".cpsl-debug.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	ts := time.Now().Format("2006-01-02T15:04:05.000")
+	fmt.Fprintf(f, "[%s] %s\n", ts, fmt.Sprintf(format, args...))
+}
+
+func truncateForLog(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
+}
+
+// --- Message types ---
 
 // modelsMsg carries the result of the async model fetch.
 type modelsMsg struct {
@@ -437,7 +590,10 @@ func fetchSWEScoresCmd() tea.Msg {
 
 func (m model) Init() tea.Cmd {
 	cfg := m.config
-	return tea.Batch(textarea.Blink, fetchModelsCmd, fetchSWEScoresCmd, func() tea.Msg {
+	// Clear visible screen + scrollback buffer so alt screen starts completely fresh.
+	// \033[2J = clear screen, \033[3J = clear scrollback, \033[H = cursor home
+	clearAll := tea.Raw("\033[2J\033[3J\033[H")
+	return tea.Batch(clearAll, textarea.Blink, fetchModelsCmd, fetchSWEScoresCmd, func() tea.Msg {
 		return resolveWorkspaceCmd(cfg)
 	}, func() tea.Msg {
 		client, err := newLangdagClient(cfg)
@@ -524,6 +680,16 @@ func (m model) displayLineCount() int {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	result, cmd := m.update(msg)
+	// Refresh viewport content after every update so View() stays read-only.
+	if mdl, ok := result.(model); ok && mdl.mode == modeChat && mdl.ready {
+		mdl.updateViewportContent()
+		return mdl, cmd
+	}
+	return result, cmd
+}
+
+func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle async model fetch result regardless of mode
 	if msg, ok := msg.(modelsMsg); ok {
 		m.modelsLoaded = true
@@ -568,26 +734,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle async status bar result regardless of mode
 	if msg, ok := msg.(statusInfoMsg); ok {
 		m.status = msg.info
-		if m.ready {
-			m.viewport.SetHeight(m.viewportHeight())
-			m.updateViewportContent()
-		}
 		return m, nil
 	}
 
 	// Handle async worktree list result regardless of mode
 	if msg, ok := msg.(worktreeListMsg); ok {
 		if msg.err != nil {
-			m.messages = append(m.messages, message{
-				content: fmt.Sprintf("Error listing worktrees: %v", msg.err),
-				kind:    msgError,
-			})
 			m.mode = modeChat
-			if m.ready {
-				m.viewport.SetHeight(m.viewportHeight())
-				m.updateViewportContent()
-				m.viewport.GotoBottom()
-			}
+			m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error listing worktrees: %v", msg.err)})
 			return m, m.textarea.Focus()
 		}
 		m.worktreeListC = newWorktreeList(msg.items, m.worktreePath, m.width, m.height)
@@ -597,16 +751,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle async branch list result regardless of mode
 	if msg, ok := msg.(branchListMsg); ok {
 		if msg.err != nil {
-			m.messages = append(m.messages, message{
-				content: fmt.Sprintf("Error listing branches: %v", msg.err),
-				kind:    msgError,
-			})
 			m.mode = modeChat
-			if m.ready {
-				m.viewport.SetHeight(m.viewportHeight())
-				m.updateViewportContent()
-				m.viewport.GotoBottom()
-			}
+			m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error listing branches: %v", msg.err)})
 			return m, m.textarea.Focus()
 		}
 		m.branchListC = newBranchList(msg.items, msg.currentBranch, m.width, m.height)
@@ -615,23 +761,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Handle branch checkout result regardless of mode
 	if msg, ok := msg.(branchCheckoutMsg); ok {
-		if msg.err != nil {
-			m.messages = append(m.messages, message{
-				content: fmt.Sprintf("Checkout failed: %v", msg.err),
-				kind:    msgError,
-			})
-		} else {
-			m.messages = append(m.messages, message{
-				content: fmt.Sprintf("Switched to branch '%s'", msg.branch),
-				kind:    msgSuccess,
-			})
-			m.status.Branch = msg.branch
-		}
 		m.mode = modeChat
-		if m.ready {
-			m.viewport.SetHeight(m.viewportHeight())
-			m.updateViewportContent()
-			m.viewport.GotoBottom()
+		if msg.err != nil {
+			m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Checkout failed: %v", msg.err)})
+		} else {
+			m.status.Branch = msg.branch
+			m.messages = append(m.messages, chatMessage{kind: msgSuccess, content: fmt.Sprintf("Switched to branch '%s'", msg.branch)})
 		}
 		return m, m.textarea.Focus()
 	}
@@ -662,19 +797,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle interactive shell exit
 	if msg, ok := msg.(shellExitMsg); ok {
 		if msg.err != nil {
-			m.messages = append(m.messages, message{
-				content: fmt.Sprintf("Shell error: %v", msg.err),
-				kind:    msgError,
-			})
+			m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Shell error: %v", msg.err)})
 		} else {
-			m.messages = append(m.messages, message{
-				content: "Shell session ended.",
-				kind:    msgInfo,
-			})
-		}
-		if m.ready {
-			m.updateViewportContent()
-			m.viewport.GotoBottom()
+			m.messages = append(m.messages, chatMessage{kind: msgInfo, content: "Shell session ended."})
 		}
 		return m, nil
 	}
@@ -705,31 +830,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "y", "Y":
 				m.awaitingApproval = false
-				m.messages = append(m.messages, message{
-					content: "✓ Approved",
-					kind:    msgSuccess,
-				})
 				if m.agent != nil {
 					m.agent.Approve(ApprovalResponse{Approved: true})
 				}
-				if m.ready {
-					m.updateViewportContent()
-					m.viewport.GotoBottom()
-				}
+				m.messages = append(m.messages, chatMessage{kind: msgSuccess, content: "Approved"})
 				return m, listenForAgentEvent(m.agent.Events())
 			case "n", "N":
 				m.awaitingApproval = false
-				m.messages = append(m.messages, message{
-					content: "✗ Denied",
-					kind:    msgError,
-				})
 				if m.agent != nil {
 					m.agent.Approve(ApprovalResponse{Approved: false})
 				}
-				if m.ready {
-					m.updateViewportContent()
-					m.viewport.GotoBottom()
-				}
+				m.messages = append(m.messages, chatMessage{kind: msgError, content: "Denied"})
 				return m, listenForAgentEvent(m.agent.Events())
 			case "ctrl+c":
 				m.cleanup()
@@ -755,25 +866,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.textarea.SetWidth(inputAreaWidth)
 
 		if !m.ready {
-			m.viewport = viewport.New(
-				viewport.WithWidth(m.width),
-				viewport.WithHeight(m.viewportHeight()),
-			)
-			m.viewport.KeyMap.Up.SetEnabled(false)
-			m.viewport.KeyMap.Down.SetEnabled(false)
-			m.viewport.KeyMap.Left.SetEnabled(false)
-			m.viewport.KeyMap.Right.SetEnabled(false)
-			m.viewport.KeyMap.PageUp.SetEnabled(false)
-			m.viewport.KeyMap.PageDown.SetEnabled(false)
-			m.viewport.KeyMap.HalfPageUp.SetEnabled(false)
-			m.viewport.KeyMap.HalfPageDown.SetEnabled(false)
 			m.ready = true
-		} else {
-			m.viewport.SetWidth(m.width)
-			m.viewport.SetHeight(m.viewportHeight())
 		}
 		m.recalcTextareaHeight()
-		m.updateViewportContent()
+		cmds = append(cmds, tea.Raw("\033[2J\033[3J\033[H"))
 
 	case tea.PasteMsg:
 		if len(msg.Content) >= m.config.PasteCollapseMinChars {
@@ -817,9 +913,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textarea.CursorEnd()
 				m.autocompleteIdx = 0
 				m.recalcTextareaHeight()
-				if m.ready {
-					m.viewport.SetHeight(m.viewportHeight())
-				}
 			}
 			return m, nil
 		case "esc":
@@ -827,10 +920,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textarea.Reset()
 				m.textarea.SetHeight(minInputHeight)
 				m.autocompleteIdx = 0
-				if m.ready {
-					m.viewport.SetHeight(m.viewportHeight())
-				}
 			}
+			return m, nil
+		case "pgup":
+			m.viewport.PageUp()
+			m.userScrolled = !m.viewport.AtBottom()
+			return m, nil
+		case "pgdown":
+			m.viewport.PageDown()
+			m.userScrolled = !m.viewport.AtBottom()
 			return m, nil
 		case "enter":
 			if m.agentRunning {
@@ -850,28 +948,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m.handleCommand(val)
 				}
 				content := expandPastes(val, m.pasteStore)
-				m.messages = append(m.messages, message{content: content, kind: msgUser})
 				m.textarea.Reset()
 				m.textarea.SetHeight(minInputHeight)
 
 				// Start agent if an LLM provider is configured
 				if m.langdagClient == nil {
-					m.messages = append(m.messages, message{
-						content: "No API keys configured. Use /config to add a key first.",
-						kind:    msgError,
-					})
-					if m.ready {
-						m.viewport.SetHeight(m.viewportHeight())
-						m.updateViewportContent()
-						m.viewport.GotoBottom()
-					}
+					m.messages = append(m.messages, chatMessage{kind: msgUser, content: content, leadBlank: true})
+					m.messages = append(m.messages, chatMessage{kind: msgError, content: "No API keys configured. Use /config to add a key first."})
 					return m, nil
 				}
 
-				return m.startAgent(content)
+				m.messages = append(m.messages, chatMessage{kind: msgUser, content: content, leadBlank: true})
+				m2, agentCmd := m.startAgent(content)
+				return m2, agentCmd
 			}
 			return m, nil
 		}
+
 	}
 
 	// Temporarily expand textarea to max height before Update so the
@@ -893,13 +986,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Now set the correct height based on actual content
 	m.recalcTextareaHeight()
 
-	// Update viewport
-	if m.ready {
-		var vpCmd tea.Cmd
-		m.viewport, vpCmd = m.viewport.Update(msg)
-		cmds = append(cmds, vpCmd)
-	}
-
 	return m, tea.Batch(cmds...)
 }
 
@@ -920,15 +1006,9 @@ func (m model) exitConfigMode(save bool) (tea.Model, tea.Cmd) {
 	if save {
 		m.configForm.applyTo(&m.config)
 		if err := saveConfig(m.config); err != nil {
-			m.messages = append(m.messages, message{
-				content: fmt.Sprintf("Error saving config: %v", err),
-				kind:    msgError,
-			})
+			m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error saving config: %v", err)})
 		} else {
-			m.messages = append(m.messages, message{
-				content: "Config saved.",
-				kind:    msgSuccess,
-			})
+			m.messages = append(m.messages, chatMessage{kind: msgSuccess, content: "Config saved."})
 			// Reinitialize langdag client with new API keys
 			if m.langdagClient != nil {
 				m.langdagClient.Close()
@@ -942,15 +1022,7 @@ func (m model) exitConfigMode(save bool) (tea.Model, tea.Cmd) {
 			})
 		}
 	} else {
-		m.messages = append(m.messages, message{
-			content: "Config changes discarded.",
-			kind:    msgInfo,
-		})
-	}
-	if m.ready {
-		m.viewport.SetHeight(m.viewportHeight())
-		m.updateViewportContent()
-		m.viewport.GotoBottom()
+		m.messages = append(m.messages, chatMessage{kind: msgInfo, content: "Config changes discarded."})
 	}
 	cmds = append(cmds, m.textarea.Focus())
 	return m, tea.Batch(cmds...)
@@ -987,46 +1059,22 @@ func (m model) updateConfigMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 // enterModelMode switches to the model selection mode.
 func (m model) enterModelMode() (tea.Model, tea.Cmd) {
 	if !m.modelsLoaded {
-		m.messages = append(m.messages, message{
-			content: "Models are still loading... please try again in a moment.",
-			kind:    msgInfo,
-		})
 		m.textarea.Reset()
 		m.textarea.SetHeight(minInputHeight)
-		if m.ready {
-			m.viewport.SetHeight(m.viewportHeight())
-			m.updateViewportContent()
-			m.viewport.GotoBottom()
-		}
+		m.messages = append(m.messages, chatMessage{kind: msgInfo, content: "Models are still loading... please try again in a moment."})
 		return m, nil
 	}
 	if m.modelsErr != nil {
-		m.messages = append(m.messages, message{
-			content: fmt.Sprintf("Failed to load models: %v", m.modelsErr),
-			kind:    msgError,
-		})
 		m.textarea.Reset()
 		m.textarea.SetHeight(minInputHeight)
-		if m.ready {
-			m.viewport.SetHeight(m.viewportHeight())
-			m.updateViewportContent()
-			m.viewport.GotoBottom()
-		}
+		m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Failed to load models: %v", m.modelsErr)})
 		return m, nil
 	}
 	available := m.config.availableModels(m.models)
 	if len(available) == 0 {
-		m.messages = append(m.messages, message{
-			content: "No API keys configured. Use /config to add a key first.",
-			kind:    msgError,
-		})
 		m.textarea.Reset()
 		m.textarea.SetHeight(minInputHeight)
-		if m.ready {
-			m.viewport.SetHeight(m.viewportHeight())
-			m.updateViewportContent()
-			m.viewport.GotoBottom()
-		}
+		m.messages = append(m.messages, chatMessage{kind: msgError, content: "No API keys configured. Use /config to add a key first."})
 		return m, nil
 	}
 	m.mode = modeModel
@@ -1047,28 +1095,14 @@ func (m model) exitModelMode(save bool) (tea.Model, tea.Cmd) {
 		selected := m.modelList.selected()
 		m.config.ActiveModel = selected.ID
 		if err := saveConfig(m.config); err != nil {
-			m.messages = append(m.messages, message{
-				content: fmt.Sprintf("Error saving model: %v", err),
-				kind:    msgError,
-			})
+			m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error saving model: %v", err)})
 		} else {
-			m.messages = append(m.messages, message{
-				content: fmt.Sprintf("Model set to %s.", selected.DisplayName),
-				kind:    msgSuccess,
-			})
+			m.messages = append(m.messages, chatMessage{kind: msgSuccess, content: fmt.Sprintf("Model set to %s.", selected.DisplayName)})
 		}
 	} else {
 		// Save sort preferences even on cancel
 		_ = saveConfig(m.config)
-		m.messages = append(m.messages, message{
-			content: "Model selection cancelled.",
-			kind:    msgInfo,
-		})
-	}
-	if m.ready {
-		m.viewport.SetHeight(m.viewportHeight())
-		m.updateViewportContent()
-		m.viewport.GotoBottom()
+		m.messages = append(m.messages, chatMessage{kind: msgInfo, content: "Model selection cancelled."})
 	}
 	return m, m.textarea.Focus()
 }
@@ -1124,11 +1158,6 @@ func (m model) enterWorktreeMode() (tea.Model, tea.Cmd) {
 // exitWorktreeMode returns to chat mode.
 func (m model) exitWorktreeMode() (tea.Model, tea.Cmd) {
 	m.mode = modeChat
-	if m.ready {
-		m.viewport.SetHeight(m.viewportHeight())
-		m.updateViewportContent()
-		m.viewport.GotoBottom()
-	}
 	return m, m.textarea.Focus()
 }
 
@@ -1214,11 +1243,6 @@ func (m model) enterBranchMode() (tea.Model, tea.Cmd) {
 // exitBranchMode returns to chat mode.
 func (m model) exitBranchMode() (tea.Model, tea.Cmd) {
 	m.mode = modeChat
-	if m.ready {
-		m.viewport.SetHeight(m.viewportHeight())
-		m.updateViewportContent()
-		m.viewport.GotoBottom()
-	}
 	return m, m.textarea.Focus()
 }
 
@@ -1312,14 +1336,7 @@ func (m model) startAgent(userMessage string) (tea.Model, tea.Cmd) {
 		}
 		client, err := newLangdagClientForProvider(m.config, modelProvider)
 		if err != nil {
-			m.messages = append(m.messages, message{
-				content: fmt.Sprintf("Error initializing %s provider: %v", modelProvider, err),
-				kind:    msgError,
-			})
-			if m.ready {
-				m.updateViewportContent()
-				m.viewport.GotoBottom()
-			}
+			m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error initializing %s provider: %v", modelProvider, err)})
 			return m, nil
 		}
 		m.langdagClient = client
@@ -1336,15 +1353,8 @@ func (m model) startAgent(userMessage string) (tea.Model, tea.Cmd) {
 	agent := NewAgent(m.langdagClient, tools, systemPrompt, modelID)
 	m.agent = agent
 	m.agentRunning = true
-
-	// Add a placeholder assistant message for streaming
-	m.messages = append(m.messages, message{content: "", kind: msgAssistant})
-
-	if m.ready {
-		m.viewport.SetHeight(m.viewportHeight())
-		m.updateViewportContent()
-		m.viewport.GotoBottom()
-	}
+	m.streamingText = ""
+	m.needsTextSep = true
 
 	// Start agent loop in background
 	parentNodeID := m.agentNodeID
@@ -1356,42 +1366,44 @@ func (m model) startAgent(userMessage string) (tea.Model, tea.Cmd) {
 
 // handleAgentEvent processes a single agent event and returns the updated model.
 func (m model) handleAgentEvent(event AgentEvent) (tea.Model, tea.Cmd) {
+	debugLog("event=%d text=%q tool=%s err=%v", event.Type, event.Text, event.ToolName, event.Error)
+
 	switch event.Type {
 	case EventTextDelta:
-		// Append text to the last assistant message
-		if len(m.messages) > 0 && m.messages[len(m.messages)-1].kind == msgAssistant {
-			m.messages[len(m.messages)-1].content += event.Text
-		}
-		if m.ready {
-			m.updateViewportContent()
-			m.viewport.GotoBottom()
+		m.streamingText += event.Text
+		// Flush complete lines to messages store
+		if idx := strings.LastIndex(m.streamingText, "\n"); idx >= 0 {
+			m.messages = append(m.messages, chatMessage{
+				kind:      msgAssistant,
+				content:   m.streamingText[:idx],
+				leadBlank: m.needsTextSep,
+			})
+			m.needsTextSep = false
+			m.streamingText = m.streamingText[idx+1:]
 		}
 		return m, listenForAgentEvent(m.agent.Events())
 
 	case EventToolCallStart:
-		// Show tool invocation with a human-readable summary of the input
-		summary := toolCallSummary(event.ToolName, event.ToolInput)
-		m.messages = append(m.messages, message{content: summary, kind: msgToolCall})
-		if m.ready {
-			m.updateViewportContent()
-			m.viewport.GotoBottom()
+		debugLog("tool_call_start: %s input=%s", event.ToolName, string(event.ToolInput))
+		// Flush streaming text if any
+		if m.streamingText != "" {
+			m.messages = append(m.messages, chatMessage{
+				kind:      msgAssistant,
+				content:   m.streamingText,
+				leadBlank: m.needsTextSep,
+			})
+			m.needsTextSep = false
+			m.streamingText = ""
 		}
+		// Store tool call summary
+		m.messages = append(m.messages, chatMessage{kind: msgToolCall, content: toolCallSummary(event.ToolName, event.ToolInput), leadBlank: true})
 		return m, listenForAgentEvent(m.agent.Events())
 
 	case EventToolResult:
-		// Show tool result (collapsed if long)
+		debugLog("tool_result: err=%v result=%q", event.IsError, truncateForLog(event.ToolResult, 500))
 		result := collapseToolResult(event.ToolResult)
-		kind := msgToolResult
-		if event.IsError {
-			kind = msgError
-		}
-		m.messages = append(m.messages, message{content: result, kind: kind})
-		// Add a new placeholder for the next assistant text
-		m.messages = append(m.messages, message{content: "", kind: msgAssistant})
-		if m.ready {
-			m.updateViewportContent()
-			m.viewport.GotoBottom()
-		}
+		m.needsTextSep = true
+		m.messages = append(m.messages, chatMessage{kind: msgToolResult, content: result, isError: event.IsError})
 		return m, listenForAgentEvent(m.agent.Events())
 
 	case EventToolCallDone:
@@ -1399,28 +1411,27 @@ func (m model) handleAgentEvent(event AgentEvent) (tea.Model, tea.Cmd) {
 		return m, listenForAgentEvent(m.agent.Events())
 
 	case EventApprovalReq:
-		// Show approval request and wait for user y/n
+		debugLog("approval_req: %s", event.ApprovalDesc)
+		// Show approval request in View and wait for user y/n
 		m.awaitingApproval = true
 		m.approvalDesc = event.ApprovalDesc
-		if m.ready {
-			m.updateViewportContent()
-			m.viewport.GotoBottom()
-		}
 		// Don't listen for more events yet — wait for user input in Update()
 		return m, nil
 
 	case EventDone:
+		debugLog("done: nodeID=%s streamingLen=%d", event.NodeID, len(m.streamingText))
 		m.agentRunning = false
 		if event.NodeID != "" {
 			m.agentNodeID = event.NodeID
 		}
-		// Remove trailing empty assistant message if present
-		if len(m.messages) > 0 && m.messages[len(m.messages)-1].kind == msgAssistant && m.messages[len(m.messages)-1].content == "" {
-			m.messages = m.messages[:len(m.messages)-1]
-		}
-		if m.ready {
-			m.updateViewportContent()
-			m.viewport.GotoBottom()
+		// Flush any remaining streaming text
+		if m.streamingText != "" {
+			m.messages = append(m.messages, chatMessage{
+				kind:      msgAssistant,
+				content:   m.streamingText,
+				leadBlank: m.needsTextSep,
+			})
+			m.streamingText = ""
 		}
 		return m, nil
 
@@ -1429,15 +1440,13 @@ func (m model) handleAgentEvent(event AgentEvent) (tea.Model, tea.Cmd) {
 		if event.Error != nil {
 			errMsg = event.Error.Error()
 		}
-		m.messages = append(m.messages, message{content: errMsg, kind: msgError})
-		if m.ready {
-			m.updateViewportContent()
-			m.viewport.GotoBottom()
-		}
+		debugLog("error: %s", errMsg)
+		m.messages = append(m.messages, chatMessage{kind: msgError, content: errMsg})
 		return m, listenForAgentEvent(m.agent.Events())
 	}
 
 	// Unknown event type — keep listening
+	debugLog("unknown event type: %d", event.Type)
 	return m, listenForAgentEvent(m.agent.Events())
 }
 
@@ -1449,15 +1458,13 @@ func (m model) handleCommand(input string) (tea.Model, tea.Cmd) {
 	case "/branches":
 		return m.enterBranchMode()
 	case "/clear":
-		m.messages = nil
 		m.agentNodeID = ""
+		m.streamingText = ""
+		m.pendingToolCall = ""
+		m.messages = nil
+		m.userScrolled = false
 		m.textarea.Reset()
 		m.textarea.SetHeight(minInputHeight)
-		if m.ready {
-			m.viewport.SetHeight(m.viewportHeight())
-			m.updateViewportContent()
-			m.viewport.GotoBottom()
-		}
 		return m, nil
 	case "/config":
 		return m.enterConfigMode()
@@ -1468,17 +1475,9 @@ func (m model) handleCommand(input string) (tea.Model, tea.Cmd) {
 	case "/worktrees":
 		return m.enterWorktreeMode()
 	default:
-		m.messages = append(m.messages, message{
-			content: fmt.Sprintf("Unknown command: %s", cmd),
-			kind:    msgError,
-		})
 		m.textarea.Reset()
 		m.textarea.SetHeight(minInputHeight)
-		if m.ready {
-			m.viewport.SetHeight(m.viewportHeight())
-			m.updateViewportContent()
-			m.viewport.GotoBottom()
-		}
+		m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Unknown command: %s", cmd)})
 		return m, nil
 	}
 }
@@ -1503,31 +1502,15 @@ func (m *model) cleanup() {
 func (m model) enterShellMode() (tea.Model, tea.Cmd) {
 	// Check container state.
 	if m.containerErr != nil {
-		m.messages = append(m.messages, message{
-			content: fmt.Sprintf("Container error: %v", m.containerErr),
-			kind:    msgError,
-		})
 		m.textarea.Reset()
 		m.textarea.SetHeight(minInputHeight)
-		if m.ready {
-			m.viewport.SetHeight(m.viewportHeight())
-			m.updateViewportContent()
-			m.viewport.GotoBottom()
-		}
+		m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Container error: %v", m.containerErr)})
 		return m, nil
 	}
 	if !m.containerReady {
-		m.messages = append(m.messages, message{
-			content: "Container is starting... please try again in a moment.",
-			kind:    msgInfo,
-		})
 		m.textarea.Reset()
 		m.textarea.SetHeight(minInputHeight)
-		if m.ready {
-			m.viewport.SetHeight(m.viewportHeight())
-			m.updateViewportContent()
-			m.viewport.GotoBottom()
-		}
+		m.messages = append(m.messages, chatMessage{kind: msgInfo, content: "Container is starting... please try again in a moment."})
 		return m, nil
 	}
 
@@ -1550,9 +1533,6 @@ func (m *model) recalcTextareaHeight() {
 		newHeight = maxInputHeight
 	}
 	m.textarea.SetHeight(newHeight)
-	if m.ready {
-		m.viewport.SetHeight(m.viewportHeight())
-	}
 }
 
 func (m model) inputBoxHeight() int {
@@ -1566,121 +1546,63 @@ func (m model) autocompleteHeight() int {
 	return 0
 }
 
-func (m model) viewportHeight() int {
-	h := m.height - m.inputBoxHeight() - m.autocompleteHeight() - m.statusBarHeight()
-	if h < 1 {
-		h = 1
-	}
-	return h
-}
-
-func (m *model) updateViewportContent() {
-	if !m.ready {
-		return
-	}
-
-	logo := renderLogo()
-	logoHeight := lipgloss.Height(logo)
-
-	var content string
-	if len(m.messages) == 0 {
-		vpHeight := m.viewportHeight()
-		padding := (vpHeight - logoHeight) / 2
-		if padding < 0 {
-			padding = 0
-		}
-		centeredLogo := lipgloss.PlaceHorizontal(m.width, lipgloss.Center, logo)
-		content = strings.Repeat("\n", padding) + centeredLogo
-	} else {
-		centeredLogo := lipgloss.PlaceHorizontal(m.width, lipgloss.Center, logo)
-
-		msgStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#E0E0E0")).
-			PaddingLeft(2)
-
-		assistantStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#B88AFF")).
-			PaddingLeft(2)
-
-		toolCallStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#666666")).
-			PaddingLeft(4).
-			Italic(true)
-
-		toolResultStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#555555")).
-			PaddingLeft(4)
-
-		errorStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FF6B6B")).
-			PaddingLeft(2).
-			Italic(true)
-
-		successStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#6FE7B8")).
-			PaddingLeft(2).
-			Italic(true)
-
-		infoStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#8B7BA8")).
-			PaddingLeft(2).
-			Italic(true)
-
-		var parts []string
-		parts = append(parts, centeredLogo, "")
-		for _, msg := range m.messages {
-			// Skip empty assistant messages (streaming placeholders)
-			if msg.kind == msgAssistant && msg.content == "" {
-				continue
-			}
-			wrapped := lipgloss.NewStyle().Width(m.width - 4).Render(msg.content)
-			var style lipgloss.Style
-			switch msg.kind {
-			case msgAssistant:
-				style = assistantStyle
-			case msgToolCall:
-				style = toolCallStyle
-			case msgToolResult:
-				style = toolResultStyle
-			case msgError:
-				style = errorStyle
-			case msgSuccess:
-				style = successStyle
-			case msgInfo:
-				style = infoStyle
-			default:
-				style = msgStyle
-			}
-			parts = append(parts, style.Render(wrapped), "")
-		}
-
-		// Show approval prompt or working indicator
-		if m.awaitingApproval {
-			approvalPrompt := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#FFD700")).
-				PaddingLeft(2).
-				Bold(true).
-				Render(fmt.Sprintf("⚠ Allow %s? [y/n]", m.approvalDesc))
-			parts = append(parts, approvalPrompt)
-		} else if m.agentRunning {
-			indicator := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#B88AFF")).
-				PaddingLeft(2).
-				Italic(true).
-				Render("thinking...")
-			parts = append(parts, indicator)
-		}
-		content = strings.Join(parts, "\n")
-	}
-
-	m.viewport.SetContent(content)
-}
-
 func (m model) statusBarHeight() int {
 	if m.status.Branch == "" {
 		return 0
 	}
 	return 1
+}
+
+// updateViewportContent rebuilds the viewport content from current state.
+// Must be called from Update() (pointer receiver) so changes persist.
+func (m *model) updateViewportContent() {
+	var parts []string
+
+	parts = append(parts, renderLogo())
+
+	if msgs := m.renderMessages(); msgs != "" {
+		parts = append(parts, msgs)
+	}
+
+	if streaming := m.renderStreamingText(); streaming != "" {
+		parts = append(parts, streaming)
+	}
+
+	if m.awaitingApproval {
+		approvalPrompt := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFD700")).
+			Bold(true).
+			Render(fmt.Sprintf("Allow %s? [y/n]", m.approvalDesc))
+		parts = append(parts, approvalPrompt)
+	} else if m.agentRunning {
+		indicator := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#B88AFF")).
+			Italic(true).
+			Render("thinking...")
+		parts = append(parts, indicator)
+	}
+
+	m.viewport.SetWidth(m.width)
+	m.viewport.SetHeight(m.viewportHeight())
+	m.viewport.SetContent(strings.Join(parts, "\n"))
+	if !m.userScrolled {
+		m.viewport.GotoBottom()
+	}
+}
+
+func (m model) viewportHeight() int {
+	acH := m.autocompleteHeight()
+	middleH := 1 // gap line
+	if acH > 0 {
+		middleH += acH
+	} else {
+		middleH += m.statusBarHeight()
+	}
+	h := m.height - m.inputBoxHeight() - middleH
+	if h < 1 {
+		h = 1
+	}
+	return h
 }
 
 func truncateWithEllipsis(s string, maxLen int) string {
@@ -1895,6 +1817,9 @@ func (m model) View() tea.View {
 		return m.viewBranches()
 	}
 
+	vpH := m.viewportHeight()
+
+	// Build input box
 	inputBorderColors := borderGradientColors
 	inputBorderStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -1903,7 +1828,6 @@ func (m model) View() tea.View {
 		BorderForegroundBlend(inputBorderColors...).
 		Width(m.width)
 
-	// Add ❯ prefix to each line for a copy-friendly input box
 	prefixStyle := lipgloss.NewStyle().Foreground(inputBorderColors[0])
 	prefix := prefixStyle.Render("❯ ")
 	textareaLines := strings.Split(m.textarea.View(), "\n")
@@ -1915,34 +1839,53 @@ func (m model) View() tea.View {
 	autocomplete := m.renderAutocomplete()
 	acHeight := m.autocompleteHeight()
 
-	var fullView string
-	viewportView := m.viewport.View()
+	// Assemble full view: viewport + gap + status/autocomplete + input
+	var viewParts []string
+	linesAbove := 0
+
+	viewParts = append(viewParts, m.viewport.View())
+	linesAbove += vpH
+
+	// Gap line
+	viewParts = append(viewParts, "")
+	linesAbove += 1
+
 	if acHeight == 0 {
-		// Show status bar only when autocomplete is not visible
 		if statusBar := m.renderStatusBar(); statusBar != "" {
-			viewportView += "\n" + statusBar
+			viewParts = append(viewParts, statusBar)
+			linesAbove += 1
 		}
-		fullView = viewportView + "\n" + inputBox
 	} else {
-		fullView = viewportView + "\n" + autocomplete + "\n" + inputBox
+		viewParts = append(viewParts, autocomplete)
+		linesAbove += acHeight
+	}
+
+	viewParts = append(viewParts, inputBox)
+	linesAbove += 1 // top border of input box
+
+	fullView := strings.Join(viewParts, "\n")
+
+	// Clamp output to exactly m.height lines to prevent terminal scrollback artifacts.
+	if lines := strings.Split(fullView, "\n"); len(lines) != m.height {
+		for len(lines) < m.height {
+			lines = append(lines, "")
+		}
+		if len(lines) > m.height {
+			lines = lines[len(lines)-m.height:]
+		}
+		fullView = strings.Join(lines, "\n")
 	}
 
 	v := tea.NewView(fullView)
+	v.AltScreen = true
 
 	c := m.textarea.Cursor()
 	if c != nil {
-		// Status bar is hidden when autocomplete is visible
-		statusH := 0
-		if acHeight == 0 {
-			statusH = m.statusBarHeight()
-		}
-		c.Y += m.viewport.Height() + statusH + acHeight + 1 // +1 for top border
-		c.X += 2                                              // +2 for ❯ prefix
+		c.Y += linesAbove
+		c.X += 2 // +2 for ❯ prefix
 		v.Cursor = c
 	}
 
-	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 
