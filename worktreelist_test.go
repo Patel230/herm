@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-
-	tea "charm.land/bubbletea/v2"
 )
 
 func TestWorktreeListNavigation(t *testing.T) {
@@ -57,19 +55,16 @@ func TestWorktreeListNavigation(t *testing.T) {
 }
 
 func TestWorktreeListEscReturnsToChat(t *testing.T) {
-	m := initialModel()
-	m = resize(m, 80, 24)
-
-	m.mode = modeWorktrees
-	m.worktreeListC = newWorktreeList([]WorktreeInfo{
+	a := newTestApp(80, 24)
+	a.mode = modeWorktrees
+	a.worktreeListC = newWorktreeList([]WorktreeInfo{
 		{Path: "/wt/a", Branch: "main", Clean: true},
 	}, "", 80, 24)
 
-	result, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	m = result.(model)
+	simKey(a, KeyEscape)
 
-	if m.mode != modeChat {
-		t.Errorf("mode = %d, want modeChat (%d)", m.mode, modeChat)
+	if a.mode != modeChat {
+		t.Errorf("mode = %d, want modeChat (%d)", a.mode, modeChat)
 	}
 }
 
@@ -123,41 +118,37 @@ func TestWorktreeListEmpty(t *testing.T) {
 }
 
 func TestWorktreeListMsgPopulatesList(t *testing.T) {
-	m := initialModel()
-	m = resize(m, 80, 24)
-	m.mode = modeWorktrees
-	m.worktreePath = "/wt/current"
+	a := newTestApp(80, 24)
+	a.mode = modeWorktrees
+	a.worktreePath = "/wt/current"
 
 	items := []WorktreeInfo{
 		{Path: "/wt/current", Branch: "main", Clean: true, Active: true},
 		{Path: "/wt/other", Branch: "feature", Clean: false, Active: false},
 	}
-	result, _ := m.Update(worktreeListMsg{items: items})
-	m = result.(model)
+	simResult(a, worktreeListMsg{items: items})
 
-	if len(m.worktreeListC.items) != 2 {
-		t.Errorf("worktreeList items = %d, want 2", len(m.worktreeListC.items))
+	if len(a.worktreeListC.items) != 2 {
+		t.Errorf("worktreeList items = %d, want 2", len(a.worktreeListC.items))
 	}
-	if m.worktreeListC.currentPath != "/wt/current" {
-		t.Errorf("currentPath = %q, want %q", m.worktreeListC.currentPath, "/wt/current")
+	if a.worktreeListC.currentPath != "/wt/current" {
+		t.Errorf("currentPath = %q, want %q", a.worktreeListC.currentPath, "/wt/current")
 	}
 }
 
 func TestWorktreeListMsgError(t *testing.T) {
-	m := initialModel()
-	m = resize(m, 80, 24)
-	m.mode = modeWorktrees
+	a := newTestApp(80, 24)
+	a.mode = modeWorktrees
 
-	result, _ := m.Update(worktreeListMsg{err: fmt.Errorf("not in git repo")})
-	m = result.(model)
+	simResult(a, worktreeListMsg{err: fmt.Errorf("not in git repo")})
 
-	if m.mode != modeChat {
-		t.Errorf("mode = %d, want modeChat after error", m.mode)
+	if a.mode != modeChat {
+		t.Errorf("mode = %d, want modeChat after error", a.mode)
 	}
-	if len(m.messages) == 0 {
+	if len(a.messages) == 0 {
 		t.Fatal("should have error message")
 	}
-	last := m.messages[len(m.messages)-1]
+	last := a.messages[len(a.messages)-1]
 	if last.kind != msgError {
 		t.Errorf("last message kind = %d, want msgError", last.kind)
 	}

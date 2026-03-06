@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-
-	tea "charm.land/bubbletea/v2"
 )
 
 func TestBranchListNavigation(t *testing.T) {
@@ -117,17 +115,14 @@ func TestBranchListEnterOnEmptyFilteredNoop(t *testing.T) {
 }
 
 func TestBranchListEscReturnsToChat(t *testing.T) {
-	m := initialModel()
-	m = resize(m, 80, 24)
+	a := newTestApp(80, 24)
+	a.mode = modeBranches
+	a.branchListC = newBranchList([]string{"main", "feature"}, "main", 80, 24)
 
-	m.mode = modeBranches
-	m.branchListC = newBranchList([]string{"main", "feature"}, "main", 80, 24)
+	simKey(a, KeyEscape)
 
-	result, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	m = result.(model)
-
-	if m.mode != modeChat {
-		t.Errorf("mode = %d, want modeChat (%d)", m.mode, modeChat)
+	if a.mode != modeChat {
+		t.Errorf("mode = %d, want modeChat (%d)", a.mode, modeChat)
 	}
 }
 
@@ -165,91 +160,83 @@ func TestBranchListNoMatchingFilter(t *testing.T) {
 }
 
 func TestBranchListMsgPopulatesList(t *testing.T) {
-	m := initialModel()
-	m = resize(m, 80, 24)
-	m.mode = modeBranches
+	a := newTestApp(80, 24)
+	a.mode = modeBranches
 
-	result, _ := m.Update(branchListMsg{
+	simResult(a, branchListMsg{
 		items:         []string{"main", "feature-a", "feature-b"},
 		currentBranch: "main",
 	})
-	m = result.(model)
 
-	if len(m.branchListC.items) != 3 {
-		t.Errorf("branchList items = %d, want 3", len(m.branchListC.items))
+	if len(a.branchListC.items) != 3 {
+		t.Errorf("branchList items = %d, want 3", len(a.branchListC.items))
 	}
-	if m.branchListC.currentBranch != "main" {
-		t.Errorf("currentBranch = %q, want %q", m.branchListC.currentBranch, "main")
+	if a.branchListC.currentBranch != "main" {
+		t.Errorf("currentBranch = %q, want %q", a.branchListC.currentBranch, "main")
 	}
 }
 
 func TestBranchListMsgError(t *testing.T) {
-	m := initialModel()
-	m = resize(m, 80, 24)
-	m.mode = modeBranches
+	a := newTestApp(80, 24)
+	a.mode = modeBranches
 
-	result, _ := m.Update(branchListMsg{err: fmt.Errorf("not in git repo")})
-	m = result.(model)
+	simResult(a, branchListMsg{err: fmt.Errorf("not in git repo")})
 
-	if m.mode != modeChat {
-		t.Errorf("mode = %d, want modeChat after error", m.mode)
+	if a.mode != modeChat {
+		t.Errorf("mode = %d, want modeChat after error", a.mode)
 	}
-	if len(m.messages) == 0 {
+	if len(a.messages) == 0 {
 		t.Fatal("should have error message")
 	}
-	last := m.messages[len(m.messages)-1]
+	last := a.messages[len(a.messages)-1]
 	if last.kind != msgError {
 		t.Errorf("last message kind = %d, want msgError", last.kind)
 	}
 }
 
 func TestBranchCheckoutMsgUpdatesStatusBar(t *testing.T) {
-	m := initialModel()
-	m = resize(m, 80, 24)
-	m.mode = modeBranches
-	m.status.Branch = "main"
+	a := newTestApp(80, 24)
+	a.mode = modeBranches
+	a.status.Branch = "main"
 
-	result, _ := m.Update(branchCheckoutMsg{branch: "feature-a"})
-	m = result.(model)
+	simResult(a, branchCheckoutMsg{branch: "feature-a"})
 
-	if m.mode != modeChat {
-		t.Errorf("mode = %d, want modeChat after checkout", m.mode)
+	if a.mode != modeChat {
+		t.Errorf("mode = %d, want modeChat after checkout", a.mode)
 	}
-	if m.status.Branch != "feature-a" {
-		t.Errorf("status.Branch = %q, want %q", m.status.Branch, "feature-a")
+	if a.status.Branch != "feature-a" {
+		t.Errorf("status.Branch = %q, want %q", a.status.Branch, "feature-a")
 	}
-	if len(m.messages) == 0 {
+	if len(a.messages) == 0 {
 		t.Fatal("should have success message")
 	}
-	last := m.messages[len(m.messages)-1]
+	last := a.messages[len(a.messages)-1]
 	if last.kind != msgSuccess {
 		t.Errorf("last message kind = %d, want msgSuccess", last.kind)
 	}
 }
 
 func TestBranchCheckoutMsgError(t *testing.T) {
-	m := initialModel()
-	m = resize(m, 80, 24)
-	m.mode = modeBranches
-	m.status.Branch = "main"
+	a := newTestApp(80, 24)
+	a.mode = modeBranches
+	a.status.Branch = "main"
 
-	result, _ := m.Update(branchCheckoutMsg{
+	simResult(a, branchCheckoutMsg{
 		branch: "nonexistent",
 		err:    fmt.Errorf("branch not found"),
 	})
-	m = result.(model)
 
-	if m.mode != modeChat {
-		t.Errorf("mode = %d, want modeChat after error", m.mode)
+	if a.mode != modeChat {
+		t.Errorf("mode = %d, want modeChat after error", a.mode)
 	}
 	// Branch should NOT change on error
-	if m.status.Branch != "main" {
-		t.Errorf("status.Branch = %q, want %q (unchanged)", m.status.Branch, "main")
+	if a.status.Branch != "main" {
+		t.Errorf("status.Branch = %q, want %q (unchanged)", a.status.Branch, "main")
 	}
-	if len(m.messages) == 0 {
+	if len(a.messages) == 0 {
 		t.Fatal("should have error message")
 	}
-	last := m.messages[len(m.messages)-1]
+	last := a.messages[len(a.messages)-1]
 	if last.kind != msgError {
 		t.Errorf("last message kind = %d, want msgError", last.kind)
 	}
