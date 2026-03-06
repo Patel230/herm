@@ -769,7 +769,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.mode = modeChat
 			m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error listing worktrees: %v", msg.err)})
-			return m, m.textarea.Focus()
+			m.textarea.Focus()
+	return m, nil
 		}
 		m.worktreeListC = newWorktreeList(msg.items, m.worktreePath, m.width, m.height)
 		return m, nil
@@ -780,7 +781,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.mode = modeChat
 			m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error listing branches: %v", msg.err)})
-			return m, m.textarea.Focus()
+			m.textarea.Focus()
+	return m, nil
 		}
 		m.branchListC = newBranchList(msg.items, msg.currentBranch, m.width, m.height)
 		return m, nil
@@ -795,7 +797,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status.Branch = msg.branch
 			m.messages = append(m.messages, chatMessage{kind: msgSuccess, content: fmt.Sprintf("Switched to branch '%s'", msg.branch)})
 		}
-		return m, m.textarea.Focus()
+		m.textarea.Focus()
+	return m, nil
 	}
 
 	// Handle workspace resolution result — fires status fetch + container boot in parallel
@@ -1058,7 +1061,7 @@ func (m model) exitConfigMode(save bool) (tea.Model, tea.Cmd) {
 	} else {
 		m.messages = append(m.messages, chatMessage{kind: msgInfo, content: "Config changes discarded."})
 	}
-	cmds = append(cmds, m.textarea.Focus())
+	m.textarea.Focus()
 	return m, tea.Batch(cmds...)
 }
 
@@ -1085,9 +1088,9 @@ func (m model) updateConfigMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	var cmd tea.Cmd
-	m.configForm, cmd = m.configForm.Update(msg)
-	return m, cmd
+	// Old bubbletea path — configForm no longer has Update; key handling
+	// is done via configForm.HandleKey in the App event loop.
+	return m, nil
 }
 
 // enterModelMode switches to the model selection mode.
@@ -1138,7 +1141,8 @@ func (m model) exitModelMode(save bool) (tea.Model, tea.Cmd) {
 		_ = saveConfig(m.config)
 		m.messages = append(m.messages, chatMessage{kind: msgInfo, content: "Model selection cancelled."})
 	}
-	return m, m.textarea.Focus()
+	m.textarea.Focus()
+	return m, nil
 }
 
 // updateModelMode handles input while the model list is active.
@@ -1192,7 +1196,8 @@ func (m model) enterWorktreeMode() (tea.Model, tea.Cmd) {
 // exitWorktreeMode returns to chat mode.
 func (m model) exitWorktreeMode() (tea.Model, tea.Cmd) {
 	m.mode = modeChat
-	return m, m.textarea.Focus()
+	m.textarea.Focus()
+	return m, nil
 }
 
 // updateWorktreeMode handles input while the worktree list is active.
@@ -1277,7 +1282,8 @@ func (m model) enterBranchMode() (tea.Model, tea.Cmd) {
 // exitBranchMode returns to chat mode.
 func (m model) exitBranchMode() (tea.Model, tea.Cmd) {
 	m.mode = modeChat
-	return m, m.textarea.Focus()
+	m.textarea.Focus()
+	return m, nil
 }
 
 // updateBranchMode handles input while the branch list is active.

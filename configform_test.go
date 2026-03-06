@@ -2,9 +2,6 @@ package main
 
 import (
 	"testing"
-
-	tea "charm.land/bubbletea/v2"
-	"charm.land/bubbles/v2/textinput"
 )
 
 func TestConfigFormApplyToWritesAPIKeys(t *testing.T) {
@@ -54,9 +51,9 @@ func TestConfigFormAPIKeyFieldsMasked(t *testing.T) {
 
 	// Fields 1, 2, 3, 4 are the API key fields
 	for i := 1; i <= 4; i++ {
-		if form.fields[i].input.EchoMode != textinput.EchoPassword {
-			t.Errorf("field %d EchoMode = %d, want EchoPassword (%d)",
-				i, form.fields[i].input.EchoMode, textinput.EchoPassword)
+		if form.fields[i].input.echoMode != EchoPassword {
+			t.Errorf("field %d echoMode = %d, want EchoPassword (%d)",
+				i, form.fields[i].input.echoMode, EchoPassword)
 		}
 	}
 }
@@ -101,7 +98,7 @@ func TestConfigFormTabCyclesThroughAllFields(t *testing.T) {
 		if form.focused != i {
 			t.Errorf("before tab %d: focused = %d, want %d", i, form.focused, i)
 		}
-		form, _ = form.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+		form.HandleKey(EventKey{Key: KeyTab})
 	}
 	// Should wrap around to 0
 	if form.focused != 0 {
@@ -113,7 +110,7 @@ func TestConfigFormShiftTabCyclesBackward(t *testing.T) {
 	form := newConfigForm(Config{}, 80, 24)
 
 	// Shift+tab from field 0 should wrap to last field
-	form, _ = form.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	form.HandleKey(EventKey{Key: KeyTab, Mod: ModShift})
 	if form.focused != len(form.fields)-1 {
 		t.Errorf("shift+tab from 0: focused = %d, want %d", form.focused, len(form.fields)-1)
 	}

@@ -5,15 +5,13 @@ import (
 	"strconv"
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
-	"charm.land/bubbles/v2/textinput"
 	"charm.land/lipgloss/v2"
 )
 
 type configField struct {
 	label string
 	desc  string
-	input textinput.Model
+	input *TextInput
 	err   string
 }
 
@@ -24,42 +22,11 @@ type configForm struct {
 	height  int
 }
 
-// purpleInputStyles returns the shared purple-themed textinput styles.
-func purpleInputStyles() textinput.Styles {
-	var s textinput.Styles
-	s.Focused.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("#E0E0E0"))
-	s.Focused.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#5B1A99"))
-	s.Focused.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#9B82F5"))
-	s.Blurred.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
-	s.Blurred.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#444444"))
-	s.Blurred.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
-	s.Cursor.Color = lipgloss.Color("#B88AFF")
-	return s
-}
-
-// newAPIKeyInput creates a masked textinput for an API key field.
-func newAPIKeyInput(value string) textinput.Model {
-	ti := textinput.New()
-	ti.Placeholder = "sk-..."
-	ti.SetValue(value)
-	ti.Prompt = "  "
-	ti.EchoMode = textinput.EchoPassword
-	ti.EchoCharacter = '*'
-	ti.CharLimit = 256
-	ti.SetWidth(40)
-	ti.SetStyles(purpleInputStyles())
-	return ti
-}
-
 func newConfigForm(cfg Config, width, height int) configForm {
-	pasteInput := textinput.New()
-	pasteInput.Placeholder = "200"
+	pasteInput := NewTextInput(false)
 	pasteInput.SetValue(strconv.Itoa(cfg.PasteCollapseMinChars))
-	pasteInput.Prompt = "  "
-	pasteInput.Focus()
-	pasteInput.CharLimit = 10
 	pasteInput.SetWidth(20)
-	pasteInput.SetStyles(purpleInputStyles())
+	pasteInput.Focus()
 
 	return configForm{
 		fields: []configField{
@@ -74,28 +41,56 @@ func newConfigForm(cfg Config, width, height int) configForm {
 	}
 }
 
-func (f configForm) Update(msg tea.Msg) (configForm, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		f.width = msg.Width
-		f.height = msg.Height
+// newAPIKeyInput creates a masked textinput for an API key field.
+func newAPIKeyInput(value string) *TextInput {
+	ti := NewTextInput(false)
+	ti.SetValue(value)
+	ti.echoMode = EchoPassword
+	ti.Blur()
+	return ti
+}
 
-	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "tab", "down":
-			f.fields[f.focused].input.Blur()
-			f.focused = (f.focused + 1) % len(f.fields)
-			return f, f.fields[f.focused].input.Focus()
-		case "shift+tab", "up":
+// HandleKey processes a key event for the config form.
+// Returns true if the form consumed the key.
+func (f *configForm) HandleKey(key EventKey) bool {
+	switch key.Key {
+	case KeyRune:
+		if key.Mod&ModCtrl != 0 {
+			// Let ctrl+c pass through to caller
+			return false
+		}
+		// Forward to focused input
+		f.fields[f.focused].input.HandleKey(key)
+		return true
+
+	case KeyTab:
+		if key.Mod&ModShift != 0 {
 			f.fields[f.focused].input.Blur()
 			f.focused = (f.focused - 1 + len(f.fields)) % len(f.fields)
-			return f, f.fields[f.focused].input.Focus()
+			f.fields[f.focused].input.Focus()
+		} else {
+			f.fields[f.focused].input.Blur()
+			f.focused = (f.focused + 1) % len(f.fields)
+			f.fields[f.focused].input.Focus()
 		}
-	}
+		return true
 
-	var cmd tea.Cmd
-	f.fields[f.focused].input, cmd = f.fields[f.focused].input.Update(msg)
-	return f, cmd
+	case KeyDown:
+		f.fields[f.focused].input.Blur()
+		f.focused = (f.focused + 1) % len(f.fields)
+		f.fields[f.focused].input.Focus()
+		return true
+
+	case KeyUp:
+		f.fields[f.focused].input.Blur()
+		f.focused = (f.focused - 1 + len(f.fields)) % len(f.fields)
+		f.fields[f.focused].input.Focus()
+		return true
+
+	default:
+		// Forward other keys (backspace, delete, arrows, etc.) to focused input
+		return f.fields[f.focused].input.HandleKey(key)
+	}
 }
 
 // validate checks all fields and returns true if valid.
@@ -149,6 +144,9 @@ func (f configForm) View() string {
 	hintKeyStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#7B3EC7"))
 
+	promptFocused := lipgloss.NewStyle().Foreground(lipgloss.Color("#9B82F5")).Render("  ")
+	promptBlurred := lipgloss.NewStyle().Foreground(lipgloss.Color("#555555")).Render("  ")
+
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("⚙ Configuration"))
 	b.WriteString("\n")
@@ -165,7 +163,14 @@ func (f configForm) View() string {
 			b.WriteString(descStyle.Render(field.desc))
 		}
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("    %s\n", field.input.View()))
+
+		// Render the input value with prompt
+		prompt := promptBlurred
+		if i == f.focused {
+			prompt = promptFocused
+		}
+		b.WriteString(fmt.Sprintf("    %s%s\n", prompt, field.input.View()))
+
 		if field.err != "" {
 			b.WriteString(errStyle.Render(field.err))
 			b.WriteString("\n")

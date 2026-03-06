@@ -417,6 +417,64 @@ func (t *TextInput) DisplayLineCount() int {
 	return total
 }
 
+// HandleKey processes a key event, performing the appropriate editing or
+// cursor movement operation. Returns true if the key was handled.
+func (t *TextInput) HandleKey(key EventKey) bool {
+	switch key.Key {
+	case KeyRune:
+		if key.Mod&ModCtrl != 0 {
+			switch key.Rune {
+			case 'w':
+				t.DeleteWordBackward()
+			case 'k':
+				t.KillLine()
+			case 'u':
+				t.KillToStart()
+			default:
+				return false
+			}
+			return true
+		}
+		if key.Mod == 0 || key.Mod == ModShift {
+			t.InsertRune(key.Rune)
+			return true
+		}
+	case KeyEnter:
+		if key.Mod&(ModShift|ModAlt) != 0 {
+			t.InsertNewline()
+			return true
+		}
+		return false // let caller handle plain enter
+	case KeyBackspace:
+		t.Backspace()
+	case KeyDelete:
+		t.Delete()
+	case KeyLeft:
+		if key.Mod&ModCtrl != 0 {
+			t.MoveWordLeft()
+		} else {
+			t.MoveLeft()
+		}
+	case KeyRight:
+		if key.Mod&ModCtrl != 0 {
+			t.MoveWordRight()
+		} else {
+			t.MoveRight()
+		}
+	case KeyUp:
+		t.MoveUp()
+	case KeyDown:
+		t.MoveDown()
+	case KeyHome:
+		t.MoveHome()
+	case KeyEnd:
+		t.MoveEnd()
+	default:
+		return false
+	}
+	return true
+}
+
 // --- Helpers ---
 
 // clampCol ensures cursorCol is within the current line's bounds and returns it.
