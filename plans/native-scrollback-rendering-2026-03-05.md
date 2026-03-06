@@ -69,8 +69,8 @@ Replace viewport-based chat rendering with native terminal scrollback. Bubbletea
 
 ## Phase 2: Resize clear and reprint
 
-- [ ] 2a: On `WindowSizeMsg` (after first), build a `tea.Sequence` that: (1) sends `tea.Raw("\033[2J\033[3J\033[H")` to clear screen+scrollback, (2) sends `tea.ClearScreen` to reset the renderer, (3) re-prints the logo + all `m.messages` via ordered `tea.Println` calls. Flush any pending `streamingText` into `m.messages` before reprinting so it's not lost.
-- [ ] 2b: Debounce resize: if a new `WindowSizeMsg` arrives while a reprint sequence is in-flight, cancel the old one (e.g. use a generation counter and ignore stale `resizeDoneMsg`).
+- [x] 2a: On `WindowSizeMsg` (after first), build a `tea.Sequence` that: (1) sends `tea.Raw("\033[2J\033[3J\033[H")` to clear screen+scrollback, (2) sends `tea.ClearScreen` to reset the renderer, (3) re-prints the logo + all `m.messages` via ordered `tea.Println` calls. Flush any pending `streamingText` into `m.messages` before reprinting so it's not lost.
+- [x] 2b: Debounce resize: if a new `WindowSizeMsg` arrives while a reprint sequence is in-flight, cancel the old one (e.g. use a generation counter and ignore stale `resizeDoneMsg`).
 
 ## Phase 3: Mode transitions
 
