@@ -2373,13 +2373,13 @@ func (a *App) appHandleCommand(input string) {
 		a.logoPrinted = true
 		a.renderer.printAbove(renderLogo())
 	case "/config":
-		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Config mode not yet ported."})
+		a.appEnterConfigMode()
 	case "/model":
-		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Model selection not yet ported."})
+		a.appEnterModelMode()
 	case "/branches":
-		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Branch selection not yet ported."})
+		a.appEnterBranchMode()
 	case "/worktrees":
-		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Worktree selection not yet ported."})
+		a.appEnterWorktreeMode()
 	case "/shell":
 		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Shell mode not yet ported."})
 	default:
@@ -2432,33 +2432,244 @@ func (a *App) appStartAgent(userMessage string) {
 	go agent.Run(context.Background(), userMessage, parentNodeID)
 }
 
-// Mode-specific key handlers (stubs — ported in phase 5)
+// --- Alt-screen mode enter/exit ---
+
+func (a *App) appEnterConfigMode() {
+	a.mode = modeConfig
+	a.configForm = newConfigForm(a.config, a.width, a.height)
+	a.textarea.Reset()
+	a.textarea.SetHeight(minInputHeight)
+	a.textarea.Blur()
+	a.renderer.enterAltScreen()
+}
+
+func (a *App) appExitConfigMode(save bool) {
+	a.renderer.exitAltScreen()
+	a.mode = modeChat
+	if save {
+		a.configForm.applyTo(&a.config)
+		if err := saveConfig(a.config); err != nil {
+			a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error saving config: %v", err)})
+		} else {
+			a.messages = append(a.messages, chatMessage{kind: msgSuccess, content: "Config saved."})
+			// Reinitialize langdag client with new API keys
+			if a.langdagClient != nil {
+				a.langdagClient.Close()
+				a.langdagClient = nil
+				a.langdagProvider = ""
+			}
+			cfg := a.config
+			go func() {
+				client, err := newLangdagClient(cfg)
+				a.resultCh <- langdagReadyMsg{client: client, provider: cfg.defaultLangdagProvider(), err: err}
+			}()
+		}
+	} else {
+		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Config changes discarded."})
+	}
+	a.textarea.Focus()
+}
+
+func (a *App) appEnterModelMode() {
+	if !a.modelsLoaded {
+		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Models are still loading... please try again in a moment."})
+		return
+	}
+	if a.modelsErr != nil {
+		a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Failed to load models: %v", a.modelsErr)})
+		return
+	}
+	available := a.config.availableModels(a.models)
+	if len(available) == 0 {
+		a.messages = append(a.messages, chatMessage{kind: msgError, content: "No API keys configured. Use /config to add a key first."})
+		return
+	}
+	a.mode = modeModel
+	activeModel := a.config.resolveActiveModel(a.models)
+	a.modelList = newModelList(available, activeModel, a.width, a.height, a.config.ModelSortDirs)
+	a.textarea.Reset()
+	a.textarea.SetHeight(minInputHeight)
+	a.textarea.Blur()
+	a.renderer.enterAltScreen()
+}
+
+func (a *App) appExitModelMode(save bool) {
+	a.renderer.exitAltScreen()
+	a.mode = modeChat
+	a.config.ModelSortDirs = a.modelList.sortDirsMap()
+	if save {
+		selected := a.modelList.selected()
+		a.config.ActiveModel = selected.ID
+		if err := saveConfig(a.config); err != nil {
+			a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error saving model: %v", err)})
+		} else {
+			a.messages = append(a.messages, chatMessage{kind: msgSuccess, content: fmt.Sprintf("Model set to %s.", selected.DisplayName)})
+		}
+	} else {
+		_ = saveConfig(a.config)
+		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Model selection cancelled."})
+	}
+	a.textarea.Focus()
+}
+
+func (a *App) appEnterWorktreeMode() {
+	a.mode = modeWorktrees
+	a.worktreeListC = newWorktreeList(nil, a.worktreePath, a.width, a.height)
+	a.textarea.Reset()
+	a.textarea.SetHeight(minInputHeight)
+	a.textarea.Blur()
+	a.renderer.enterAltScreen()
+
+	repoRoot := gitRepoRoot()
+	go func() {
+		if repoRoot == "" {
+			a.resultCh <- worktreeListMsg{err: fmt.Errorf("not in a git repository")}
+			return
+		}
+		projectID, err := ensureProjectID(repoRoot)
+		if err != nil {
+			a.resultCh <- worktreeListMsg{err: err}
+			return
+		}
+		baseDir := worktreeBaseDir(projectID)
+		items, err := listWorktrees(baseDir)
+		a.resultCh <- worktreeListMsg{items: items, err: err}
+	}()
+}
+
+func (a *App) appExitWorktreeMode() {
+	a.renderer.exitAltScreen()
+	a.mode = modeChat
+	a.textarea.Focus()
+}
+
+func (a *App) appEnterBranchMode() {
+	a.mode = modeBranches
+	a.branchListC = newBranchList(nil, a.status.Branch, a.width, a.height)
+	a.textarea.Reset()
+	a.textarea.SetHeight(minInputHeight)
+	a.textarea.Blur()
+	a.renderer.enterAltScreen()
+
+	wtPath := a.worktreePath
+	go func() {
+		dir := wtPath
+		if dir == "" {
+			dir = "."
+		}
+		headCmd := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD")
+		headOut, err := headCmd.Output()
+		if err != nil {
+			a.resultCh <- branchListMsg{err: fmt.Errorf("not in a git repository")}
+			return
+		}
+		currentBranch := strings.TrimSpace(string(headOut))
+
+		branchCmd := exec.Command("git", "-C", dir, "branch", "-a", "--format=%(refname:short)")
+		branchOut, err := branchCmd.Output()
+		if err != nil {
+			a.resultCh <- branchListMsg{err: fmt.Errorf("failed to list branches: %w", err)}
+			return
+		}
+		var branches []string
+		for _, line := range strings.Split(strings.TrimSpace(string(branchOut)), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				branches = append(branches, line)
+			}
+		}
+		a.resultCh <- branchListMsg{items: branches, currentBranch: currentBranch}
+	}()
+}
+
+func (a *App) appExitBranchMode() {
+	a.renderer.exitAltScreen()
+	a.mode = modeChat
+	a.textarea.Focus()
+}
+
+// --- Alt-screen mode key handlers ---
 
 func (a *App) handleConfigKey(key EventKey) {
-	if key.Key == KeyEscape || (key.Key == KeyRune && key.Mod&ModCtrl != 0 && key.Rune == 'c') {
-		a.mode = modeChat
-		a.textarea.Focus()
+	switch key.Key {
+	case KeyEscape:
+		a.appExitConfigMode(false)
+		return
+	case KeyRune:
+		if key.Mod&ModCtrl != 0 && key.Rune == 'c' {
+			a.appExitConfigMode(false)
+			return
+		}
+	case KeyEnter:
+		if a.configForm.validate() {
+			a.appExitConfigMode(true)
+			return
+		}
+		return
 	}
+	a.configForm.HandleKey(key)
 }
 
 func (a *App) handleModelKey(key EventKey) {
-	if key.Key == KeyEscape || (key.Key == KeyRune && key.Mod&ModCtrl != 0 && key.Rune == 'c') {
-		a.mode = modeChat
-		a.textarea.Focus()
+	switch key.Key {
+	case KeyEscape:
+		a.appExitModelMode(false)
+		return
+	case KeyRune:
+		if key.Mod&ModCtrl != 0 && key.Rune == 'c' {
+			a.appExitModelMode(false)
+			return
+		}
+	case KeyEnter:
+		a.appExitModelMode(true)
+		return
 	}
+	a.modelList.HandleKey(key)
 }
 
 func (a *App) handleWorktreeKey(key EventKey) {
-	if key.Key == KeyEscape || (key.Key == KeyRune && key.Mod&ModCtrl != 0 && key.Rune == 'c') {
-		a.mode = modeChat
-		a.textarea.Focus()
+	switch key.Key {
+	case KeyEscape:
+		a.appExitWorktreeMode()
+		return
+	case KeyRune:
+		if key.Mod&ModCtrl != 0 && key.Rune == 'c' {
+			a.appExitWorktreeMode()
+			return
+		}
 	}
+	a.worktreeListC.HandleKey(key)
 }
 
 func (a *App) handleBranchKey(key EventKey) {
-	if key.Key == KeyEscape || (key.Key == KeyRune && key.Mod&ModCtrl != 0 && key.Rune == 'c') {
-		a.mode = modeChat
-		a.textarea.Focus()
+	switch key.Key {
+	case KeyEscape:
+		a.appExitBranchMode()
+		return
+	case KeyRune:
+		if key.Mod&ModCtrl != 0 && key.Rune == 'c' {
+			a.appExitBranchMode()
+			return
+		}
+	}
+	a.branchListC.HandleKey(key)
+	if sel := a.branchListC.selected; sel != "" {
+		a.branchListC.selected = "" // consume
+		branch := sel
+		wtPath := a.worktreePath
+		go func() {
+			dir := wtPath
+			if dir == "" {
+				dir = "."
+			}
+			cmd := exec.Command("git", "-C", dir, "checkout", branch)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				a.resultCh <- branchCheckoutMsg{branch: branch, err: fmt.Errorf("%s", strings.TrimSpace(string(out)))}
+			} else {
+				a.resultCh <- branchCheckoutMsg{branch: branch}
+			}
+		}()
 	}
 }
 
@@ -2484,7 +2695,28 @@ func (a *App) handleResize(resize EventResize) {
 	a.width = resize.Width
 	a.height = resize.Height
 	a.textarea.SetWidth(a.inputAreaWidth())
-	// Reprint scrollback at new width
+
+	// Update alt-screen component sizes
+	switch a.mode {
+	case modeConfig:
+		a.configForm.width = a.width
+		a.configForm.height = a.height
+		return
+	case modeModel:
+		a.modelList.width = a.width
+		a.modelList.height = a.height
+		return
+	case modeWorktrees:
+		a.worktreeListC.width = a.width
+		a.worktreeListC.height = a.height
+		return
+	case modeBranches:
+		a.branchListC.width = a.width
+		a.branchListC.height = a.height
+		return
+	}
+
+	// Chat mode: reprint scrollback at new width
 	if a.logoPrinted || a.printedMsgCount > 0 {
 		a.renderer.clearAll()
 		a.renderer.printAbove(renderLogo())
@@ -2545,6 +2777,7 @@ func (a *App) handleResult(result any) {
 
 	case worktreeListMsg:
 		if msg.err != nil {
+			a.renderer.exitAltScreen()
 			a.mode = modeChat
 			a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error listing worktrees: %v", msg.err)})
 			a.textarea.Focus()
@@ -2554,6 +2787,7 @@ func (a *App) handleResult(result any) {
 
 	case branchListMsg:
 		if msg.err != nil {
+			a.renderer.exitAltScreen()
 			a.mode = modeChat
 			a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error listing branches: %v", msg.err)})
 			a.textarea.Focus()
@@ -2562,6 +2796,7 @@ func (a *App) handleResult(result any) {
 		}
 
 	case branchCheckoutMsg:
+		a.renderer.exitAltScreen()
 		a.mode = modeChat
 		if msg.err != nil {
 			a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Checkout failed: %v", msg.err)})
@@ -2823,6 +3058,23 @@ func (a *App) render() {
 	if !a.ready {
 		return
 	}
+
+	// Alt-screen modes render their own content
+	switch a.mode {
+	case modeConfig:
+		a.renderConfigScreen()
+		return
+	case modeModel:
+		a.renderModelScreen()
+		return
+	case modeWorktrees:
+		a.renderWorktreeScreen()
+		return
+	case modeBranches:
+		a.renderBranchScreen()
+		return
+	}
+
 	a.printNewMessages()
 
 	// Build input box with gradient border
@@ -2889,6 +3141,74 @@ func (a *App) render() {
 	activeLines := strings.Split(activeContent, "\n")
 
 	a.renderer.renderActiveArea(activeLines, cx, cy)
+}
+
+// --- Alt-screen rendering ---
+
+func (a *App) renderAltScreen(content string) {
+	// Clear alt screen and write content
+	fmt.Fprint(a.renderer.out, "\033[2J\033[H") // clear + home
+	fmt.Fprint(a.renderer.out, content)
+	a.renderer.out.Flush()
+}
+
+func (a *App) renderConfigScreen() {
+	formBorder := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForegroundBlend(borderGradientColors...).
+		Width(a.width).
+		Padding(1, 0)
+
+	formContent := a.configForm.View()
+	rendered := formBorder.Render(formContent)
+
+	// Center vertically
+	formHeight := lipgloss.Height(rendered)
+	padding := (a.height - formHeight) / 2
+	if padding < 0 {
+		padding = 0
+	}
+
+	a.renderAltScreen(strings.Repeat("\n", padding) + rendered)
+}
+
+func (a *App) renderModelScreen() {
+	formBorder := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForegroundBlend(borderGradientColors...).
+		Width(a.width).
+		Height(a.height - 2).
+		Padding(1, 0)
+
+	formContent := a.modelList.View()
+	rendered := formBorder.Render(formContent)
+	a.renderAltScreen(rendered)
+}
+
+func (a *App) renderWorktreeScreen() {
+	formBorder := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForegroundBlend(borderGradientColors...).
+		Width(a.width).
+		Height(a.height - 2).
+		Padding(1, 0)
+
+	formContent := a.worktreeListC.View()
+	rendered := formBorder.Render(formContent)
+	a.renderAltScreen(rendered)
+}
+
+func (a *App) renderBranchScreen() {
+	formBorder := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForegroundBlend(borderGradientColors...).
+		Width(a.width).
+		Height(a.height - 2).
+		Padding(1, 0)
+
+	formContent := a.branchListC.View()
+	rendered := formBorder.Render(formContent)
+	a.renderAltScreen(rendered)
 }
 
 func (a *App) cleanup() {
