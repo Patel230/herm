@@ -2381,9 +2381,71 @@ func (a *App) appHandleCommand(input string) {
 	case "/worktrees":
 		a.appEnterWorktreeMode()
 	case "/shell":
-		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Shell mode not yet ported."})
+		a.appEnterShellMode()
 	default:
 		a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Unknown command: %s", cmd)})
+	}
+}
+
+func (a *App) appEnterShellMode() {
+	if a.containerErr != nil {
+		a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Container error: %v", a.containerErr)})
+		return
+	}
+	if !a.containerReady {
+		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Container is starting... please try again in a moment."})
+		return
+	}
+
+	// Stop input reader and resize watcher.
+	close(a.stopCh)
+
+	// Restore terminal from raw mode so the shell gets a normal terminal.
+	a.renderer.disableBracketedPaste()
+	a.renderer.clearActiveArea()
+	a.renderer.showCursor()
+	restoreTerminal(a.term)
+
+	// Run the shell synchronously — it owns stdin/stdout/stderr.
+	shellCmd := a.container.ShellCmd()
+	shellErr := shellCmd.Run()
+
+	// Re-enter raw mode.
+	ts, err := enterRawMode()
+	if err != nil {
+		// Fatal: can't recover the TUI.
+		fmt.Fprintf(os.Stderr, "failed to re-enter raw mode: %v\n", err)
+		a.quit = true
+		return
+	}
+	a.term = ts
+
+	// Restart background goroutines with a fresh stop channel.
+	a.stopCh = make(chan struct{})
+	go readInput(a.keyCh, a.pasteCh, a.stopCh)
+	go watchResize(a.resizeCh, a.stopCh)
+
+	a.renderer.enableBracketedPaste()
+
+	// Re-query terminal size.
+	if w, h, err := getTerminalSize(); err == nil {
+		a.width = w
+		a.height = h
+		a.textarea.SetWidth(a.inputAreaWidth())
+	}
+
+	// Reprint scrollback.
+	a.renderer.clearAll()
+	a.renderer.printAbove(renderLogo())
+	for i := 0; i < len(a.messages); i++ {
+		a.renderer.printAbove(renderMessage(a.messages[i], a.width))
+	}
+	a.printedMsgCount = len(a.messages)
+
+	if shellErr != nil {
+		a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Shell error: %v", shellErr)})
+	} else {
+		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Shell session ended."})
 	}
 }
 
@@ -2806,12 +2868,7 @@ func (a *App) handleResult(result any) {
 		}
 		a.textarea.Focus()
 
-	case shellExitMsg:
-		if msg.err != nil {
-			a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Shell error: %v", msg.err)})
-		} else {
-			a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Shell session ended."})
-		}
+	// shellExitMsg no longer used — shell runs synchronously in appEnterShellMode
 	}
 }
 

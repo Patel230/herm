@@ -176,9 +176,9 @@ Port config, model, worktree, and branch selection screens.
 
 Port the remaining interactive features.
 
-- [ ] 6a: Port `/shell` command: save terminal state, spawn shell process with inherited stdin/stdout/stderr (using `os/exec` with `Cmd.Stdin/Stdout/Stderr = os.Stdin/Stdout/Stderr`), wait for exit, restore raw mode, reprint scrollback.
-- [ ] 6b: Port agent event handling: the agent event channel integration. `listenForAgentEvent` becomes a direct channel read in the event loop select. `handleAgentEvent` logic stays the same but uses direct rendering calls instead of returning tea.Cmd.
-- [ ] 6c: Port approval flow: when agent requests approval, render the prompt in the active area, handle y/n key events directly.
+- [x] 6a: Port `/shell` command: save terminal state, spawn shell process with inherited stdin/stdout/stderr (using `os/exec` with `Cmd.Stdin/Stdout/Stderr = os.Stdin/Stdout/Stderr`), wait for exit, restore raw mode, reprint scrollback.
+- [x] 6b: Port agent event handling: the agent event channel integration. `listenForAgentEvent` becomes a direct channel read in the event loop select. `handleAgentEvent` logic stays the same but uses direct rendering calls instead of returning tea.Cmd.
+- [x] 6c: Port approval flow: when agent requests approval, render the prompt in the active area, handle y/n key events directly.
 
 ## Phase 7: Update tests
 
