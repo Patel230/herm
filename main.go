@@ -1052,6 +1052,8 @@ func (m model) exitConfigMode(save bool) (tea.Model, tea.Cmd) {
 	} else {
 		m.messages = append(m.messages, chatMessage{kind: msgInfo, content: "Config changes discarded."})
 	}
+	// Re-print all messages to restore scrollback after alt-screen
+	cmds = append(cmds, m.reprintAllCmd())
 	cmds = append(cmds, m.textarea.Focus())
 	return m, tea.Batch(cmds...)
 }
@@ -1132,7 +1134,8 @@ func (m model) exitModelMode(save bool) (tea.Model, tea.Cmd) {
 		_ = saveConfig(m.config)
 		m.messages = append(m.messages, chatMessage{kind: msgInfo, content: "Model selection cancelled."})
 	}
-	return m, m.textarea.Focus()
+	// Re-print all messages to restore scrollback after alt-screen
+	return m, tea.Batch(m.reprintAllCmd(), m.textarea.Focus())
 }
 
 // updateModelMode handles input while the model list is active.
@@ -1186,7 +1189,8 @@ func (m model) enterWorktreeMode() (tea.Model, tea.Cmd) {
 // exitWorktreeMode returns to chat mode.
 func (m model) exitWorktreeMode() (tea.Model, tea.Cmd) {
 	m.mode = modeChat
-	return m, m.textarea.Focus()
+	// Re-print all messages to restore scrollback after alt-screen
+	return m, tea.Batch(m.reprintAllCmd(), m.textarea.Focus())
 }
 
 // updateWorktreeMode handles input while the worktree list is active.
@@ -1271,7 +1275,8 @@ func (m model) enterBranchMode() (tea.Model, tea.Cmd) {
 // exitBranchMode returns to chat mode.
 func (m model) exitBranchMode() (tea.Model, tea.Cmd) {
 	m.mode = modeChat
-	return m, m.textarea.Focus()
+	// Re-print all messages to restore scrollback after alt-screen
+	return m, tea.Batch(m.reprintAllCmd(), m.textarea.Focus())
 }
 
 // updateBranchMode handles input while the branch list is active.

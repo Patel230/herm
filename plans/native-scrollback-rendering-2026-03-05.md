@@ -74,7 +74,7 @@ Replace viewport-based chat rendering with native terminal scrollback. Bubbletea
 
 ## Phase 3: Mode transitions
 
-- [ ] 3a: When exiting alt-screen modes (config, model, worktrees, branches) back to chat, re-print all messages to restore scrollback. Use the same reprint sequence as resize.
+- [x] 3a: When exiting alt-screen modes (config, model, worktrees, branches) back to chat, re-print all messages to restore scrollback. Use the same reprint sequence as resize.
 
 ## Phase 4: Update tests
 
