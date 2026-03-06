@@ -1810,37 +1810,19 @@ func TestSortDirsSavedToConfig(t *testing.T) {
 	}
 }
 
-func TestResizeReturnsCmd(t *testing.T) {
+func TestResizePreservesScrollback(t *testing.T) {
 	m := initialModel()
-	m = resize(m, 80, 24) // first resize — prints logo
+	m = resize(m, 80, 24)
 
-	// Add some messages
+	// Add some messages and mark as printed
 	m.messages = append(m.messages, chatMessage{kind: msgUser, content: "hello", leadBlank: true})
 	m.messages = append(m.messages, chatMessage{kind: msgAssistant, content: "world"})
 	m.printedMsgCount = len(m.messages)
 
-	// Second resize should return a reprint cmd
-	_, cmd := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	if cmd == nil {
-		t.Fatal("resize after first should return a reprint cmd")
-	}
-}
-
-func TestResizePrintedMsgCountReset(t *testing.T) {
-	m := initialModel()
-	m = resize(m, 80, 24)
-
-	// Add messages and mark them as printed
-	m.messages = append(m.messages, chatMessage{kind: msgUser, content: "hello"})
-	m.messages = append(m.messages, chatMessage{kind: msgAssistant, content: "world"})
-	m.printedMsgCount = 2
-
-	// Resize should reset printedMsgCount via reprintAllCmd
+	// Resize should NOT reset printedMsgCount — scrollback is preserved
 	m = resize(m, 100, 30)
-
-	// printedMsgCount should equal len(messages) since reprintAllCmd sets it
-	if m.printedMsgCount != len(m.messages) {
-		t.Errorf("printedMsgCount = %d, want %d", m.printedMsgCount, len(m.messages))
+	if m.printedMsgCount != 2 {
+		t.Errorf("printedMsgCount = %d, want 2 (resize should not reprint)", m.printedMsgCount)
 	}
 }
 
@@ -1914,9 +1896,9 @@ func TestExitConfigModeReturnsCmds(t *testing.T) {
 	m = typeString(m, "/config")
 	m = sendKey(m, tea.KeyEnter)
 
-	// Exit config mode — should return reprint cmd
+	// Exit config mode — should return a cmd (focus)
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if cmd == nil {
-		t.Fatal("exiting config mode should return a cmd (reprint + focus)")
+		t.Fatal("exiting config mode should return a cmd (focus)")
 	}
 }

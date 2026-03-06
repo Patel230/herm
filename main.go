@@ -165,7 +165,6 @@ type model struct {
 	pendingToolCall  string // tool call summary waiting for result
 	needsTextSep     bool   // true when next assistant text output needs a blank line before it
 	logoPrinted      bool   // true after logo has been printed via tea.Println
-	reprintGen       int    // generation counter for resize reprint debouncing
 	printedMsgCount  int    // number of messages already printed via tea.Println
 }
 
@@ -331,24 +330,6 @@ func (m model) renderMessages() string {
 	return strings.Join(parts, "\n")
 }
 
-// reprintAllCmd builds a tea.Sequence that clears screen+scrollback, then
-// re-prints the logo and all messages via tea.Println.
-func (m *model) reprintAllCmd() tea.Cmd {
-	var cmds []tea.Cmd
-	cmds = append(cmds, tea.Raw("\033[2J\033[3J\033[H"))
-	cmds = append(cmds, tea.ClearScreen)
-	cmds = append(cmds, tea.Println(renderLogo()))
-	for _, msg := range m.messages {
-		cmds = append(cmds, tea.Println(renderMessage(msg, m.width)))
-	}
-	// If there's streaming text, flush it as a println too so it's not lost
-	if m.streamingText != "" {
-		cmds = append(cmds, tea.Println(styledAssistantText(m.streamingText, m.width)))
-	}
-	// Mark all messages as printed since we're reprinting everything
-	m.printedMsgCount = len(m.messages)
-	return tea.Sequence(cmds...)
-}
 
 // renderStreamingText renders the trailing incomplete line with assistant styling.
 func (m model) renderStreamingText() string {
@@ -897,10 +878,6 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Print logo on first resize
 			m.logoPrinted = true
 			cmds = append(cmds, tea.Println(renderLogo()))
-		} else {
-			// Subsequent resizes: clear and reprint everything
-			m.reprintGen++
-			cmds = append(cmds, m.reprintAllCmd())
 		}
 		m.recalcTextareaHeight()
 
@@ -1052,8 +1029,6 @@ func (m model) exitConfigMode(save bool) (tea.Model, tea.Cmd) {
 	} else {
 		m.messages = append(m.messages, chatMessage{kind: msgInfo, content: "Config changes discarded."})
 	}
-	// Re-print all messages to restore scrollback after alt-screen
-	cmds = append(cmds, m.reprintAllCmd())
 	cmds = append(cmds, m.textarea.Focus())
 	return m, tea.Batch(cmds...)
 }
@@ -1134,8 +1109,7 @@ func (m model) exitModelMode(save bool) (tea.Model, tea.Cmd) {
 		_ = saveConfig(m.config)
 		m.messages = append(m.messages, chatMessage{kind: msgInfo, content: "Model selection cancelled."})
 	}
-	// Re-print all messages to restore scrollback after alt-screen
-	return m, tea.Batch(m.reprintAllCmd(), m.textarea.Focus())
+	return m, m.textarea.Focus()
 }
 
 // updateModelMode handles input while the model list is active.
@@ -1189,8 +1163,7 @@ func (m model) enterWorktreeMode() (tea.Model, tea.Cmd) {
 // exitWorktreeMode returns to chat mode.
 func (m model) exitWorktreeMode() (tea.Model, tea.Cmd) {
 	m.mode = modeChat
-	// Re-print all messages to restore scrollback after alt-screen
-	return m, tea.Batch(m.reprintAllCmd(), m.textarea.Focus())
+	return m, m.textarea.Focus()
 }
 
 // updateWorktreeMode handles input while the worktree list is active.
@@ -1275,8 +1248,7 @@ func (m model) enterBranchMode() (tea.Model, tea.Cmd) {
 // exitBranchMode returns to chat mode.
 func (m model) exitBranchMode() (tea.Model, tea.Cmd) {
 	m.mode = modeChat
-	// Re-print all messages to restore scrollback after alt-screen
-	return m, tea.Batch(m.reprintAllCmd(), m.textarea.Focus())
+	return m, m.textarea.Focus()
 }
 
 // updateBranchMode handles input while the branch list is active.
