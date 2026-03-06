@@ -434,6 +434,11 @@ type branchListMsg struct {
 	err           error
 }
 
+// branchSelected is returned when the user presses Enter on a branch.
+type branchSelected struct {
+	name string
+}
+
 // branchCheckoutMsg carries the result of a git checkout operation.
 type branchCheckoutMsg struct {
 	branch string
@@ -1162,11 +1167,10 @@ func (m model) updateModelMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			return m.exitModelMode(true)
 		}
+		m.modelList.HandleKey(teaKeyToEventKey(msg))
 	}
 
-	var cmd tea.Cmd
-	m.modelList, cmd = m.modelList.Update(msg)
-	return m, cmd
+	return m, nil
 }
 
 // enterWorktreeMode switches to the worktree list mode.
@@ -1215,11 +1219,10 @@ func (m model) updateWorktreeMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc", "ctrl+c":
 			return m.exitWorktreeMode()
 		}
+		m.worktreeListC.HandleKey(teaKeyToEventKey(msg))
 	}
 
-	var cmd tea.Cmd
-	m.worktreeListC, cmd = m.worktreeListC.Update(msg)
-	return m, cmd
+	return m, nil
 }
 
 // viewWorktrees renders the worktree list screen.
@@ -1301,31 +1304,30 @@ func (m model) updateBranchMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc", "ctrl+c":
 			return m.exitBranchMode()
 		}
-
-	case branchSelected:
-		// Run git checkout async
-		branch := msg.name
-		wtPath := m.worktreePath
-		return m, func() tea.Msg {
-			dir := wtPath
-			if dir == "" {
-				dir = "."
-			}
-			cmd := exec.Command("git", "-C", dir, "checkout", branch)
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				return branchCheckoutMsg{
-					branch: branch,
-					err:    fmt.Errorf("%s", strings.TrimSpace(string(out))),
+		m.branchListC.HandleKey(teaKeyToEventKey(msg))
+		if sel := m.branchListC.selected; sel != "" {
+			m.branchListC.selected = "" // consume
+			branch := sel
+			wtPath := m.worktreePath
+			return m, func() tea.Msg {
+				dir := wtPath
+				if dir == "" {
+					dir = "."
 				}
+				cmd := exec.Command("git", "-C", dir, "checkout", branch)
+				out, err := cmd.CombinedOutput()
+				if err != nil {
+					return branchCheckoutMsg{
+						branch: branch,
+						err:    fmt.Errorf("%s", strings.TrimSpace(string(out))),
+					}
+				}
+				return branchCheckoutMsg{branch: branch}
 			}
-			return branchCheckoutMsg{branch: branch}
 		}
 	}
 
-	var cmd tea.Cmd
-	m.branchListC, cmd = m.branchListC.Update(msg)
-	return m, cmd
+	return m, nil
 }
 
 // viewBranches renders the branch list screen.
@@ -1927,6 +1929,56 @@ func (m model) viewModel() tea.View {
 	v := tea.NewView(rendered)
 	v.AltScreen = true
 	return v
+}
+
+// teaKeyToEventKey converts a bubbletea key message to an EventKey.
+// Used by old model code paths to forward keys to the new HandleKey methods.
+func teaKeyToEventKey(msg tea.KeyPressMsg) EventKey {
+	var key Key
+	var mod Modifier
+	var r rune
+
+	switch msg.Code {
+	case tea.KeyUp:
+		key = KeyUp
+	case tea.KeyDown:
+		key = KeyDown
+	case tea.KeyLeft:
+		key = KeyLeft
+	case tea.KeyRight:
+		key = KeyRight
+	case tea.KeyEnter:
+		key = KeyEnter
+	case tea.KeyBackspace:
+		key = KeyBackspace
+	case tea.KeyDelete:
+		key = KeyDelete
+	case tea.KeyEscape:
+		key = KeyEscape
+	case tea.KeyTab:
+		key = KeyTab
+	case tea.KeyHome:
+		key = KeyHome
+	case tea.KeyEnd:
+		key = KeyEnd
+	default:
+		key = KeyRune
+		if msg.Text != "" {
+			r = []rune(msg.Text)[0]
+		} else {
+			r = rune(msg.Code)
+		}
+	}
+	if msg.Mod&tea.ModShift != 0 {
+		mod |= ModShift
+	}
+	if msg.Mod&tea.ModCtrl != 0 {
+		mod |= ModCtrl
+	}
+	if msg.Mod&tea.ModAlt != 0 {
+		mod |= ModAlt
+	}
+	return EventKey{Key: key, Rune: r, Mod: mod}
 }
 
 // ─── App: custom terminal engine (replaces bubbletea program + model) ───

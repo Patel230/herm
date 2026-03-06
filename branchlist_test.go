@@ -17,25 +17,25 @@ func TestBranchListNavigation(t *testing.T) {
 	}
 
 	// Move down
-	bl, _ = bl.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	bl.HandleKey(EventKey{Key: KeyDown})
 	if bl.cursor != 1 {
 		t.Errorf("after down: cursor = %d, want 1", bl.cursor)
 	}
 
 	// Move down again
-	bl, _ = bl.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	bl.HandleKey(EventKey{Key: KeyDown})
 	if bl.cursor != 2 {
 		t.Errorf("after second down: cursor = %d, want 2", bl.cursor)
 	}
 
 	// Down at bottom stays at bottom
-	bl, _ = bl.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	bl.HandleKey(EventKey{Key: KeyDown})
 	if bl.cursor != 2 {
 		t.Errorf("down at bottom: cursor = %d, want 2", bl.cursor)
 	}
 
 	// Move up
-	bl, _ = bl.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	bl.HandleKey(EventKey{Key: KeyUp})
 	if bl.cursor != 1 {
 		t.Errorf("after up: cursor = %d, want 1", bl.cursor)
 	}
@@ -51,7 +51,7 @@ func TestBranchListFilterNarrowsResults(t *testing.T) {
 
 	// Type "feature" into the filter input
 	for _, r := range "feature" {
-		bl, _ = bl.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		bl.HandleKey(EventKey{Key: KeyRune, Rune: r})
 	}
 
 	if len(bl.filtered) != 2 {
@@ -74,7 +74,7 @@ func TestBranchListFilterCaseInsensitive(t *testing.T) {
 	bl := newBranchList(branches, "main", 80, 24)
 
 	for _, r := range "feature" {
-		bl, _ = bl.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		bl.HandleKey(EventKey{Key: KeyRune, Rune: r})
 	}
 
 	if len(bl.filtered) != 2 {
@@ -87,23 +87,13 @@ func TestBranchListEnterTriggersSelection(t *testing.T) {
 	bl := newBranchList(branches, "main", 80, 24)
 
 	// Move to feature-a
-	bl, _ = bl.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	bl.HandleKey(EventKey{Key: KeyDown})
 
 	// Press Enter
-	var cmd tea.Cmd
-	bl, cmd = bl.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	bl.HandleKey(EventKey{Key: KeyEnter})
 
-	if cmd == nil {
-		t.Fatal("enter should return a command")
-	}
-
-	msg := cmd()
-	sel, ok := msg.(branchSelected)
-	if !ok {
-		t.Fatalf("command should produce branchSelected, got %T", msg)
-	}
-	if sel.name != "feature-a" {
-		t.Errorf("selected branch = %q, want %q", sel.name, "feature-a")
+	if bl.selected != "feature-a" {
+		t.Errorf("selected = %q, want %q", bl.selected, "feature-a")
 	}
 }
 
@@ -113,17 +103,16 @@ func TestBranchListEnterOnEmptyFilteredNoop(t *testing.T) {
 
 	// Type something that matches nothing
 	for _, r := range "zzz" {
-		bl, _ = bl.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		bl.HandleKey(EventKey{Key: KeyRune, Rune: r})
 	}
 
 	if len(bl.filtered) != 0 {
 		t.Fatalf("filtered should be empty, got %d", len(bl.filtered))
 	}
 
-	var cmd tea.Cmd
-	bl, cmd = bl.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if cmd != nil {
-		t.Error("enter on empty filtered list should return nil cmd")
+	bl.HandleKey(EventKey{Key: KeyEnter})
+	if bl.selected != "" {
+		t.Errorf("selected should be empty on empty list, got %q", bl.selected)
 	}
 }
 
@@ -166,7 +155,7 @@ func TestBranchListNoMatchingFilter(t *testing.T) {
 	bl := newBranchList(branches, "main", 80, 24)
 
 	for _, r := range "zzz" {
-		bl, _ = bl.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		bl.HandleKey(EventKey{Key: KeyRune, Rune: r})
 	}
 
 	view := bl.View()

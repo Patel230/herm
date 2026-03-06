@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
-	"charm.land/bubbles/v2/textinput"
 	"charm.land/lipgloss/v2"
 )
 
@@ -15,15 +13,11 @@ type branchList struct {
 	filtered      []string // branches matching the current filter
 	cursor        int
 	scroll        int
-	filterInput   textinput.Model
+	filterInput   *TextInput
 	currentBranch string // the branch checked out in the current worktree
 	width         int
 	height        int
-}
-
-// branchSelected is returned when the user presses Enter on a branch.
-type branchSelected struct {
-	name string
+	selected      string // set when user presses enter
 }
 
 const branchListChrome = 12 // border + padding + title + filter input + hint
@@ -37,16 +31,9 @@ func (l branchList) visibleRows() int {
 }
 
 func newBranchList(items []string, currentBranch string, width, height int) branchList {
-	ti := textinput.New()
-	ti.Placeholder = "Filter branches..."
-	ti.Prompt = "  / "
+	ti := NewTextInput(false)
+	ti.SetWidth(40)
 	ti.Focus()
-
-	s := ti.Styles()
-	s.Focused.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#7B3EC7"))
-	s.Focused.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("#E0E0E0"))
-	s.Focused.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
-	ti.SetStyles(s)
 
 	bl := branchList{
 		items:         items,
@@ -89,45 +76,35 @@ func (l *branchList) applyFilter() {
 	l.scroll = 0
 }
 
-func (l branchList) Update(msg tea.Msg) (branchList, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		l.width = msg.Width
-		l.height = msg.Height
-		l.clampScroll()
-
-	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "up":
-			if l.cursor > 0 {
-				l.cursor--
-				l.clampScroll()
-			}
-			return l, nil
-		case "down":
-			if l.cursor < len(l.filtered)-1 {
-				l.cursor++
-				l.clampScroll()
-			}
-			return l, nil
-		case "enter":
-			if len(l.filtered) > 0 && l.cursor < len(l.filtered) {
-				return l, func() tea.Msg {
-					return branchSelected{name: l.filtered[l.cursor]}
-				}
-			}
-			return l, nil
+// HandleKey processes a key event. Returns true if consumed.
+func (l *branchList) HandleKey(key EventKey) bool {
+	switch key.Key {
+	case KeyUp:
+		if l.cursor > 0 {
+			l.cursor--
+			l.clampScroll()
 		}
+		return true
+	case KeyDown:
+		if l.cursor < len(l.filtered)-1 {
+			l.cursor++
+			l.clampScroll()
+		}
+		return true
+	case KeyEnter:
+		if len(l.filtered) > 0 && l.cursor < len(l.filtered) {
+			l.selected = l.filtered[l.cursor]
+		}
+		return true
 	}
 
 	// Forward to text input for filter typing
-	var cmd tea.Cmd
 	prevValue := l.filterInput.Value()
-	l.filterInput, cmd = l.filterInput.Update(msg)
+	handled := l.filterInput.HandleKey(key)
 	if l.filterInput.Value() != prevValue {
 		l.applyFilter()
 	}
-	return l, cmd
+	return handled
 }
 
 func (l branchList) View() string {
@@ -161,12 +138,23 @@ func (l branchList) View() string {
 
 	selectedRowStyle := lipgloss.NewStyle().Background(lipgloss.Color("#2A1545"))
 
+	promptStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#7B3EC7"))
+	filterTextStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#E0E0E0"))
+	placeholderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
+
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Branches"))
 	b.WriteString("\n")
 
 	// Filter input
-	b.WriteString(l.filterInput.View())
+	filterVal := l.filterInput.View()
+	if filterVal == "" {
+		b.WriteString(promptStyle.Render("  / "))
+		b.WriteString(placeholderStyle.Render("Filter branches..."))
+	} else {
+		b.WriteString(promptStyle.Render("  / "))
+		b.WriteString(filterTextStyle.Render(filterVal))
+	}
 	b.WriteString("\n\n")
 
 	// Empty filter results
@@ -190,12 +178,12 @@ func (l branchList) View() string {
 
 		for i := l.scroll; i < end; i++ {
 			branch := l.filtered[i]
-			selected := i == l.cursor
+			isSelected := i == l.cursor
 
 			var cursorStr string
 			nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
 
-			if selected {
+			if isSelected {
 				cursorStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#B88AFF")).Render("▸ ")
 				nameStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E0E0E0")).Bold(true)
 			} else {
@@ -212,7 +200,7 @@ func (l branchList) View() string {
 			}
 
 			b.WriteString(cursorStr)
-			if selected {
+			if isSelected {
 				b.WriteString(selectedRowStyle.Render(row.String()))
 			} else {
 				b.WriteString(row.String())

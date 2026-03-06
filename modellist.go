@@ -5,7 +5,6 @@ import (
 	"sort"
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -149,43 +148,72 @@ func (l *modelList) clampScroll() {
 	}
 }
 
-func (l modelList) Update(msg tea.Msg) (modelList, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		l.width = msg.Width
-		l.height = msg.Height
-		l.clampScroll()
-
-	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "up", "k":
+// HandleKey processes a key event. Returns true if consumed.
+func (l *modelList) HandleKey(key EventKey) bool {
+	if key.Key != KeyRune {
+		switch key.Key {
+		case KeyUp:
 			if l.cursor > 0 {
 				l.cursor--
 				l.clampScroll()
 			}
-		case "down", "j":
+			return true
+		case KeyDown:
 			if l.cursor < len(l.models)-1 {
 				l.cursor++
 				l.clampScroll()
 			}
-		case "left", "h":
+			return true
+		case KeyLeft:
 			selectedID := l.models[l.cursor].ID
 			l.sortCol = sortColumn((int(l.sortCol) - 1 + numSortColumns) % numSortColumns)
 			l.sortModels()
 			l.restoreCursor(selectedID)
-		case "right", "l":
+			return true
+		case KeyRight:
 			selectedID := l.models[l.cursor].ID
 			l.sortCol = sortColumn((int(l.sortCol) + 1) % numSortColumns)
 			l.sortModels()
 			l.restoreCursor(selectedID)
-		case "tab":
+			return true
+		case KeyTab:
 			selectedID := l.models[l.cursor].ID
 			l.sortDirs[l.sortCol] = !l.sortDirs[l.sortCol]
 			l.sortModels()
 			l.restoreCursor(selectedID)
+			return true
 		}
+		return false
 	}
-	return l, nil
+
+	// Handle rune shortcuts
+	switch key.Rune {
+	case 'k':
+		if l.cursor > 0 {
+			l.cursor--
+			l.clampScroll()
+		}
+		return true
+	case 'j':
+		if l.cursor < len(l.models)-1 {
+			l.cursor++
+			l.clampScroll()
+		}
+		return true
+	case 'h':
+		selectedID := l.models[l.cursor].ID
+		l.sortCol = sortColumn((int(l.sortCol) - 1 + numSortColumns) % numSortColumns)
+		l.sortModels()
+		l.restoreCursor(selectedID)
+		return true
+	case 'l':
+		selectedID := l.models[l.cursor].ID
+		l.sortCol = sortColumn((int(l.sortCol) + 1) % numSortColumns)
+		l.sortModels()
+		l.restoreCursor(selectedID)
+		return true
+	}
+	return false
 }
 
 // restoreCursor finds the model with the given ID and moves the cursor to it.
@@ -362,14 +390,14 @@ func (l modelList) View() string {
 
 	for i := l.scroll; i < end; i++ {
 		m := l.models[i]
-		selected := i == l.cursor
+		isSelected := i == l.cursor
 
 		var cursorStr string
 		nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
 		rowProvStyle := providerStyle
 		rowPriceStyle := priceStyle
 
-		if selected {
+		if isSelected {
 			cursorStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#B88AFF")).Render("▸ ")
 			nameStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E0E0E0")).Bold(true)
 			rowProvStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#AAAAAA"))
@@ -393,7 +421,7 @@ func (l modelList) View() string {
 		}
 
 		b.WriteString(cursorStr)
-		if selected {
+		if isSelected {
 			b.WriteString(selectedRowStyle.Render(row.String()))
 		} else {
 			b.WriteString(row.String())

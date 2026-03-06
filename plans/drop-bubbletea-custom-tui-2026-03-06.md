@@ -169,7 +169,7 @@ Port config, model, worktree, and branch selection screens.
 
 - [x] 5a: Implement alt-screen enter/exit in the renderer: `enterAltScreen()` writes `\033[?1049h`, `exitAltScreen()` writes `\033[?1049l`. On exit, the terminal automatically restores the main screen with scrollback intact.
 - [x] 5b: Port `configForm` to use the custom `TextInput` (single-line mode) instead of bubbles textinput. Port field navigation (tab/shift+tab), validation, save/discard. Update `configform.go`.
-- [ ] 5c: Port `branchList` to use custom `TextInput` for the filter input. Port `modelList` and `worktreeList` (these use only key events, no textinput). Update all four component files to use the new event types instead of tea.Msg.
+- [x] 5c: Port `branchList` to use custom `TextInput` for the filter input. Port `modelList` and `worktreeList` (these use only key events, no textinput). Update all four component files to use the new event types instead of tea.Msg.
 - [ ] 5d: Port the rendering for each alt-screen mode: config form, model list, worktree list, branch list. Each renders to a full-screen string using lipgloss, written via the renderer.
 
 ## Phase 6: Shell exec and agent integration

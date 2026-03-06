@@ -21,36 +21,36 @@ func TestWorktreeListNavigation(t *testing.T) {
 	}
 
 	// Move down
-	wl, _ = wl.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	wl.HandleKey(EventKey{Key: KeyDown})
 	if wl.cursor != 1 {
 		t.Errorf("after down: cursor = %d, want 1", wl.cursor)
 	}
 
 	// Move down again
-	wl, _ = wl.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	wl.HandleKey(EventKey{Key: KeyDown})
 	if wl.cursor != 2 {
 		t.Errorf("after second down: cursor = %d, want 2", wl.cursor)
 	}
 
 	// Down at bottom stays at bottom
-	wl, _ = wl.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	wl.HandleKey(EventKey{Key: KeyDown})
 	if wl.cursor != 2 {
 		t.Errorf("down at bottom: cursor = %d, want 2", wl.cursor)
 	}
 
 	// Move up
-	wl, _ = wl.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	wl.HandleKey(EventKey{Key: KeyUp})
 	if wl.cursor != 1 {
 		t.Errorf("after up: cursor = %d, want 1", wl.cursor)
 	}
 
 	// j/k navigation
-	wl, _ = wl.Update(tea.KeyPressMsg{Code: 'k', Text: "k"})
+	wl.HandleKey(EventKey{Key: KeyRune, Rune: 'k'})
 	if wl.cursor != 0 {
 		t.Errorf("after k: cursor = %d, want 0", wl.cursor)
 	}
 
-	wl, _ = wl.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	wl.HandleKey(EventKey{Key: KeyRune, Rune: 'j'})
 	if wl.cursor != 1 {
 		t.Errorf("after j: cursor = %d, want 1", wl.cursor)
 	}

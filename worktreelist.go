@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -50,28 +49,38 @@ func (l *worktreeList) clampScroll() {
 	}
 }
 
-func (l worktreeList) Update(msg tea.Msg) (worktreeList, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		l.width = msg.Width
-		l.height = msg.Height
-		l.clampScroll()
-
-	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "up", "k":
+// HandleKey processes a key event. Returns true if consumed.
+func (l *worktreeList) HandleKey(key EventKey) bool {
+	switch key.Key {
+	case KeyUp:
+		if l.cursor > 0 {
+			l.cursor--
+			l.clampScroll()
+		}
+		return true
+	case KeyDown:
+		if l.cursor < len(l.items)-1 {
+			l.cursor++
+			l.clampScroll()
+		}
+		return true
+	case KeyRune:
+		switch key.Rune {
+		case 'k':
 			if l.cursor > 0 {
 				l.cursor--
 				l.clampScroll()
 			}
-		case "down", "j":
+			return true
+		case 'j':
 			if l.cursor < len(l.items)-1 {
 				l.cursor++
 				l.clampScroll()
 			}
+			return true
 		}
 	}
-	return l, nil
+	return false
 }
 
 func (l worktreeList) View() string {
@@ -122,12 +131,12 @@ func (l worktreeList) View() string {
 
 	for i := l.scroll; i < end; i++ {
 		wt := l.items[i]
-		selected := i == l.cursor
+		isSelected := i == l.cursor
 
 		var cursorStr string
 		nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
 
-		if selected {
+		if isSelected {
 			cursorStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#B88AFF")).Render("▸ ")
 			nameStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E0E0E0")).Bold(true)
 		} else {
@@ -145,7 +154,7 @@ func (l worktreeList) View() string {
 		}
 
 		b.WriteString(cursorStr)
-		if selected {
+		if isSelected {
 			b.WriteString(selectedRowStyle.Render(row.String()))
 		} else {
 			b.WriteString(row.String())
