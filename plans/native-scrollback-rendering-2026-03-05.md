@@ -63,9 +63,9 @@ Replace viewport-based chat rendering with native terminal scrollback. Bubbletea
 
 ## Phase 1: Remove viewport, switch chat to inline mode
 
-- [ ] 1a: Remove `viewport` import, `viewport.Model` field, `userScrolled` field from model struct. Remove `updateViewportContent()`, `viewportHeight()`, pgup/pgdown key handlers. Remove the `updateViewportContent()` call in the `Update()` wrapper.
-- [ ] 1b: Change chat `View()` to inline mode: set `AltScreen = false`, render only the sticky bottom area (status bar + input box). Remove the viewport output, height clamping, and `linesAbove` cursor math. Keep the `resizeDoneMsg` type removal as cleanup.
-- [ ] 1c: Print the logo once on first `WindowSizeMsg` via `tea.Println`. Print messages via `tea.Println` wherever `m.messages = append(...)` currently happens (keep storing in `m.messages` for resize reprint). Streaming text and thinking/approval indicators render in `View()` above the input.
+- [x] 1a: Remove `viewport` import, `viewport.Model` field, `userScrolled` field from model struct. Remove `updateViewportContent()`, `viewportHeight()`, pgup/pgdown key handlers. Remove the `updateViewportContent()` call in the `Update()` wrapper.
+- [x] 1b: Change chat `View()` to inline mode: set `AltScreen = false`, render only the sticky bottom area (status bar + input box). Remove the viewport output, height clamping, and `linesAbove` cursor math. Keep the `resizeDoneMsg` type removal as cleanup.
+- [x] 1c: Print the logo once on first `WindowSizeMsg` via `tea.Println`. Print messages via `tea.Println` wherever `m.messages = append(...)` currently happens (keep storing in `m.messages` for resize reprint). Streaming text and thinking/approval indicators render in `View()` above the input.
 
 ## Phase 2: Resize clear and reprint
 

@@ -19,7 +19,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
-	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
 	"langdag.com/langdag"
 	"github.com/rivo/uniseg"
@@ -165,8 +164,9 @@ type model struct {
 	streamingText    string // accumulated text from EventTextDelta (trailing incomplete line)
 	pendingToolCall  string // tool call summary waiting for result
 	needsTextSep     bool   // true when next assistant text output needs a blank line before it
-	viewport         viewport.Model
-	userScrolled     bool   // true when user has scrolled up from bottom
+	logoPrinted      bool   // true after logo has been printed via tea.Println
+	reprintGen       int    // generation counter for resize reprint debouncing
+	printedMsgCount  int    // number of messages already printed via tea.Println
 }
 
 // autocompleteMatches returns matching commands for the current textarea input,
@@ -214,14 +214,8 @@ func initialModel() model {
 		log.Printf("warning: loading config: %v (using defaults)", err)
 	}
 
-	vp := viewport.New()
-	vp.MouseWheelEnabled = false
-	vp.FillHeight = true
-	vp.KeyMap = viewport.KeyMap{} // disable default keys — they conflict with textarea
-
 	return model{
 		textarea: ta,
-		viewport: vp,
 		config:   cfg,
 	}
 }
@@ -298,6 +292,33 @@ func styledInfo(msg string, width int) string {
 	return style.Render(msg)
 }
 
+// renderMessage renders a single chat message with the given width.
+func renderMessage(msg chatMessage, width int) string {
+	var parts []string
+	if msg.leadBlank {
+		parts = append(parts, "")
+	}
+	var rendered string
+	switch msg.kind {
+	case msgUser:
+		rendered = styledUserMsg(msg.content, width)
+	case msgAssistant:
+		rendered = styledAssistantText(msg.content, width)
+	case msgToolCall:
+		rendered = styledToolCall(msg.content, width)
+	case msgToolResult:
+		rendered = styledToolResult(msg.content, msg.isError, width)
+	case msgInfo:
+		rendered = styledInfo(msg.content, width)
+	case msgSuccess:
+		rendered = styledSuccess(msg.content, width)
+	case msgError:
+		rendered = styledError(msg.content, width)
+	}
+	parts = append(parts, rendered)
+	return strings.Join(parts, "\n")
+}
+
 // renderMessages renders all stored chat messages with current width.
 func (m model) renderMessages() string {
 	if len(m.messages) == 0 {
@@ -305,29 +326,28 @@ func (m model) renderMessages() string {
 	}
 	var parts []string
 	for _, msg := range m.messages {
-		if msg.leadBlank {
-			parts = append(parts, "")
-		}
-		var rendered string
-		switch msg.kind {
-		case msgUser:
-			rendered = styledUserMsg(msg.content, m.width)
-		case msgAssistant:
-			rendered = styledAssistantText(msg.content, m.width)
-		case msgToolCall:
-			rendered = styledToolCall(msg.content, m.width)
-		case msgToolResult:
-			rendered = styledToolResult(msg.content, msg.isError, m.width)
-		case msgInfo:
-			rendered = styledInfo(msg.content, m.width)
-		case msgSuccess:
-			rendered = styledSuccess(msg.content, m.width)
-		case msgError:
-			rendered = styledError(msg.content, m.width)
-		}
-		parts = append(parts, rendered)
+		parts = append(parts, renderMessage(msg, m.width))
 	}
 	return strings.Join(parts, "\n")
+}
+
+// reprintAllCmd builds a tea.Sequence that clears screen+scrollback, then
+// re-prints the logo and all messages via tea.Println.
+func (m *model) reprintAllCmd() tea.Cmd {
+	var cmds []tea.Cmd
+	cmds = append(cmds, tea.Raw("\033[2J\033[3J\033[H"))
+	cmds = append(cmds, tea.ClearScreen)
+	cmds = append(cmds, tea.Println(renderLogo()))
+	for _, msg := range m.messages {
+		cmds = append(cmds, tea.Println(renderMessage(msg, m.width)))
+	}
+	// If there's streaming text, flush it as a println too so it's not lost
+	if m.streamingText != "" {
+		cmds = append(cmds, tea.Println(styledAssistantText(m.streamingText, m.width)))
+	}
+	// Mark all messages as printed since we're reprinting everything
+	m.printedMsgCount = len(m.messages)
+	return tea.Sequence(cmds...)
 }
 
 // renderStreamingText renders the trailing incomplete line with assistant styling.
@@ -538,8 +558,8 @@ func fetchStatusCmd(worktreePath string) tea.Msg {
 		}
 	}
 
-	// Diff stats: insertions/deletions vs default branch.
-	diffCmd := exec.Command("git", "diff", "--shortstat", "HEAD")
+	// Diff stats: insertions/deletions vs default branch (main).
+	diffCmd := exec.Command("git", "diff", "--shortstat", "main")
 	diffCmd.Dir = worktreePath
 	if out, err := diffCmd.Output(); err == nil {
 		line := strings.TrimSpace(string(out))
@@ -590,10 +610,7 @@ func fetchSWEScoresCmd() tea.Msg {
 
 func (m model) Init() tea.Cmd {
 	cfg := m.config
-	// Clear visible screen + scrollback buffer so alt screen starts completely fresh.
-	// \033[2J = clear screen, \033[3J = clear scrollback, \033[H = cursor home
-	clearAll := tea.Raw("\033[2J\033[3J\033[H")
-	return tea.Batch(clearAll, textarea.Blink, fetchModelsCmd, fetchSWEScoresCmd, func() tea.Msg {
+	return tea.Batch(textarea.Blink, fetchModelsCmd, fetchSWEScoresCmd, func() tea.Msg {
 		return resolveWorkspaceCmd(cfg)
 	}, func() tea.Msg {
 		client, err := newLangdagClient(cfg)
@@ -681,9 +698,19 @@ func (m model) displayLineCount() int {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	result, cmd := m.update(msg)
-	// Refresh viewport content after every update so View() stays read-only.
+	// Print any new messages via tea.Println so they appear in terminal scrollback.
 	if mdl, ok := result.(model); ok && mdl.mode == modeChat && mdl.ready {
-		mdl.updateViewportContent()
+		if n := len(mdl.messages); n > mdl.printedMsgCount {
+			var printCmds []tea.Cmd
+			for i := mdl.printedMsgCount; i < n; i++ {
+				printCmds = append(printCmds, tea.Println(renderMessage(mdl.messages[i], mdl.width)))
+			}
+			mdl.printedMsgCount = n
+			if cmd != nil {
+				printCmds = append(printCmds, cmd)
+			}
+			return mdl, tea.Batch(printCmds...)
+		}
 		return mdl, cmd
 	}
 	return result, cmd
@@ -867,9 +894,15 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if !m.ready {
 			m.ready = true
+			// Print logo on first resize
+			m.logoPrinted = true
+			cmds = append(cmds, tea.Println(renderLogo()))
+		} else {
+			// Subsequent resizes: clear and reprint everything
+			m.reprintGen++
+			cmds = append(cmds, m.reprintAllCmd())
 		}
 		m.recalcTextareaHeight()
-		cmds = append(cmds, tea.Raw("\033[2J\033[3J\033[H"))
 
 	case tea.PasteMsg:
 		if len(msg.Content) >= m.config.PasteCollapseMinChars {
@@ -922,14 +955,6 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.autocompleteIdx = 0
 			}
 			return m, nil
-		case "pgup":
-			m.viewport.PageUp()
-			m.userScrolled = !m.viewport.AtBottom()
-			return m, nil
-		case "pgdown":
-			m.viewport.PageDown()
-			m.userScrolled = !m.viewport.AtBottom()
-			return m, nil
 		case "enter":
 			if m.agentRunning {
 				return m, nil // ignore input while agent is working
@@ -959,6 +984,9 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				m.messages = append(m.messages, chatMessage{kind: msgUser, content: content, leadBlank: true})
+				if !m.containerReady {
+					m.messages = append(m.messages, chatMessage{kind: msgInfo, content: "Container is still starting — the agent won't have bash or file tools until it's ready."})
+				}
 				m2, agentCmd := m.startAgent(content)
 				return m2, agentCmd
 			}
@@ -1462,10 +1490,15 @@ func (m model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		m.streamingText = ""
 		m.pendingToolCall = ""
 		m.messages = nil
-		m.userScrolled = false
+		m.printedMsgCount = 0
 		m.textarea.Reset()
 		m.textarea.SetHeight(minInputHeight)
-		return m, nil
+		// Clear screen+scrollback and re-print logo
+		return m, tea.Sequence(
+			tea.Raw("\033[2J\033[3J\033[H"),
+			tea.ClearScreen,
+			tea.Println(renderLogo()),
+		)
 	case "/config":
 		return m.enterConfigMode()
 	case "/shell":
@@ -1553,57 +1586,6 @@ func (m model) statusBarHeight() int {
 	return 1
 }
 
-// updateViewportContent rebuilds the viewport content from current state.
-// Must be called from Update() (pointer receiver) so changes persist.
-func (m *model) updateViewportContent() {
-	var parts []string
-
-	parts = append(parts, renderLogo())
-
-	if msgs := m.renderMessages(); msgs != "" {
-		parts = append(parts, msgs)
-	}
-
-	if streaming := m.renderStreamingText(); streaming != "" {
-		parts = append(parts, streaming)
-	}
-
-	if m.awaitingApproval {
-		approvalPrompt := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FFD700")).
-			Bold(true).
-			Render(fmt.Sprintf("Allow %s? [y/n]", m.approvalDesc))
-		parts = append(parts, approvalPrompt)
-	} else if m.agentRunning {
-		indicator := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#B88AFF")).
-			Italic(true).
-			Render("thinking...")
-		parts = append(parts, indicator)
-	}
-
-	m.viewport.SetWidth(m.width)
-	m.viewport.SetHeight(m.viewportHeight())
-	m.viewport.SetContent(strings.Join(parts, "\n"))
-	if !m.userScrolled {
-		m.viewport.GotoBottom()
-	}
-}
-
-func (m model) viewportHeight() int {
-	acH := m.autocompleteHeight()
-	middleH := 1 // gap line
-	if acH > 0 {
-		middleH += acH
-	} else {
-		middleH += m.statusBarHeight()
-	}
-	h := m.height - m.inputBoxHeight() - middleH
-	if h < 1 {
-		h = 1
-	}
-	return h
-}
 
 func truncateWithEllipsis(s string, maxLen int) string {
 	runes := []rune(s)
@@ -1796,10 +1778,9 @@ func (m model) renderAutocomplete() string {
 
 func (m model) View() tea.View {
 	if !m.ready {
-		v := tea.NewView("Initializing...")
-		v.AltScreen = true
-		return v
+		return tea.NewView("Initializing...")
 	}
+
 
 	if m.mode == modeConfig {
 		return m.viewConfig()
@@ -1816,8 +1797,6 @@ func (m model) View() tea.View {
 	if m.mode == modeBranches {
 		return m.viewBranches()
 	}
-
-	vpH := m.viewportHeight()
 
 	// Build input box
 	inputBorderColors := borderGradientColors
@@ -1839,16 +1818,29 @@ func (m model) View() tea.View {
 	autocomplete := m.renderAutocomplete()
 	acHeight := m.autocompleteHeight()
 
-	// Assemble full view: viewport + gap + status/autocomplete + input
+	// Sticky bottom: ephemeral content + status/autocomplete + input
 	var viewParts []string
 	linesAbove := 0
 
-	viewParts = append(viewParts, m.viewport.View())
-	linesAbove += vpH
-
-	// Gap line
-	viewParts = append(viewParts, "")
-	linesAbove += 1
+	// Ephemeral streaming text / thinking indicator / approval prompt
+	if m.awaitingApproval {
+		approvalPrompt := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFD700")).
+			Bold(true).
+			Render(fmt.Sprintf("Allow %s? [y/n]", m.approvalDesc))
+		viewParts = append(viewParts, approvalPrompt)
+		linesAbove += lipgloss.Height(approvalPrompt)
+	} else if streaming := m.renderStreamingText(); streaming != "" {
+		viewParts = append(viewParts, streaming)
+		linesAbove += lipgloss.Height(streaming)
+	} else if m.agentRunning {
+		indicator := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#B88AFF")).
+			Italic(true).
+			Render("thinking...")
+		viewParts = append(viewParts, indicator)
+		linesAbove += 1
+	}
 
 	if acHeight == 0 {
 		if statusBar := m.renderStatusBar(); statusBar != "" {
@@ -1865,19 +1857,7 @@ func (m model) View() tea.View {
 
 	fullView := strings.Join(viewParts, "\n")
 
-	// Clamp output to exactly m.height lines to prevent terminal scrollback artifacts.
-	if lines := strings.Split(fullView, "\n"); len(lines) != m.height {
-		for len(lines) < m.height {
-			lines = append(lines, "")
-		}
-		if len(lines) > m.height {
-			lines = lines[len(lines)-m.height:]
-		}
-		fullView = strings.Join(lines, "\n")
-	}
-
 	v := tea.NewView(fullView)
-	v.AltScreen = true
 
 	c := m.textarea.Cursor()
 	if c != nil {
