@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -57,6 +59,79 @@ func sendKey(m model, code rune, mods ...tea.KeyMod) model {
 func resize(m model, w, h int) model {
 	result, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 	return result.(model)
+}
+
+// --- New App-based test helpers ---
+// These replace the old model-based helpers above. The old helpers remain
+// until all tests are migrated.
+
+// newTestRenderer creates a renderer that discards output (for tests).
+func newTestRenderer() *Renderer {
+	return &Renderer{
+		out: bufio.NewWriter(io.Discard),
+	}
+}
+
+// newTestApp creates an App for testing without entering raw mode.
+// The app is ready with the given dimensions and a discard renderer.
+func newTestApp(w, h int) *App {
+	cfg, _ := loadConfig()
+	ta := NewTextInput(true)
+	ta.SetWidth(w - 2)
+
+	return &App{
+		textarea: ta,
+		config:   cfg,
+		width:    w,
+		height:   h,
+		ready:    true,
+		keyCh:    make(chan EventKey, 32),
+		pasteCh:  make(chan EventPaste, 4),
+		resizeCh: make(chan EventResize, 4),
+		resultCh: make(chan any, 16),
+		stopCh:   make(chan struct{}),
+		renderer: newTestRenderer(),
+	}
+}
+
+// simKey sends a special key press to the app, with optional modifiers.
+func simKey(a *App, key Key, mods ...Modifier) {
+	ev := EventKey{Key: key}
+	for _, mod := range mods {
+		ev.Mod |= mod
+	}
+	a.handleKey(ev)
+}
+
+// simRune sends a rune key press (typed character) to the app.
+func simRune(a *App, r rune, mods ...Modifier) {
+	ev := EventKey{Key: KeyRune, Rune: r}
+	for _, mod := range mods {
+		ev.Mod |= mod
+	}
+	a.handleKey(ev)
+}
+
+// simType types each rune of s into the app.
+func simType(a *App, s string) {
+	for _, r := range s {
+		a.handleKey(EventKey{Key: KeyRune, Rune: r})
+	}
+}
+
+// simPaste sends a paste event to the app.
+func simPaste(a *App, content string) {
+	a.handlePaste(EventPaste{Content: content})
+}
+
+// simResize sends a resize event to the app.
+func simResize(a *App, w, h int) {
+	a.handleResize(EventResize{Width: w, Height: h})
+}
+
+// simResult sends an async result to the app.
+func simResult(a *App, result any) {
+	a.handleResult(result)
 }
 
 func TestWindowResize(t *testing.T) {
@@ -1810,7 +1885,7 @@ func TestSortDirsSavedToConfig(t *testing.T) {
 	}
 }
 
-func TestResizePreservesScrollback(t *testing.T) {
+func TestResizeReprintsScrollback(t *testing.T) {
 	m := initialModel()
 	m = resize(m, 80, 24)
 
@@ -1819,10 +1894,128 @@ func TestResizePreservesScrollback(t *testing.T) {
 	m.messages = append(m.messages, chatMessage{kind: msgAssistant, content: "world"})
 	m.printedMsgCount = len(m.messages)
 
-	// Resize should NOT reset printedMsgCount — scrollback is preserved
+	// Resize should reprint all messages (printedMsgCount stays in sync
+	// because reprintScrollback sets it to len(messages))
 	m = resize(m, 100, 30)
 	if m.printedMsgCount != 2 {
-		t.Errorf("printedMsgCount = %d, want 2 (resize should not reprint)", m.printedMsgCount)
+		t.Errorf("printedMsgCount = %d, want 2", m.printedMsgCount)
+	}
+	// Messages should still be intact
+	if len(m.messages) != 2 {
+		t.Errorf("messages count = %d, want 2", len(m.messages))
+	}
+}
+
+func TestResizeReturnsCmdWithContent(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	// Add messages and mark as printed
+	m.messages = append(m.messages,
+		chatMessage{kind: msgUser, content: "hello world"},
+		chatMessage{kind: msgAssistant, content: "response text"},
+	)
+	m.printedMsgCount = len(m.messages)
+
+	// Resize must return a non-nil cmd (the reprint sequence)
+	result, cmd := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = result.(model)
+
+	if cmd == nil {
+		t.Fatal("resize with existing scrollback must return a non-nil cmd for reprinting")
+	}
+
+	// Execute the cmd to get the message — it should be a sequenceMsg
+	// containing the clear + println commands
+	msg := cmd()
+	if msg == nil {
+		t.Fatal("resize reprint cmd must produce a non-nil message")
+	}
+}
+
+func TestResizeLogoOnlyReturnsCmdWithContent(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	// No messages, but logo was printed (logoPrinted=true after first resize)
+	if !m.logoPrinted {
+		t.Fatal("logoPrinted should be true after first resize")
+	}
+
+	// Second resize should still return a reprint cmd (for the logo)
+	result, cmd := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = result.(model)
+
+	if cmd == nil {
+		t.Fatal("resize with logoPrinted=true must return a non-nil cmd for reprinting")
+	}
+}
+
+func TestResizeNoMessagesNoReprint(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	// No messages printed yet (only logo), printedMsgCount is 0
+	if m.printedMsgCount != 0 {
+		t.Fatalf("initial printedMsgCount = %d, want 0", m.printedMsgCount)
+	}
+
+	// Resize without any messages should still reprint logo (logoPrinted=true)
+	// but printedMsgCount stays 0
+	m = resize(m, 120, 30)
+	if m.printedMsgCount != 0 {
+		t.Errorf("printedMsgCount = %d, want 0 (no messages to reprint)", m.printedMsgCount)
+	}
+}
+
+func TestResizeWordWrapsMessages(t *testing.T) {
+	// Verify that renderMessage produces different output at different widths
+	longContent := "The quick brown fox jumps over the lazy dog and keeps running far away"
+	msg := chatMessage{kind: msgAssistant, content: longContent}
+
+	narrow := renderMessage(msg, 30)
+	wide := renderMessage(msg, 120)
+
+	narrowLines := strings.Count(narrow, "\n")
+	wideLines := strings.Count(wide, "\n")
+
+	if narrowLines <= wideLines {
+		t.Errorf("narrow rendering (%d lines) should have more lines than wide (%d lines)",
+			narrowLines, wideLines)
+	}
+}
+
+func TestResizePreservesMessageContent(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	// Add messages
+	m.messages = append(m.messages,
+		chatMessage{kind: msgUser, content: "first message"},
+		chatMessage{kind: msgAssistant, content: "response here"},
+		chatMessage{kind: msgError, content: "an error"},
+	)
+	m.printedMsgCount = len(m.messages)
+
+	// Resize
+	m = resize(m, 120, 40)
+
+	// All messages preserved
+	if len(m.messages) != 3 {
+		t.Fatalf("messages count = %d, want 3", len(m.messages))
+	}
+	if m.messages[0].content != "first message" {
+		t.Errorf("messages[0].content = %q, want %q", m.messages[0].content, "first message")
+	}
+	if m.messages[1].content != "response here" {
+		t.Errorf("messages[1].content = %q", m.messages[1].content)
+	}
+	if m.messages[2].content != "an error" {
+		t.Errorf("messages[2].content = %q", m.messages[2].content)
+	}
+	// printedMsgCount stays in sync
+	if m.printedMsgCount != 3 {
+		t.Errorf("printedMsgCount = %d, want 3", m.printedMsgCount)
 	}
 }
 
@@ -1869,6 +2062,50 @@ func TestInlineModeNoAltScreen(t *testing.T) {
 	v := m.View()
 	if v.AltScreen {
 		t.Error("chat mode View should not set AltScreen")
+	}
+}
+
+func TestViewPaddedToTerminalHeight(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	v := m.View()
+	viewHeight := lipgloss.Height(v.Content)
+	if viewHeight != 24 {
+		t.Errorf("View height = %d, want 24 (should be padded to terminal height)", viewHeight)
+	}
+}
+
+func TestViewPaddingAdjustsWithTerminalHeight(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 40)
+
+	v := m.View()
+	viewHeight := lipgloss.Height(v.Content)
+	if viewHeight != 40 {
+		t.Errorf("View height = %d, want 40", viewHeight)
+	}
+
+	m = resize(m, 80, 10)
+	v = m.View()
+	viewHeight = lipgloss.Height(v.Content)
+	if viewHeight != 10 {
+		t.Errorf("View height after shrink = %d, want 10", viewHeight)
+	}
+}
+
+func TestViewCursorAccountsForPadding(t *testing.T) {
+	m := initialModel()
+	m = resize(m, 80, 24)
+
+	v := m.View()
+	if v.Cursor == nil {
+		t.Fatal("View should have a cursor")
+	}
+	// Cursor Y should include padding lines
+	// The input area is a few lines, so padding should push cursor near the bottom
+	if v.Cursor.Y < 20 {
+		t.Errorf("Cursor.Y = %d, expected near bottom of 24-line terminal (>= 20)", v.Cursor.Y)
 	}
 }
 
