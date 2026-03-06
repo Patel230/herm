@@ -137,15 +137,15 @@ Build the low-level terminal handling that replaces bubbletea's runtime.
 
 - [x] 1a: Create `term.go` with terminal raw mode management: `enterRawMode()` / `restoreTerminal()` using `golang.org/x/term`, SIGWINCH handler that sends resize events to a channel, `getTerminalSize()` helper. Include panic-safe defer restoration.
 - [x] 1b: Create `input.go` with stdin reader goroutine: read bytes in raw mode, parse into key events (printable runes, escape sequences for arrows/home/end/pgup/pgdn/delete/backspace, ctrl+key combos, shift+enter/alt+enter). Handle bracketed paste sequences. Define `EventKey`, `EventPaste`, `EventResize` types. Send parsed events to a channel.
-- [ ] 1c: Create `render.go` with the rendering engine: `Renderer` struct that tracks active area height, provides `printAbove(content string)` to write to scrollback, `renderActiveArea(lines []string, cursorX, cursorY int)` to redraw the bottom area, `clearAll()` to clear screen+scrollback. All writes go directly to a buffered stdout writer. No cell buffer or diffing.
+- [x] 1c: Create `render.go` with the rendering engine: `Renderer` struct that tracks active area height, provides `printAbove(content string)` to write to scrollback, `renderActiveArea(lines []string, cursorX, cursorY int)` to redraw the bottom area, `clearAll()` to clear screen+scrollback. All writes go directly to a buffered stdout writer. No cell buffer or diffing.
 
 ## Phase 2: Text input widget
 
 Replace bubbles textarea and textinput with a custom implementation.
 
-- [ ] 2a: Create `textinput.go` with a `TextInput` struct: multi-line text buffer ([]string for lines), cursor position (row, col), insert/delete/backspace operations, word-boundary navigation (ctrl+left/right), home/end, line wrapping for display. Support both single-line and multi-line modes (newline on shift+enter/alt+enter in multi-line).
-- [ ] 2b: Add rendering to `TextInput`: `View(width int) string` returns the styled content (using lipgloss for colors). `CursorPosition() (x, y int)` returns cursor coordinates relative to the rendered output. Handle display-width-aware cursor placement (unicode/CJK characters).
-- [ ] 2c: Add paste support to `TextInput`: `InsertText(s string)` handles multi-line paste, updates cursor position. Used for both typed characters and paste events.
+- [x] 2a: Create `textinput.go` with a `TextInput` struct: multi-line text buffer ([]string for lines), cursor position (row, col), insert/delete/backspace operations, word-boundary navigation (ctrl+left/right), home/end, line wrapping for display. Support both single-line and multi-line modes (newline on shift+enter/alt+enter in multi-line).
+- [x] 2b: Add rendering to `TextInput`: `View(width int) string` returns the styled content (using lipgloss for colors). `CursorPosition() (x, y int)` returns cursor coordinates relative to the rendered output. Handle display-width-aware cursor placement (unicode/CJK characters).
+- [x] 2c: Add paste support to `TextInput`: `InsertText(s string)` handles multi-line paste, updates cursor position. Used for both typed characters and paste events.
 
 ## Phase 3: App event loop
 
