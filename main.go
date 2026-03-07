@@ -4,77 +4,34 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"image/color"
 	"io"
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
-	tea "charm.land/bubbletea/v2"
-	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/textarea"
-	"charm.land/lipgloss/v2"
+	"golang.org/x/term"
 	"langdag.com/langdag"
 	"github.com/rivo/uniseg"
 )
 
-const (
-	minInputHeight = 1
-	maxInputHeight = 12
-)
-
-// Purple gradient colors for the logo (smooth dark-to-light-to-dark)
-var logoColors = []color.Color{
-	lipgloss.Color("#3A0066"),
-	lipgloss.Color("#5B1A99"),
-	lipgloss.Color("#7B3EC7"),
-	lipgloss.Color("#9B6ADE"),
-	lipgloss.Color("#B88AFF"),
-	lipgloss.Color("#9B6ADE"),
-}
-
-var logoLines = []string{
-	" ██████╗ ██████╗  ███████╗██╗     ",
-	"██╔════╝ ██╔══██╗ ██╔════╝██║     ",
-	"██║      ██████╔╝ ███████╗██║     ",
-	"██║      ██╔═══╝  ╚════██║██║     ",
-	"╚██████╗ ██║      ███████║███████╗",
-	" ╚═════╝ ╚═╝      ╚══════╝╚══════╝",
-}
-
-func renderLogo() string {
-	var rendered []string
-	for i, line := range logoLines {
-		c := logoColors[i%len(logoColors)]
-		style := lipgloss.NewStyle().Foreground(c).Bold(true)
-		rendered = append(rendered, style.Render(line))
-	}
-	return strings.Join(rendered, "\n")
-}
-
-var borderGradientColors = []color.Color{
-	lipgloss.Color("#6B34B0"),
-	lipgloss.Color("#9B82F5"),
-	lipgloss.Color("#B8A9FF"),
-	lipgloss.Color("#9B82F5"),
-	lipgloss.Color("#6B34B0"),
-}
-
-type appMode int
+// ─── Constants ───
 
 const (
-	modeChat appMode = iota
-	modeConfig
-	modeModel
-	modeWorktrees
-	modeBranches
+	promptPrefix     = "❯ "
+	promptPrefixCols = 2
+	charLimit        = 250
 )
+
+// ─── Block and message types ───
 
 type chatMsgKind int
 
@@ -95,10 +52,257 @@ type chatMessage struct {
 	leadBlank bool // blank line before this message
 }
 
-// commands is the list of available slash commands.
+// ─── App modes ───
+
+type appMode int
+
+const (
+	modeChat appMode = iota
+	modeConfig
+	modeModel
+	modeWorktrees
+	modeBranches
+)
+
+// ─── Input event types ───
+
+type Key int
+
+const (
+	KeyNone Key = iota
+	KeyRune
+	KeyEnter
+	KeyTab
+	KeyBackspace
+	KeyDelete
+	KeyEscape
+	KeyUp
+	KeyDown
+	KeyLeft
+	KeyRight
+	KeyHome
+	KeyEnd
+	KeyPgUp
+	KeyPgDown
+	KeyInsert
+)
+
+type Modifier int
+
+const (
+	ModShift Modifier = 1 << iota
+	ModAlt
+	ModCtrl
+)
+
+type EventKey struct {
+	Key  Key
+	Rune rune
+	Mod  Modifier
+}
+
+type EventPaste struct {
+	Content string
+}
+
+type EventResize struct {
+	Width  int
+	Height int
+}
+
+// ─── Visual line wrapping (from simple-chat) ───
+
+type vline struct {
+	start    int // rune index of first char
+	length   int // number of runes
+	startCol int // visual column where text starts
+}
+
+// getVisualLines splits the input runes into visual lines, accounting for
+// the prompt prefix on the first line and terminal-width wrapping.
+func getVisualLines(input []rune, cursor int, width int) []vline {
+	var lines []vline
+	start := 0
+	startCol := promptPrefixCols
+	length := 0
+
+	for i, r := range input {
+		if r == '\n' {
+			lines = append(lines, vline{start, length, startCol})
+			start = i + 1
+			startCol = 0
+			length = 0
+			continue
+		}
+		length++
+		if startCol+length >= width {
+			lines = append(lines, vline{start, length, startCol})
+			start = i + 1
+			startCol = 0
+			length = 0
+		}
+	}
+	lines = append(lines, vline{start, length, startCol})
+	return lines
+}
+
+func cursorVisualPos(input []rune, cursor int, width int) (int, int) {
+	vlines := getVisualLines(input, cursor, width)
+	for i, vl := range vlines {
+		end := vl.start + vl.length
+		if cursor >= vl.start && cursor <= end {
+			if cursor == end && i < len(vlines)-1 && vl.startCol+vl.length >= width {
+				continue
+			}
+			return i, vl.startCol + (cursor - vl.start)
+		}
+	}
+	last := len(vlines) - 1
+	vl := vlines[last]
+	return last, vl.startCol + vl.length
+}
+
+// wrapString splits a string into visual rows of at most `w` runes.
+func wrapString(s string, startCol int, w int) []string {
+	runes := []rune(s)
+	if len(runes) == 0 {
+		return []string{""}
+	}
+	var rows []string
+	col := startCol
+	lineStart := 0
+	for i := range runes {
+		col++
+		if col >= w {
+			rows = append(rows, string(runes[lineStart:i+1]))
+			lineStart = i + 1
+			col = 0
+		}
+	}
+	if lineStart <= len(runes) {
+		rows = append(rows, string(runes[lineStart:]))
+	}
+	return rows
+}
+
+// ─── Progress bar (from simple-chat) ───
+
+func lerpColor(r1, g1, b1, r2, g2, b2 int, t float64) (int, int, int) {
+	lerp := func(a, b int) int { return a + int(float64(b-a)*t) }
+	return lerp(r1, r2), lerp(g1, g2), lerp(b1, b2)
+}
+
+func progressBar(n, max int) string {
+	if n > max {
+		n = max
+	}
+	ratio := float64(n) / float64(max)
+	filled := int(ratio * 24)
+	partials := []rune("█▉▊▋▌▍▎▏")
+
+	r, g, b := lerpColor(78, 201, 100, 230, 70, 70, ratio)
+	fillFg := fmt.Sprintf("\033[38;2;%d;%d;%dm", r, g, b)
+	dimFg := "\033[38;5;240m"
+	dimBg := "\033[48;5;240m"
+
+	const reset = "\033[0m"
+
+	var buf strings.Builder
+	for i := range 3 {
+		cellFilled := filled - i*8
+		switch {
+		case cellFilled >= 8:
+			buf.WriteString(fillFg + "█" + reset)
+		case cellFilled <= 0:
+			buf.WriteString(dimFg + "█" + reset)
+		default:
+			buf.WriteString(dimBg + fillFg + string(partials[8-cellFilled]) + reset)
+		}
+	}
+	return buf.String()
+}
+
+// ─── ANSI rendering helpers (from simple-chat) ───
+
+func writeRows(buf *strings.Builder, rows []string, from int) {
+	for i, row := range rows {
+		buf.WriteString(fmt.Sprintf("\033[%d;1H\033[0m\033[2K%s", from+i, row))
+	}
+}
+
+// ─── Logo (from simple-chat) ───
+
+var logo = []string{
+	"",
+	"    \033[38;5;75m▄███▄\033[0m ░▄▀▀▒█▀▄░▄▀▀░█▒░",
+	"  \033[38;5;75m▄██\033[38;5;255m• •\033[38;5;75m█\033[0m ░▀▄▄░█▀▒▒▄██▒█▄▄",
+	" \033[38;5;75m▀███▄█▄█\033[0m Contained Coding Agent",
+	"",
+}
+
+// ─── Styling helpers ───
+
+func styledUserMsg(content string) string {
+	return "\033[38;5;253m❯ " + content + "\033[0m"
+}
+
+func styledAssistantText(content string) string {
+	return "\033[38;5;141m" + content + "\033[0m"
+}
+
+func styledToolCall(summary string) string {
+	return "\033[38;5;242;3m" + summary + "\033[0m"
+}
+
+func styledToolResult(result string, isError bool) string {
+	if isError {
+		return styledError(result)
+	}
+	return "\033[38;5;240m" + result + "\033[0m"
+}
+
+func styledError(msg string) string {
+	return "\033[38;5;203;3m" + msg + "\033[0m"
+}
+
+func styledSuccess(msg string) string {
+	return "\033[38;5;114;3m" + msg + "\033[0m"
+}
+
+func styledInfo(msg string) string {
+	return "\033[38;5;103;3m" + msg + "\033[0m"
+}
+
+func renderMessage(msg chatMessage) string {
+	var parts []string
+	if msg.leadBlank {
+		parts = append(parts, "")
+	}
+	var rendered string
+	switch msg.kind {
+	case msgUser:
+		rendered = styledUserMsg(msg.content)
+	case msgAssistant:
+		rendered = styledAssistantText(msg.content)
+	case msgToolCall:
+		rendered = styledToolCall(msg.content)
+	case msgToolResult:
+		rendered = styledToolResult(msg.content, msg.isError)
+	case msgInfo:
+		rendered = styledInfo(msg.content)
+	case msgSuccess:
+		rendered = styledSuccess(msg.content)
+	case msgError:
+		rendered = styledError(msg.content)
+	}
+	parts = append(parts, rendered)
+	return strings.Join(parts, "\n")
+}
+
+// ─── Commands and autocomplete ───
+
 var commands = []string{"/branches", "/clear", "/config", "/model", "/shell", "/worktrees"}
 
-// filterCommands returns commands matching the given prefix.
 func filterCommands(prefix string) []string {
 	var matches []string
 	for _, cmd := range commands {
@@ -111,7 +315,6 @@ func filterCommands(prefix string) []string {
 
 var pasteplaceholderRe = regexp.MustCompile(`\[pasted #(\d+) \| \d+ chars\]`)
 
-// expandPastes replaces paste placeholders with actual content from the paste store.
 func expandPastes(s string, store map[int]string) string {
 	return pasteplaceholderRe.ReplaceAllStringFunc(s, func(match string) string {
 		sub := pasteplaceholderRe.FindStringSubmatch(match)
@@ -129,236 +332,125 @@ func expandPastes(s string, store map[int]string) string {
 	})
 }
 
-type model struct {
-	textarea     textarea.Model
-	width        int
-	height       int
-	ready        bool // true after first WindowSizeMsg
-	messages     []chatMessage
-	config       Config
-	pasteCount   int
-	pasteStore   map[int]string // paste ID → actual content
-	mode         appMode
-	configForm   configForm
-	modelList    modelList
-	worktreeListC worktreeList
-	branchListC   branchList
-	models       []ModelDef
-	modelsErr    error
-	modelsLoaded bool
-	sweScores      map[string]float64
-	sweLoaded      bool
-	container      *ContainerClient
-	worktreePath   string
-	containerReady bool
-	containerErr   error
-	status         statusInfo
-	langdagClient    *langdag.Client
-	langdagProvider  string // current provider the langdag client is configured for
-	agent            *Agent
-	agentNodeID      string // last assistant node ID for conversation continuity
-	agentRunning     bool   // true while the agent loop is executing
-	awaitingApproval bool   // true when waiting for user y/n on a tool call
-	approvalDesc     string // human-readable description of the pending approval
-	autocompleteIdx  int    // currently selected autocomplete item
-	streamingText    string // accumulated text from EventTextDelta (trailing incomplete line)
-	pendingToolCall  string // tool call summary waiting for result
-	needsTextSep     bool   // true when next assistant text output needs a blank line before it
-	logoPrinted      bool   // true after logo has been printed via tea.Println
-	printedMsgCount  int    // number of messages already printed via tea.Println
+// ─── Tool result helpers ───
+
+func toolCallSummary(toolName string, input json.RawMessage) string {
+	switch toolName {
+	case "bash":
+		var in struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.Command != "" {
+			cmd := in.Command
+			if len(cmd) > 120 {
+				cmd = cmd[:120] + "..."
+			}
+			return fmt.Sprintf("▶ bash: %s", cmd)
+		}
+	case "git":
+		var in struct {
+			Subcommand string   `json:"subcommand"`
+			Args       []string `json:"args,omitempty"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.Subcommand != "" {
+			parts := append([]string{"git", in.Subcommand}, in.Args...)
+			cmd := strings.Join(parts, " ")
+			if len(cmd) > 120 {
+				cmd = cmd[:120] + "..."
+			}
+			return fmt.Sprintf("▶ %s", cmd)
+		}
+	}
+	return fmt.Sprintf("▶ %s", toolName)
 }
 
-// autocompleteMatches returns matching commands for the current textarea input,
-// or nil if autocomplete should not be shown.
-func (m model) autocompleteMatches() []string {
-	if m.mode != modeChat {
-		return nil
+func collapseToolResult(result string) string {
+	lines := strings.Split(result, "\n")
+	if len(lines) <= 10 {
+		return result
 	}
-	val := m.textarea.Value()
-	if !strings.HasPrefix(val, "/") {
-		return nil
-	}
-	return filterCommands(val)
+	head := strings.Join(lines[:4], "\n")
+	tail := strings.Join(lines[len(lines)-3:], "\n")
+	return fmt.Sprintf("%s\n  ... (%d lines omitted)\n%s", head, len(lines)-7, tail)
 }
 
-func initialModel() model {
-	ta := textarea.New()
-	ta.Placeholder = "Type a message..."
-	ta.ShowLineNumbers = false
-	ta.Prompt = ""
-	ta.SetHeight(minInputHeight)
-	ta.CharLimit = 0
-	ta.MaxHeight = 0 // no limit on content; we control visual height ourselves
-	ta.SetVirtualCursor(false)
-	ta.EndOfBufferCharacter = ' '
-
-	// Enter sends the message. Shift+Enter or Alt+Enter inserts a newline.
-	ta.KeyMap.InsertNewline = key.NewBinding(
-		key.WithKeys("shift+enter", "alt+enter"),
-		key.WithHelp("shift+enter", "new line"),
-	)
-
-	s := ta.Styles()
-	s.Focused.CursorLine = lipgloss.NewStyle()
-	s.Focused.Base = lipgloss.NewStyle()
-	s.Focused.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
-	s.Focused.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("#E0E0E0"))
-	s.Blurred.CursorLine = lipgloss.NewStyle()
-	s.Blurred.Base = lipgloss.NewStyle()
-	ta.SetStyles(s)
-	ta.Focus()
-
-	cfg, err := loadConfig()
-	if err != nil {
-		log.Printf("warning: loading config: %v (using defaults)", err)
+func truncateWithEllipsis(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
 	}
-
-	return model{
-		textarea: ta,
-		config:   cfg,
-	}
-}
-
-// --- Styling helpers ---
-
-func styledUserMsg(content string, width int) string {
-	style := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#E0E0E0"))
-	if width > 0 {
-		style = style.Width(width)
-	}
-	return style.Render("❯ " + content)
-}
-
-func styledAssistantText(content string, width int) string {
-	style := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#B88AFF"))
-	if width > 0 {
-		style = style.Width(width)
-	}
-	return style.Render(content)
-}
-
-func styledToolCall(summary string, width int) string {
-	style := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#666666")).
-		Italic(true)
-	if width > 0 {
-		style = style.Width(width)
-	}
-	return style.Render(summary)
-}
-
-func styledToolResult(result string, isError bool, width int) string {
-	if isError {
-		return styledError(result, width)
-	}
-	style := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#555555"))
-	if width > 0 {
-		style = style.Width(width)
-	}
-	return style.Render(result)
-}
-
-func styledError(msg string, width int) string {
-	style := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FF6B6B")).
-		Italic(true)
-	if width > 0 {
-		style = style.Width(width)
-	}
-	return style.Render(msg)
-}
-
-func styledSuccess(msg string, width int) string {
-	style := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#6FE7B8")).
-		Italic(true)
-	if width > 0 {
-		style = style.Width(width)
-	}
-	return style.Render(msg)
-}
-
-func styledInfo(msg string, width int) string {
-	style := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#8B7BA8")).
-		Italic(true)
-	if width > 0 {
-		style = style.Width(width)
-	}
-	return style.Render(msg)
-}
-
-// renderMessage renders a single chat message with the given width.
-func renderMessage(msg chatMessage, width int) string {
-	var parts []string
-	if msg.leadBlank {
-		parts = append(parts, "")
-	}
-	var rendered string
-	switch msg.kind {
-	case msgUser:
-		rendered = styledUserMsg(msg.content, width)
-	case msgAssistant:
-		rendered = styledAssistantText(msg.content, width)
-	case msgToolCall:
-		rendered = styledToolCall(msg.content, width)
-	case msgToolResult:
-		rendered = styledToolResult(msg.content, msg.isError, width)
-	case msgInfo:
-		rendered = styledInfo(msg.content, width)
-	case msgSuccess:
-		rendered = styledSuccess(msg.content, width)
-	case msgError:
-		rendered = styledError(msg.content, width)
-	}
-	parts = append(parts, rendered)
-	return strings.Join(parts, "\n")
-}
-
-// reprintScrollback returns a command that clears the terminal scrollback and
-// re-prints the logo + all messages word-wrapped at the given width as a
-// single tea.Println. Using one Println avoids interleaved render cycles that
-// can corrupt renderer state.
-func reprintScrollback(messages []chatMessage, width int) tea.Cmd {
-	var buf strings.Builder
-	buf.WriteString(renderLogo())
-	for _, msg := range messages {
-		buf.WriteByte('\n')
-		buf.WriteString(renderMessage(msg, width))
-	}
-	content := buf.String()
-	return tea.Sequence(
-		tea.Raw("\033[2J\033[3J\033[H"),
-		tea.ClearScreen,
-		tea.Println(content),
-	)
-}
-
-// renderMessages renders all stored chat messages with current width.
-func (m model) renderMessages() string {
-	if len(m.messages) == 0 {
+	if maxLen <= 0 {
 		return ""
 	}
-	var parts []string
-	for _, msg := range m.messages {
-		parts = append(parts, renderMessage(msg, m.width))
+	if maxLen == 1 {
+		return "…"
 	}
-	return strings.Join(parts, "\n")
+	return string(runes[:maxLen-1]) + "…"
 }
 
+// ─── Async message types ───
 
-// renderStreamingText renders the trailing incomplete line with assistant styling.
-func (m model) renderStreamingText() string {
-	if m.streamingText == "" {
-		return ""
-	}
-	return styledAssistantText(m.streamingText, m.width)
+type modelsMsg struct {
+	models []ModelDef
+	err    error
 }
 
-// debugLog writes a timestamped event entry to ~/.cpsl-debug.log when CPSL_DEBUG is set.
+type sweScoresMsg struct {
+	scores map[string]float64
+	err    error
+}
+
+type containerReadyMsg struct {
+	client       *ContainerClient
+	worktreePath string
+}
+
+type containerErrMsg struct {
+	err error
+}
+
+type statusInfo struct {
+	Branch       string
+	PRNumber     int
+	WorktreeName string
+	ActiveCount  int
+	TotalCount   int
+	DiffAdd      int
+	DiffDel      int
+}
+
+type statusInfoMsg struct {
+	info statusInfo
+}
+
+type worktreeListMsg struct {
+	items []WorktreeInfo
+	err   error
+}
+
+type branchListMsg struct {
+	items         []string
+	currentBranch string
+	err           error
+}
+
+type branchCheckoutMsg struct {
+	branch string
+	err    error
+}
+
+type workspaceMsg struct {
+	worktreePath string
+}
+
+type langdagReadyMsg struct {
+	client   *langdag.Client
+	provider string
+	err      error
+}
+
+// ─── Debug logging ───
+
 var debugEnabled = os.Getenv("CPSL_DEBUG") != ""
 
 func debugLog(format string, args ...any) {
@@ -385,247 +477,8 @@ func truncateForLog(s string, max int) string {
 	return s[:max] + "..."
 }
 
-// --- Message types ---
+// ─── wrapLineCount (used by wrap_test.go) ───
 
-// modelsMsg carries the result of the async model fetch.
-type modelsMsg struct {
-	models []ModelDef
-	err    error
-}
-
-// sweScoresMsg carries the result of the async SWE-bench fetch.
-type sweScoresMsg struct {
-	scores map[string]float64
-	err    error
-}
-
-// containerReadyMsg signals that the container has started successfully.
-type containerReadyMsg struct {
-	client       *ContainerClient
-	worktreePath string
-}
-
-// statusInfo holds cached status bar data.
-type statusInfo struct {
-	Branch       string
-	PRNumber     int // 0 = no PR
-	WorktreeName string
-	ActiveCount  int
-	TotalCount   int
-	DiffAdd      int
-	DiffDel      int
-}
-
-// statusInfoMsg carries the result of the async status bar fetch.
-type statusInfoMsg struct {
-	info statusInfo
-}
-
-// worktreeListMsg carries the result of the async worktree list fetch.
-type worktreeListMsg struct {
-	items []WorktreeInfo
-	err   error
-}
-
-// branchListMsg carries the result of the async branch list fetch.
-type branchListMsg struct {
-	items         []string
-	currentBranch string
-	err           error
-}
-
-// branchSelected is returned when the user presses Enter on a branch.
-type branchSelected struct {
-	name string
-}
-
-// branchCheckoutMsg carries the result of a git checkout operation.
-type branchCheckoutMsg struct {
-	branch string
-	err    error
-}
-
-// workspaceMsg carries the resolved workspace path from resolveWorkspaceCmd.
-type workspaceMsg struct {
-	worktreePath string
-}
-
-// containerErrMsg signals that the container failed to start.
-type containerErrMsg struct {
-	err error
-}
-
-// shellExitMsg is sent when the interactive shell session ends.
-type shellExitMsg struct {
-	err error
-}
-
-// langdagReadyMsg signals that the langdag client has been initialized.
-type langdagReadyMsg struct {
-	client   *langdag.Client
-	provider string
-	err      error
-}
-
-// agentEventMsg wraps an AgentEvent for the bubbletea Update loop.
-type agentEventMsg struct {
-	event AgentEvent
-}
-
-// listenForAgentEvent returns a tea.Cmd that reads the next event from the agent channel.
-func listenForAgentEvent(events <-chan AgentEvent) tea.Cmd {
-	return func() tea.Msg {
-		event, ok := <-events
-		if !ok {
-			return agentEventMsg{AgentEvent{Type: EventDone}}
-		}
-		return agentEventMsg{event}
-	}
-}
-
-// gitRepoRoot returns the git repository root, or empty string if not in a repo.
-func gitRepoRoot() string {
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-// resolveWorkspaceCmd determines the workspace path (worktree selection + lock)
-// without starting Docker. Returns workspaceMsg.
-func resolveWorkspaceCmd(cfg Config) tea.Msg {
-	var workspace string
-	repoRoot := gitRepoRoot()
-	if repoRoot != "" {
-		selected, _, err := selectWorktree(repoRoot)
-		if err != nil {
-			return containerErrMsg{err: fmt.Errorf("worktree selection: %w", err)}
-		}
-		if selected != "" {
-			workspace = selected
-		} else {
-			cwd, _ := os.Getwd()
-			workspace = cwd
-		}
-	} else {
-		cwd, _ := os.Getwd()
-		workspace = cwd
-	}
-
-	// Lock the worktree if it's under the worktree base dir.
-	if repoRoot != "" && workspace != "" {
-		_ = lockWorktree(workspace, os.Getpid())
-	}
-
-	return workspaceMsg{worktreePath: workspace}
-}
-
-// bootContainerCmd creates a container client and starts the container with
-// the given workspace path. Runs as an async tea.Cmd.
-func bootContainerCmd(cfg Config, workspace string) tea.Msg {
-	ccfg := cfg.containerConfig()
-	client := NewContainerClient(ccfg)
-
-	if !client.IsAvailable() {
-		return containerErrMsg{err: fmt.Errorf(
-			"Docker is not running. Please start Docker Desktop and try again.")}
-	}
-
-	mounts := []MountSpec{{
-		Source:      workspace,
-		Destination: "/workspace",
-		ReadOnly:    false,
-	}}
-
-	if err := client.Start(workspace, mounts); err != nil {
-		return containerErrMsg{err: fmt.Errorf("starting container: %w", err)}
-	}
-
-	return containerReadyMsg{client: client, worktreePath: workspace}
-}
-
-// fetchStatusCmd gathers status bar info: branch name, PR number, worktree
-// name, and active worktree count. Runs git/gh commands in the worktree dir.
-func fetchStatusCmd(worktreePath string) tea.Msg {
-	var info statusInfo
-
-	// Branch name from the worktree.
-	info.Branch = worktreeBranch(worktreePath)
-
-	// PR number from gh (optional, fails silently).
-	ghCmd := exec.Command("gh", "pr", "view", "--json", "number", "-q", ".number")
-	ghCmd.Dir = worktreePath
-	if out, err := ghCmd.Output(); err == nil {
-		if n, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil {
-			info.PRNumber = n
-		}
-	}
-
-	// Diff stats: insertions/deletions vs default branch (main).
-	diffCmd := exec.Command("git", "diff", "--shortstat", "main")
-	diffCmd.Dir = worktreePath
-	if out, err := diffCmd.Output(); err == nil {
-		line := strings.TrimSpace(string(out))
-		if re := regexp.MustCompile(`(\d+) insertion`); re.MatchString(line) {
-			if n, err := strconv.Atoi(re.FindStringSubmatch(line)[1]); err == nil {
-				info.DiffAdd = n
-			}
-		}
-		if re := regexp.MustCompile(`(\d+) deletion`); re.MatchString(line) {
-			if n, err := strconv.Atoi(re.FindStringSubmatch(line)[1]); err == nil {
-				info.DiffDel = n
-			}
-		}
-	}
-
-	// Worktree name is the base directory name.
-	info.WorktreeName = filepath.Base(worktreePath)
-
-	// Count active (locked) worktrees.
-	repoRoot := gitRepoRoot()
-	if repoRoot != "" {
-		if projectID, err := ensureProjectID(repoRoot); err == nil {
-			baseDir := worktreeBaseDir(projectID)
-			if wts, err := listWorktrees(baseDir); err == nil {
-				info.TotalCount = len(wts)
-				for _, wt := range wts {
-					if wt.Active {
-						info.ActiveCount++
-					}
-				}
-			}
-		}
-	}
-
-	return statusInfoMsg{info: info}
-}
-
-// fetchModelsCmd returns the hardcoded model list.
-func fetchModelsCmd() tea.Msg {
-	return modelsMsg{models: builtinModels()}
-}
-
-// fetchSWEScoresCmd returns a tea.Cmd that fetches SWE-bench scores.
-func fetchSWEScoresCmd() tea.Msg {
-	scores, err := fetchSWEScores()
-	return sweScoresMsg{scores: scores, err: err}
-}
-
-func (m model) Init() tea.Cmd {
-	cfg := m.config
-	return tea.Batch(textarea.Blink, fetchModelsCmd, fetchSWEScoresCmd, func() tea.Msg {
-		return resolveWorkspaceCmd(cfg)
-	}, func() tea.Msg {
-		client, err := newLangdagClient(cfg)
-		return langdagReadyMsg{client: client, provider: cfg.defaultLangdagProvider(), err: err}
-	})
-}
-
-// wrapLineCount reproduces the textarea's internal wrap() function exactly
-// to count how many display lines a single logical line produces at the given width.
-// This must stay in sync with charm.land/bubbles/v2/textarea wrap().
 func wrapLineCount(line string, width int) int {
 	if width <= 0 {
 		return 1
@@ -683,1325 +536,145 @@ func wrapLineCount(line string, width int) int {
 	return len(lines)
 }
 
-// displayLineCount calculates the total visual display lines for the textarea content.
-func (m model) displayLineCount() int {
-	val := m.textarea.Value()
-	if val == "" {
-		return 1
+// ─── Git helpers ───
+
+func gitRepoRoot() string {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
 	}
-	width := m.textarea.Width()
-	if width <= 0 {
-		return m.textarea.LineCount()
-	}
-	logicalLines := strings.Split(val, "\n")
-	total := 0
-	for _, line := range logicalLines {
-		total += wrapLineCount(line, width)
-	}
-	return total
+	return strings.TrimSpace(string(out))
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	result, cmd := m.update(msg)
-	// Print any new messages via tea.Println so they appear in terminal scrollback.
-	if mdl, ok := result.(model); ok && mdl.mode == modeChat && mdl.ready {
-		if n := len(mdl.messages); n > mdl.printedMsgCount {
-			var printCmds []tea.Cmd
-			for i := mdl.printedMsgCount; i < n; i++ {
-				printCmds = append(printCmds, tea.Println(renderMessage(mdl.messages[i], mdl.width)))
-			}
-			mdl.printedMsgCount = n
-			if cmd != nil {
-				printCmds = append(printCmds, cmd)
-			}
-			return mdl, tea.Batch(printCmds...)
-		}
-		return mdl, cmd
-	}
-	return result, cmd
-}
+// ─── Async init commands ───
 
-func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// Handle async model fetch result regardless of mode
-	if msg, ok := msg.(modelsMsg); ok {
-		m.modelsLoaded = true
-		m.modelsErr = msg.err
-		if msg.err == nil {
-			m.models = msg.models
-			if m.sweLoaded && m.sweScores != nil {
-				matchSWEScores(m.models, m.sweScores)
-			}
-		}
-		return m, nil
-	}
-
-	// Handle async SWE-bench scores result regardless of mode
-	if msg, ok := msg.(sweScoresMsg); ok {
-		m.sweLoaded = true
-		if msg.err == nil {
-			m.sweScores = msg.scores
-			if m.modelsLoaded && m.models != nil {
-				matchSWEScores(m.models, m.sweScores)
-			}
-		}
-		return m, nil
-	}
-
-	// Handle langdag client initialization regardless of mode
-	if msg, ok := msg.(langdagReadyMsg); ok {
-		if msg.err != nil {
-			log.Printf("warning: langdag init: %v", msg.err)
-		} else {
-			m.langdagClient = msg.client
-			m.langdagProvider = msg.provider
-		}
-		return m, nil
-	}
-
-	// Handle agent events regardless of mode
-	if msg, ok := msg.(agentEventMsg); ok {
-		return m.handleAgentEvent(msg.event)
-	}
-
-	// Handle async status bar result regardless of mode
-	if msg, ok := msg.(statusInfoMsg); ok {
-		m.status = msg.info
-		return m, nil
-	}
-
-	// Handle async worktree list result regardless of mode
-	if msg, ok := msg.(worktreeListMsg); ok {
-		if msg.err != nil {
-			m.mode = modeChat
-			m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error listing worktrees: %v", msg.err)})
-			m.textarea.Focus()
-	return m, nil
-		}
-		m.worktreeListC = newWorktreeList(msg.items, m.worktreePath, m.width, m.height)
-		return m, nil
-	}
-
-	// Handle async branch list result regardless of mode
-	if msg, ok := msg.(branchListMsg); ok {
-		if msg.err != nil {
-			m.mode = modeChat
-			m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error listing branches: %v", msg.err)})
-			m.textarea.Focus()
-	return m, nil
-		}
-		m.branchListC = newBranchList(msg.items, msg.currentBranch, m.width, m.height)
-		return m, nil
-	}
-
-	// Handle branch checkout result regardless of mode
-	if msg, ok := msg.(branchCheckoutMsg); ok {
-		m.mode = modeChat
-		if msg.err != nil {
-			m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Checkout failed: %v", msg.err)})
-		} else {
-			m.status.Branch = msg.branch
-			m.messages = append(m.messages, chatMessage{kind: msgSuccess, content: fmt.Sprintf("Switched to branch '%s'", msg.branch)})
-		}
-		m.textarea.Focus()
-	return m, nil
-	}
-
-	// Handle workspace resolution result — fires status fetch + container boot in parallel
-	if msg, ok := msg.(workspaceMsg); ok {
-		m.worktreePath = msg.worktreePath
-		cfg := m.config
-		wtPath := msg.worktreePath
-		return m, tea.Batch(
-			func() tea.Msg { return fetchStatusCmd(wtPath) },
-			func() tea.Msg { return bootContainerCmd(cfg, wtPath) },
-		)
-	}
-
-	// Handle async container startup result regardless of mode
-	if msg, ok := msg.(containerReadyMsg); ok {
-		m.container = msg.client
-		m.worktreePath = msg.worktreePath
-		m.containerReady = true
-		return m, nil
-	}
-	if msg, ok := msg.(containerErrMsg); ok {
-		m.containerErr = msg.err
-		return m, nil
-	}
-
-	// Handle interactive shell exit
-	if msg, ok := msg.(shellExitMsg); ok {
-		if msg.err != nil {
-			m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Shell error: %v", msg.err)})
-		} else {
-			m.messages = append(m.messages, chatMessage{kind: msgInfo, content: "Shell session ended."})
-		}
-		return m, nil
-	}
-
-	// Config mode: delegate to config form
-	if m.mode == modeConfig {
-		return m.updateConfigMode(msg)
-	}
-
-	// Model selection mode: delegate to model list
-	if m.mode == modeModel {
-		return m.updateModelMode(msg)
-	}
-
-	// Worktree list mode: delegate to worktree list
-	if m.mode == modeWorktrees {
-		return m.updateWorktreeMode(msg)
-	}
-
-	// Branch list mode: delegate to branch list
-	if m.mode == modeBranches {
-		return m.updateBranchMode(msg)
-	}
-
-	// Handle approval y/n input when awaiting user confirmation
-	if m.awaitingApproval {
-		if msg, ok := msg.(tea.KeyPressMsg); ok {
-			switch msg.String() {
-			case "y", "Y":
-				m.awaitingApproval = false
-				if m.agent != nil {
-					m.agent.Approve(ApprovalResponse{Approved: true})
-				}
-				m.messages = append(m.messages, chatMessage{kind: msgSuccess, content: "Approved"})
-				return m, listenForAgentEvent(m.agent.Events())
-			case "n", "N":
-				m.awaitingApproval = false
-				if m.agent != nil {
-					m.agent.Approve(ApprovalResponse{Approved: false})
-				}
-				m.messages = append(m.messages, chatMessage{kind: msgError, content: "Denied"})
-				return m, listenForAgentEvent(m.agent.Events())
-			case "ctrl+c":
-				m.cleanup()
-				return m, tea.Quit
-			}
-			// Ignore all other keys while awaiting approval
-			return m, nil
-		}
-	}
-
-	var cmds []tea.Cmd
-	taMsg := tea.Msg(msg) // message forwarded to textarea (may be modified)
-
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-
-		inputAreaWidth := m.width - 2 // border left + right
-		if inputAreaWidth < 1 {
-			inputAreaWidth = 1
-		}
-		m.textarea.SetWidth(inputAreaWidth)
-
-		if !m.ready {
-			m.ready = true
-			// Print logo on first resize
-			m.logoPrinted = true
-			cmds = append(cmds, tea.Println(renderLogo()))
-		} else if m.printedMsgCount > 0 || m.logoPrinted {
-			// Resize with existing scrollback: clear everything and reprint
-			// with word-wrap at the new width. This prevents the terminal's
-			// character-level reflow from mangling our word-wrapped output.
-			// Return early to avoid batching with other cmds (textarea etc.)
-			// which would cause concurrent renders that interfere with the
-			// clear+reprint sequence.
-			m.printedMsgCount = len(m.messages)
-			m.recalcTextareaHeight()
-			return m, reprintScrollback(m.messages, m.width)
-		}
-		m.recalcTextareaHeight()
-
-	case tea.PasteMsg:
-		if len(msg.Content) >= m.config.PasteCollapseMinChars {
-			m.pasteCount++
-			if m.pasteStore == nil {
-				m.pasteStore = make(map[int]string)
-			}
-			m.pasteStore[m.pasteCount] = msg.Content
-			placeholder := fmt.Sprintf("[pasted #%d | %d chars]", m.pasteCount, len(msg.Content))
-			taMsg = tea.PasteMsg{Content: placeholder}
-		}
-
-	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "ctrl+c":
-			m.cleanup()
-			return m, tea.Quit
-		case "up":
-			if matches := m.autocompleteMatches(); len(matches) > 0 {
-				m.autocompleteIdx--
-				if m.autocompleteIdx < 0 {
-					m.autocompleteIdx = len(matches) - 1
-				}
-				return m, nil
-			}
-		case "down":
-			if matches := m.autocompleteMatches(); len(matches) > 0 {
-				m.autocompleteIdx++
-				if m.autocompleteIdx >= len(matches) {
-					m.autocompleteIdx = 0
-				}
-				return m, nil
-			}
-		case "tab":
-			if matches := m.autocompleteMatches(); len(matches) > 0 {
-				idx := m.autocompleteIdx
-				if idx >= len(matches) {
-					idx = 0
-				}
-				m.textarea.SetValue(matches[idx])
-				m.textarea.CursorEnd()
-				m.autocompleteIdx = 0
-				m.recalcTextareaHeight()
-			}
-			return m, nil
-		case "esc":
-			if strings.HasPrefix(m.textarea.Value(), "/") {
-				m.textarea.Reset()
-				m.textarea.SetHeight(minInputHeight)
-				m.autocompleteIdx = 0
-			}
-			return m, nil
-		case "enter":
-			if m.agentRunning {
-				return m, nil // ignore input while agent is working
-			}
-			val := strings.TrimSpace(m.textarea.Value())
-			if val != "" {
-				if strings.HasPrefix(val, "/") {
-					if matches := filterCommands(val); len(matches) > 0 {
-						idx := m.autocompleteIdx
-						if idx >= len(matches) {
-							idx = 0
-						}
-						val = matches[idx]
-					}
-					m.autocompleteIdx = 0
-					return m.handleCommand(val)
-				}
-				content := expandPastes(val, m.pasteStore)
-				m.textarea.Reset()
-				m.textarea.SetHeight(minInputHeight)
-
-				// Start agent if an LLM provider is configured
-				if m.langdagClient == nil {
-					m.messages = append(m.messages, chatMessage{kind: msgUser, content: content, leadBlank: true})
-					m.messages = append(m.messages, chatMessage{kind: msgError, content: "No API keys configured. Use /config to add a key first."})
-					return m, nil
-				}
-
-				m.messages = append(m.messages, chatMessage{kind: msgUser, content: content, leadBlank: true})
-				if !m.containerReady {
-					m.messages = append(m.messages, chatMessage{kind: msgInfo, content: "Container is still starting — the agent won't have bash or file tools until it's ready."})
-				}
-				m2, agentCmd := m.startAgent(content)
-				return m2, agentCmd
-			}
-			return m, nil
-		}
-
-	}
-
-	// Temporarily expand textarea to max height before Update so the
-	// textarea's internal repositionView() doesn't scroll within a too-small
-	// viewport. We'll shrink to the real height right after.
-	m.textarea.SetHeight(maxInputHeight)
-
-	// Update textarea (may receive modified PasteMsg with placeholder)
-	prevVal := m.textarea.Value()
-	var taCmd tea.Cmd
-	m.textarea, taCmd = m.textarea.Update(taMsg)
-	cmds = append(cmds, taCmd)
-
-	// Reset autocomplete selection when input changes
-	if m.textarea.Value() != prevVal {
-		m.autocompleteIdx = 0
-	}
-
-	// Now set the correct height based on actual content
-	m.recalcTextareaHeight()
-
-	return m, tea.Batch(cmds...)
-}
-
-// enterConfigMode switches to the config editing mode.
-func (m model) enterConfigMode() (tea.Model, tea.Cmd) {
-	m.mode = modeConfig
-	m.configForm = newConfigForm(m.config, m.width, m.height)
-	m.textarea.Reset()
-	m.textarea.SetHeight(minInputHeight)
-	m.textarea.Blur()
-	return m, nil
-}
-
-// exitConfigMode returns to chat mode, optionally saving config changes.
-func (m model) exitConfigMode(save bool) (tea.Model, tea.Cmd) {
-	m.mode = modeChat
-	var cmds []tea.Cmd
-	if save {
-		m.configForm.applyTo(&m.config)
-		if err := saveConfig(m.config); err != nil {
-			m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error saving config: %v", err)})
-		} else {
-			m.messages = append(m.messages, chatMessage{kind: msgSuccess, content: "Config saved."})
-			// Reinitialize langdag client with new API keys
-			if m.langdagClient != nil {
-				m.langdagClient.Close()
-				m.langdagClient = nil
-				m.langdagProvider = ""
-			}
-			cfg := m.config
-			cmds = append(cmds, func() tea.Msg {
-				client, err := newLangdagClient(cfg)
-				return langdagReadyMsg{client: client, provider: cfg.defaultLangdagProvider(), err: err}
-			})
-		}
-	} else {
-		m.messages = append(m.messages, chatMessage{kind: msgInfo, content: "Config changes discarded."})
-	}
-	m.textarea.Focus()
-	return m, tea.Batch(cmds...)
-}
-
-// updateConfigMode handles input while the config form is active.
-func (m model) updateConfigMode(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.configForm.width = msg.Width
-		m.configForm.height = msg.Height
-		return m, nil
-
-	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "esc", "ctrl+c":
-			return m.exitConfigMode(false)
-		case "enter":
-			if m.configForm.validate() {
-				return m.exitConfigMode(true)
-			}
-			// validation failed — stay in config mode, errors shown
-			return m, nil
-		}
-	}
-
-	// Old bubbletea path — configForm no longer has Update; key handling
-	// is done via configForm.HandleKey in the App event loop.
-	return m, nil
-}
-
-// enterModelMode switches to the model selection mode.
-func (m model) enterModelMode() (tea.Model, tea.Cmd) {
-	if !m.modelsLoaded {
-		m.textarea.Reset()
-		m.textarea.SetHeight(minInputHeight)
-		m.messages = append(m.messages, chatMessage{kind: msgInfo, content: "Models are still loading... please try again in a moment."})
-		return m, nil
-	}
-	if m.modelsErr != nil {
-		m.textarea.Reset()
-		m.textarea.SetHeight(minInputHeight)
-		m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Failed to load models: %v", m.modelsErr)})
-		return m, nil
-	}
-	available := m.config.availableModels(m.models)
-	if len(available) == 0 {
-		m.textarea.Reset()
-		m.textarea.SetHeight(minInputHeight)
-		m.messages = append(m.messages, chatMessage{kind: msgError, content: "No API keys configured. Use /config to add a key first."})
-		return m, nil
-	}
-	m.mode = modeModel
-	activeModel := m.config.resolveActiveModel(m.models)
-	m.modelList = newModelList(available, activeModel, m.width, m.height, m.config.ModelSortDirs)
-	m.textarea.Reset()
-	m.textarea.SetHeight(minInputHeight)
-	m.textarea.Blur()
-	return m, nil
-}
-
-// exitModelMode returns to chat mode, optionally saving the selected model.
-func (m model) exitModelMode(save bool) (tea.Model, tea.Cmd) {
-	m.mode = modeChat
-	// Always persist sort preferences
-	m.config.ModelSortDirs = m.modelList.sortDirsMap()
-	if save {
-		selected := m.modelList.selected()
-		m.config.ActiveModel = selected.ID
-		if err := saveConfig(m.config); err != nil {
-			m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error saving model: %v", err)})
-		} else {
-			m.messages = append(m.messages, chatMessage{kind: msgSuccess, content: fmt.Sprintf("Model set to %s.", selected.DisplayName)})
-		}
-	} else {
-		// Save sort preferences even on cancel
-		_ = saveConfig(m.config)
-		m.messages = append(m.messages, chatMessage{kind: msgInfo, content: "Model selection cancelled."})
-	}
-	m.textarea.Focus()
-	return m, nil
-}
-
-// updateModelMode handles input while the model list is active.
-func (m model) updateModelMode(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.modelList.width = msg.Width
-		m.modelList.height = msg.Height
-		return m, nil
-
-	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "esc", "ctrl+c":
-			return m.exitModelMode(false)
-		case "enter":
-			return m.exitModelMode(true)
-		}
-		m.modelList.HandleKey(teaKeyToEventKey(msg))
-	}
-
-	return m, nil
-}
-
-// enterWorktreeMode switches to the worktree list mode.
-func (m model) enterWorktreeMode() (tea.Model, tea.Cmd) {
-	m.mode = modeWorktrees
-	m.worktreeListC = newWorktreeList(nil, m.worktreePath, m.width, m.height)
-	m.textarea.Reset()
-	m.textarea.SetHeight(minInputHeight)
-	m.textarea.Blur()
-
-	// Fetch worktree list async
+func resolveWorkspaceCmd(cfg Config) workspaceMsg {
+	var workspace string
 	repoRoot := gitRepoRoot()
-	return m, func() tea.Msg {
-		if repoRoot == "" {
-			return worktreeListMsg{err: fmt.Errorf("not in a git repository")}
-		}
-		projectID, err := ensureProjectID(repoRoot)
+	if repoRoot != "" {
+		selected, _, err := selectWorktree(repoRoot)
 		if err != nil {
-			return worktreeListMsg{err: err}
+			return workspaceMsg{}
 		}
-		baseDir := worktreeBaseDir(projectID)
-		items, err := listWorktrees(baseDir)
-		return worktreeListMsg{items: items, err: err}
-	}
-}
-
-// exitWorktreeMode returns to chat mode.
-func (m model) exitWorktreeMode() (tea.Model, tea.Cmd) {
-	m.mode = modeChat
-	m.textarea.Focus()
-	return m, nil
-}
-
-// updateWorktreeMode handles input while the worktree list is active.
-func (m model) updateWorktreeMode(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.worktreeListC.width = msg.Width
-		m.worktreeListC.height = msg.Height
-		return m, nil
-
-	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "esc", "ctrl+c":
-			return m.exitWorktreeMode()
-		}
-		m.worktreeListC.HandleKey(teaKeyToEventKey(msg))
-	}
-
-	return m, nil
-}
-
-// viewWorktrees renders the worktree list screen.
-func (m model) viewWorktrees() tea.View {
-	formBorder := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForegroundBlend(borderGradientColors...).
-		Width(m.width).
-		Height(m.height - 2).
-		Padding(1, 0)
-
-	formContent := m.worktreeListC.View()
-	rendered := formBorder.Render(formContent)
-
-	v := tea.NewView(rendered)
-	v.AltScreen = true
-	return v
-}
-
-// enterBranchMode switches to the branch list mode.
-func (m model) enterBranchMode() (tea.Model, tea.Cmd) {
-	m.mode = modeBranches
-	m.branchListC = newBranchList(nil, m.status.Branch, m.width, m.height)
-	m.textarea.Reset()
-	m.textarea.SetHeight(minInputHeight)
-	m.textarea.Blur()
-
-	// Fetch branch list async
-	wtPath := m.worktreePath
-	return m, func() tea.Msg {
-		dir := wtPath
-		if dir == "" {
-			dir = "."
-		}
-		// Get current branch
-		headCmd := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD")
-		headOut, err := headCmd.Output()
-		if err != nil {
-			return branchListMsg{err: fmt.Errorf("not in a git repository")}
-		}
-		currentBranch := strings.TrimSpace(string(headOut))
-
-		// Get all branches
-		branchCmd := exec.Command("git", "-C", dir, "branch", "-a", "--format=%(refname:short)")
-		branchOut, err := branchCmd.Output()
-		if err != nil {
-			return branchListMsg{err: fmt.Errorf("failed to list branches: %w", err)}
-		}
-		var branches []string
-		for _, line := range strings.Split(strings.TrimSpace(string(branchOut)), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				branches = append(branches, line)
-			}
-		}
-		return branchListMsg{items: branches, currentBranch: currentBranch}
-	}
-}
-
-// exitBranchMode returns to chat mode.
-func (m model) exitBranchMode() (tea.Model, tea.Cmd) {
-	m.mode = modeChat
-	m.textarea.Focus()
-	return m, nil
-}
-
-// updateBranchMode handles input while the branch list is active.
-func (m model) updateBranchMode(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.branchListC.width = msg.Width
-		m.branchListC.height = msg.Height
-		return m, nil
-
-	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "esc", "ctrl+c":
-			return m.exitBranchMode()
-		}
-		m.branchListC.HandleKey(teaKeyToEventKey(msg))
-		if sel := m.branchListC.selected; sel != "" {
-			m.branchListC.selected = "" // consume
-			branch := sel
-			wtPath := m.worktreePath
-			return m, func() tea.Msg {
-				dir := wtPath
-				if dir == "" {
-					dir = "."
-				}
-				cmd := exec.Command("git", "-C", dir, "checkout", branch)
-				out, err := cmd.CombinedOutput()
-				if err != nil {
-					return branchCheckoutMsg{
-						branch: branch,
-						err:    fmt.Errorf("%s", strings.TrimSpace(string(out))),
-					}
-				}
-				return branchCheckoutMsg{branch: branch}
-			}
-		}
-	}
-
-	return m, nil
-}
-
-// viewBranches renders the branch list screen.
-func (m model) viewBranches() tea.View {
-	formBorder := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForegroundBlend(borderGradientColors...).
-		Width(m.width).
-		Height(m.height - 2).
-		Padding(1, 0)
-
-	formContent := m.branchListC.View()
-	rendered := formBorder.Render(formContent)
-
-	v := tea.NewView(rendered)
-	v.AltScreen = true
-	return v
-}
-
-// startAgent creates (or reuses) an Agent and kicks off the agent loop for the given user message.
-func (m model) startAgent(userMessage string) (tea.Model, tea.Cmd) {
-	// Build tools list based on available resources
-	var tools []Tool
-	if m.containerReady && m.container != nil {
-		tools = append(tools, NewBashTool(m.container, 120))
-	}
-	if m.worktreePath != "" {
-		tools = append(tools, NewGitTool(m.worktreePath))
-	}
-
-	// Resolve model and determine its provider
-	modelID := ""
-	if m.modelsLoaded {
-		modelID = m.config.resolveActiveModel(m.models)
-	}
-
-	// Look up the model definition to get the provider
-	var modelProvider string
-	if modelDef := findModelByID(m.models, modelID); modelDef != nil {
-		modelProvider = modelDef.Provider
-	}
-
-	// Ensure the langdag client is configured for the correct provider.
-	// Recreate it if the provider changed (e.g. switching from Anthropic to Grok).
-	if modelProvider != "" && modelProvider != m.langdagProvider {
-		if m.langdagClient != nil {
-			m.langdagClient.Close()
-		}
-		client, err := newLangdagClientForProvider(m.config, modelProvider)
-		if err != nil {
-			m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error initializing %s provider: %v", modelProvider, err)})
-			return m, nil
-		}
-		m.langdagClient = client
-		m.langdagProvider = modelProvider
-	}
-
-	// Build system prompt
-	workDir := "/workspace"
-	systemPrompt := buildSystemPrompt(tools, workDir)
-
-	// Create a fresh agent for each turn (the agent loop is stateless between turns;
-	// conversation continuity is handled by parentNodeID via langdag).
-	// Model IDs are already native API format (e.g. "claude-sonnet-4-6-20250801").
-	agent := NewAgent(m.langdagClient, tools, systemPrompt, modelID)
-	m.agent = agent
-	m.agentRunning = true
-	m.streamingText = ""
-	m.needsTextSep = true
-
-	// Start agent loop in background
-	parentNodeID := m.agentNodeID
-	go agent.Run(context.Background(), userMessage, parentNodeID)
-
-	// Start listening for agent events
-	return m, listenForAgentEvent(agent.Events())
-}
-
-// handleAgentEvent processes a single agent event and returns the updated model.
-func (m model) handleAgentEvent(event AgentEvent) (tea.Model, tea.Cmd) {
-	debugLog("event=%d text=%q tool=%s err=%v", event.Type, event.Text, event.ToolName, event.Error)
-
-	switch event.Type {
-	case EventTextDelta:
-		m.streamingText += event.Text
-		// Flush complete lines to messages store
-		if idx := strings.LastIndex(m.streamingText, "\n"); idx >= 0 {
-			m.messages = append(m.messages, chatMessage{
-				kind:      msgAssistant,
-				content:   m.streamingText[:idx],
-				leadBlank: m.needsTextSep,
-			})
-			m.needsTextSep = false
-			m.streamingText = m.streamingText[idx+1:]
-		}
-		return m, listenForAgentEvent(m.agent.Events())
-
-	case EventToolCallStart:
-		debugLog("tool_call_start: %s input=%s", event.ToolName, string(event.ToolInput))
-		// Flush streaming text if any
-		if m.streamingText != "" {
-			m.messages = append(m.messages, chatMessage{
-				kind:      msgAssistant,
-				content:   m.streamingText,
-				leadBlank: m.needsTextSep,
-			})
-			m.needsTextSep = false
-			m.streamingText = ""
-		}
-		// Store tool call summary
-		m.messages = append(m.messages, chatMessage{kind: msgToolCall, content: toolCallSummary(event.ToolName, event.ToolInput), leadBlank: true})
-		return m, listenForAgentEvent(m.agent.Events())
-
-	case EventToolResult:
-		debugLog("tool_result: err=%v result=%q", event.IsError, truncateForLog(event.ToolResult, 500))
-		result := collapseToolResult(event.ToolResult)
-		m.needsTextSep = true
-		m.messages = append(m.messages, chatMessage{kind: msgToolResult, content: result, isError: event.IsError})
-		return m, listenForAgentEvent(m.agent.Events())
-
-	case EventToolCallDone:
-		// Already handled by EventToolResult; just keep listening
-		return m, listenForAgentEvent(m.agent.Events())
-
-	case EventApprovalReq:
-		debugLog("approval_req: %s", event.ApprovalDesc)
-		// Show approval request in View and wait for user y/n
-		m.awaitingApproval = true
-		m.approvalDesc = event.ApprovalDesc
-		// Don't listen for more events yet — wait for user input in Update()
-		return m, nil
-
-	case EventDone:
-		debugLog("done: nodeID=%s streamingLen=%d", event.NodeID, len(m.streamingText))
-		m.agentRunning = false
-		if event.NodeID != "" {
-			m.agentNodeID = event.NodeID
-		}
-		// Flush any remaining streaming text
-		if m.streamingText != "" {
-			m.messages = append(m.messages, chatMessage{
-				kind:      msgAssistant,
-				content:   m.streamingText,
-				leadBlank: m.needsTextSep,
-			})
-			m.streamingText = ""
-		}
-		return m, nil
-
-	case EventError:
-		errMsg := "Agent error"
-		if event.Error != nil {
-			errMsg = event.Error.Error()
-		}
-		debugLog("error: %s", errMsg)
-		m.messages = append(m.messages, chatMessage{kind: msgError, content: errMsg})
-		return m, listenForAgentEvent(m.agent.Events())
-	}
-
-	// Unknown event type — keep listening
-	debugLog("unknown event type: %d", event.Type)
-	return m, listenForAgentEvent(m.agent.Events())
-}
-
-// handleCommand processes slash commands and returns the updated model.
-func (m model) handleCommand(input string) (tea.Model, tea.Cmd) {
-	cmd := strings.Fields(input)[0] // e.g. "/config"
-
-	switch cmd {
-	case "/branches":
-		return m.enterBranchMode()
-	case "/clear":
-		m.agentNodeID = ""
-		m.streamingText = ""
-		m.pendingToolCall = ""
-		m.messages = nil
-		m.printedMsgCount = 0
-		m.textarea.Reset()
-		m.textarea.SetHeight(minInputHeight)
-		// Clear screen+scrollback and re-print logo
-		return m, tea.Sequence(
-			tea.Raw("\033[2J\033[3J\033[H"),
-			tea.ClearScreen,
-			tea.Println(renderLogo()),
-		)
-	case "/config":
-		return m.enterConfigMode()
-	case "/shell":
-		return m.enterShellMode()
-	case "/model":
-		return m.enterModelMode()
-	case "/worktrees":
-		return m.enterWorktreeMode()
-	default:
-		m.textarea.Reset()
-		m.textarea.SetHeight(minInputHeight)
-		m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Unknown command: %s", cmd)})
-		return m, nil
-	}
-}
-
-// cleanup stops the container, closes langdag client, and unlocks the worktree.
-func (m *model) cleanup() {
-	if m.agent != nil {
-		m.agent.Cancel()
-	}
-	if m.container != nil {
-		_ = m.container.Stop()
-	}
-	if m.langdagClient != nil {
-		_ = m.langdagClient.Close()
-	}
-	if m.worktreePath != "" {
-		_ = unlockWorktree(m.worktreePath)
-	}
-}
-
-// enterShellMode opens an interactive TTY shell session in the container.
-func (m model) enterShellMode() (tea.Model, tea.Cmd) {
-	// Check container state.
-	if m.containerErr != nil {
-		m.textarea.Reset()
-		m.textarea.SetHeight(minInputHeight)
-		m.messages = append(m.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Container error: %v", m.containerErr)})
-		return m, nil
-	}
-	if !m.containerReady {
-		m.textarea.Reset()
-		m.textarea.SetHeight(minInputHeight)
-		m.messages = append(m.messages, chatMessage{kind: msgInfo, content: "Container is starting... please try again in a moment."})
-		return m, nil
-	}
-
-	m.textarea.Reset()
-	m.textarea.SetHeight(minInputHeight)
-
-	// Suspend the TUI and hand terminal control to docker exec -it.
-	shellCmd := m.container.ShellCmd()
-	return m, tea.ExecProcess(shellCmd, func(err error) tea.Msg {
-		return shellExitMsg{err: err}
-	})
-}
-
-func (m *model) recalcTextareaHeight() {
-	newHeight := m.displayLineCount()
-	if newHeight < minInputHeight {
-		newHeight = minInputHeight
-	}
-	if newHeight > maxInputHeight {
-		newHeight = maxInputHeight
-	}
-	m.textarea.SetHeight(newHeight)
-}
-
-func (m model) inputBoxHeight() int {
-	return m.textarea.Height() + 2 // top + bottom border
-}
-
-func (m model) autocompleteHeight() int {
-	if matches := m.autocompleteMatches(); len(matches) > 0 {
-		return len(matches)
-	}
-	return 0
-}
-
-func (m model) statusBarHeight() int {
-	if m.status.Branch == "" {
-		return 0
-	}
-	return 1
-}
-
-
-func truncateWithEllipsis(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	if maxLen <= 0 {
-		return ""
-	}
-	if maxLen == 1 {
-		return "…"
-	}
-	return string(runes[:maxLen-1]) + "…"
-}
-
-func (m model) renderStatusBar() string {
-	if m.status.Branch == "" {
-		return ""
-	}
-
-	infoStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#6FE7B8"))
-
-	// Compute fixed-width elements to determine name budgets
-	leftFixedW := 3 // "/b " prefix
-
-	var prText string
-	if m.status.PRNumber > 0 {
-		prText = fmt.Sprintf(" PR #%d", m.status.PRNumber)
-		leftFixedW += len([]rune(prText))
-	}
-
-	var diffW int
-	if m.status.DiffAdd > 0 || m.status.DiffDel > 0 {
-		diffW = len(fmt.Sprintf(" +%d/-%d", m.status.DiffAdd, m.status.DiffDel))
-		leftFixedW += diffW
-	}
-
-	rightFixedW := 3 // "/w " prefix
-	var countText string
-	if m.status.TotalCount > 1 {
-		countText = fmt.Sprintf(" (%d/%d)", m.status.ActiveCount, m.status.TotalCount)
-		rightFixedW += len([]rune(countText))
-	}
-
-	// Available space for branch + worktree names
-	// 3 = 2 side padding + 1 minimum gap
-	overhead := leftFixedW + rightFixedW + 3
-	available := m.width - overhead
-	if available < 4 {
-		available = 4
-	}
-
-	// Allocate space between branch and worktree names
-	branchNeed := len([]rune(m.status.Branch))
-	wtNeed := len([]rune(m.status.WorktreeName))
-
-	branchBudget := branchNeed
-	wtBudget := wtNeed
-	if branchNeed+wtNeed > available {
-		half := available / 3
-		if half < 2 {
-			half = 2
-		}
-		if branchNeed <= half {
-			wtBudget = available - branchNeed
-		} else if wtNeed <= half {
-			branchBudget = available - wtNeed
+		if selected != "" {
+			workspace = selected
 		} else {
-			branchBudget = available * 3 / 5
-			wtBudget = available - branchBudget
-		}
-	}
-
-	branchName := truncateWithEllipsis(m.status.Branch, branchBudget)
-	wtName := truncateWithEllipsis(m.status.WorktreeName, wtBudget)
-
-	// Left side: branch + optional PR
-	left := infoStyle.Render("/b " + branchName)
-	if m.status.PRNumber > 0 {
-		left += infoStyle.Render(prText)
-	}
-
-	// Diff stats next to branch info
-	if m.status.DiffAdd > 0 || m.status.DiffDel > 0 {
-		addStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6FE7B8"))
-		delStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B"))
-		left += " " + addStyle.Render(fmt.Sprintf("+%d", m.status.DiffAdd)) +
-			delStyle.Render(fmt.Sprintf("/-%d", m.status.DiffDel))
-	}
-
-	// Right side: worktree name + active count
-	right := infoStyle.Render("/w " + wtName)
-	if m.status.TotalCount > 1 {
-		right += infoStyle.Render(countText)
-	}
-
-	// Fill the space between left and right
-	leftW := lipgloss.Width(left)
-	rightW := lipgloss.Width(right)
-	gap := m.width - leftW - rightW - 2 // 1 padding each side
-	if gap < 1 {
-		gap = 1
-	}
-
-	bar := " " + left + strings.Repeat(" ", gap) + right + " "
-
-	barStyle := lipgloss.NewStyle().Width(m.width)
-
-	return barStyle.Render(bar)
-}
-
-// toolCallSummary returns a human-readable one-line summary of a tool invocation.
-func toolCallSummary(toolName string, input json.RawMessage) string {
-	switch toolName {
-	case "bash":
-		var in struct {
-			Command string `json:"command"`
-		}
-		if json.Unmarshal(input, &in) == nil && in.Command != "" {
-			cmd := in.Command
-			if len(cmd) > 120 {
-				cmd = cmd[:120] + "..."
-			}
-			return fmt.Sprintf("▶ bash: %s", cmd)
-		}
-	case "git":
-		var in struct {
-			Subcommand string   `json:"subcommand"`
-			Args       []string `json:"args,omitempty"`
-		}
-		if json.Unmarshal(input, &in) == nil && in.Subcommand != "" {
-			parts := append([]string{"git", in.Subcommand}, in.Args...)
-			cmd := strings.Join(parts, " ")
-			if len(cmd) > 120 {
-				cmd = cmd[:120] + "..."
-			}
-			return fmt.Sprintf("▶ %s", cmd)
-		}
-	}
-
-	// Fallback for unknown tools
-	return fmt.Sprintf("▶ %s", toolName)
-}
-
-// collapseToolResult truncates long tool output for display.
-func collapseToolResult(result string) string {
-	lines := strings.Split(result, "\n")
-	if len(lines) <= 10 {
-		return result
-	}
-	// Show first 4 and last 3 lines with a separator
-	head := strings.Join(lines[:4], "\n")
-	tail := strings.Join(lines[len(lines)-3:], "\n")
-	return fmt.Sprintf("%s\n  ... (%d lines omitted)\n%s", head, len(lines)-7, tail)
-}
-
-func (m model) renderAutocomplete() string {
-	matches := m.autocompleteMatches()
-	if len(matches) == 0 {
-		return ""
-	}
-	highlightStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#B88AFF")).
-		Background(lipgloss.Color("#2A1545")).
-		Bold(true).
-		PaddingLeft(1).
-		PaddingRight(1).
-		Width(m.width)
-	normalStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#E0E0E0")).
-		Background(lipgloss.Color("#2A1545")).
-		PaddingLeft(1).
-		PaddingRight(1).
-		Width(m.width)
-	idx := m.autocompleteIdx
-	if idx >= len(matches) {
-		idx = 0
-	}
-	var lines []string
-	for i, cmd := range matches {
-		if i == idx {
-			lines = append(lines, highlightStyle.Render(cmd))
-		} else {
-			lines = append(lines, normalStyle.Render(cmd))
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-func (m model) View() tea.View {
-	if !m.ready {
-		return tea.NewView("Initializing...")
-	}
-
-
-	if m.mode == modeConfig {
-		return m.viewConfig()
-	}
-
-	if m.mode == modeModel {
-		return m.viewModel()
-	}
-
-	if m.mode == modeWorktrees {
-		return m.viewWorktrees()
-	}
-
-	if m.mode == modeBranches {
-		return m.viewBranches()
-	}
-
-	// Build input box
-	inputBorderColors := borderGradientColors
-	inputBorderStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderLeft(false).
-		BorderRight(false).
-		BorderForegroundBlend(inputBorderColors...).
-		Width(m.width)
-
-	prefixStyle := lipgloss.NewStyle().Foreground(inputBorderColors[0])
-	prefix := prefixStyle.Render("❯ ")
-	textareaLines := strings.Split(m.textarea.View(), "\n")
-	for i, line := range textareaLines {
-		textareaLines[i] = prefix + line
-	}
-	inputBox := inputBorderStyle.Render(strings.Join(textareaLines, "\n"))
-
-	autocomplete := m.renderAutocomplete()
-	acHeight := m.autocompleteHeight()
-
-	// Sticky bottom: ephemeral content + status/autocomplete + input
-	var viewParts []string
-	linesAbove := 0
-
-	// Ephemeral streaming text / thinking indicator / approval prompt
-	if m.awaitingApproval {
-		approvalPrompt := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FFD700")).
-			Bold(true).
-			Render(fmt.Sprintf("Allow %s? [y/n]", m.approvalDesc))
-		viewParts = append(viewParts, approvalPrompt)
-		linesAbove += lipgloss.Height(approvalPrompt)
-	} else if streaming := m.renderStreamingText(); streaming != "" {
-		viewParts = append(viewParts, streaming)
-		linesAbove += lipgloss.Height(streaming)
-	} else if m.agentRunning {
-		indicator := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#B88AFF")).
-			Italic(true).
-			Render("thinking...")
-		viewParts = append(viewParts, indicator)
-		linesAbove += 1
-	}
-
-	if acHeight == 0 {
-		if statusBar := m.renderStatusBar(); statusBar != "" {
-			viewParts = append(viewParts, statusBar)
-			linesAbove += 1
+			cwd, _ := os.Getwd()
+			workspace = cwd
 		}
 	} else {
-		viewParts = append(viewParts, autocomplete)
-		linesAbove += acHeight
+		cwd, _ := os.Getwd()
+		workspace = cwd
 	}
 
-	viewParts = append(viewParts, inputBox)
-	linesAbove += 1 // top border of input box
-
-	bottom := strings.Join(viewParts, "\n")
-	bottomHeight := lipgloss.Height(bottom)
-
-	// Pad the View to fill the terminal height. This ensures the input area
-	// is always at the bottom of the terminal, which is required for
-	// tea.Println/insertAbove to position content correctly above the View.
-	pad := m.height - bottomHeight
-	if pad < 0 {
-		pad = 0
-	}
-	fullView := strings.Repeat("\n", pad) + bottom
-
-	v := tea.NewView(fullView)
-
-	c := m.textarea.Cursor()
-	if c != nil {
-		c.Y += linesAbove + pad
-		c.X += 2 // +2 for ❯ prefix
-		v.Cursor = c
+	if repoRoot != "" && workspace != "" {
+		_ = lockWorktree(workspace, os.Getpid())
 	}
 
-	return v
+	return workspaceMsg{worktreePath: workspace}
 }
 
-func (m model) viewConfig() tea.View {
-	formBorder := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForegroundBlend(borderGradientColors...).
-		Width(m.width).
-		Padding(1, 0)
+func bootContainerCmd(cfg Config, workspace string) any {
+	ccfg := cfg.containerConfig()
+	client := NewContainerClient(ccfg)
 
-	formContent := m.configForm.View()
-	rendered := formBorder.Render(formContent)
-
-	// Center vertically
-	formHeight := lipgloss.Height(rendered)
-	padding := (m.height - formHeight) / 2
-	if padding < 0 {
-		padding = 0
+	if !client.IsAvailable() {
+		return containerErrMsg{err: fmt.Errorf(
+			"Docker is not running. Please start Docker Desktop and try again.")}
 	}
 
-	v := tea.NewView(strings.Repeat("\n", padding) + rendered)
-	v.AltScreen = true
-	return v
+	mounts := []MountSpec{{
+		Source:      workspace,
+		Destination: "/workspace",
+		ReadOnly:    false,
+	}}
+
+	if err := client.Start(workspace, mounts); err != nil {
+		return containerErrMsg{err: fmt.Errorf("starting container: %w", err)}
+	}
+
+	return containerReadyMsg{client: client, worktreePath: workspace}
 }
 
-func (m model) viewModel() tea.View {
-	formBorder := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForegroundBlend(borderGradientColors...).
-		Width(m.width).
-		Height(m.height - 2). // constrain to window height (minus border)
-		Padding(1, 0)
+func fetchStatusCmd(worktreePath string) statusInfoMsg {
+	var info statusInfo
 
-	formContent := m.modelList.View()
-	rendered := formBorder.Render(formContent)
+	info.Branch = worktreeBranch(worktreePath)
 
-	v := tea.NewView(rendered)
-	v.AltScreen = true
-	return v
-}
-
-// teaKeyToEventKey converts a bubbletea key message to an EventKey.
-// Used by old model code paths to forward keys to the new HandleKey methods.
-func teaKeyToEventKey(msg tea.KeyPressMsg) EventKey {
-	var key Key
-	var mod Modifier
-	var r rune
-
-	switch msg.Code {
-	case tea.KeyUp:
-		key = KeyUp
-	case tea.KeyDown:
-		key = KeyDown
-	case tea.KeyLeft:
-		key = KeyLeft
-	case tea.KeyRight:
-		key = KeyRight
-	case tea.KeyEnter:
-		key = KeyEnter
-	case tea.KeyBackspace:
-		key = KeyBackspace
-	case tea.KeyDelete:
-		key = KeyDelete
-	case tea.KeyEscape:
-		key = KeyEscape
-	case tea.KeyTab:
-		key = KeyTab
-	case tea.KeyHome:
-		key = KeyHome
-	case tea.KeyEnd:
-		key = KeyEnd
-	default:
-		key = KeyRune
-		if msg.Text != "" {
-			r = []rune(msg.Text)[0]
-		} else {
-			r = rune(msg.Code)
+	ghCmd := exec.Command("gh", "pr", "view", "--json", "number", "-q", ".number")
+	ghCmd.Dir = worktreePath
+	if out, err := ghCmd.Output(); err == nil {
+		if n, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil {
+			info.PRNumber = n
 		}
 	}
-	if msg.Mod&tea.ModShift != 0 {
-		mod |= ModShift
+
+	diffCmd := exec.Command("git", "diff", "--shortstat", "main")
+	diffCmd.Dir = worktreePath
+	if out, err := diffCmd.Output(); err == nil {
+		line := strings.TrimSpace(string(out))
+		if re := regexp.MustCompile(`(\d+) insertion`); re.MatchString(line) {
+			if n, err := strconv.Atoi(re.FindStringSubmatch(line)[1]); err == nil {
+				info.DiffAdd = n
+			}
+		}
+		if re := regexp.MustCompile(`(\d+) deletion`); re.MatchString(line) {
+			if n, err := strconv.Atoi(re.FindStringSubmatch(line)[1]); err == nil {
+				info.DiffDel = n
+			}
+		}
 	}
-	if msg.Mod&tea.ModCtrl != 0 {
-		mod |= ModCtrl
+
+	info.WorktreeName = filepath.Base(worktreePath)
+
+	repoRoot := gitRepoRoot()
+	if repoRoot != "" {
+		if projectID, err := ensureProjectID(repoRoot); err == nil {
+			baseDir := worktreeBaseDir(projectID)
+			if wts, err := listWorktrees(baseDir); err == nil {
+				info.TotalCount = len(wts)
+				for _, wt := range wts {
+					if wt.Active {
+						info.ActiveCount++
+					}
+				}
+			}
+		}
 	}
-	if msg.Mod&tea.ModAlt != 0 {
-		mod |= ModAlt
-	}
-	return EventKey{Key: key, Rune: r, Mod: mod}
+
+	return statusInfoMsg{info: info}
 }
 
-// ─── App: custom terminal engine (replaces bubbletea program + model) ───
+func fetchModelsCmd() modelsMsg {
+	return modelsMsg{models: builtinModels()}
+}
 
-// App is the main application struct. It owns the terminal directly:
-// raw mode, input parsing, rendering. Replaces bubbletea's Program + Model.
+func fetchSWEScoresCmd() sweScoresMsg {
+	scores, err := fetchSWEScores()
+	return sweScoresMsg{scores: scores, err: err}
+}
+
+// ─── App struct ───
+
 type App struct {
 	// Terminal
-	term     *termState
-	renderer *Renderer
+	fd       int
+	oldState *term.State
 	width    int
-	height   int
-	ready    bool
 
-	// Input
-	textarea *TextInput
+	// Rendering state (from simple-chat)
+	prevRowCount  int
+	sepRow        int
+	inputStartRow int
+
+	// Input buffer (from simple-chat)
+	input  []rune
+	cursor int
 
 	// Event channels
-	keyCh    chan EventKey
-	pasteCh  chan EventPaste
-	resizeCh chan EventResize
-	resultCh chan any       // async operation results
-	stopCh   chan struct{} // signal to stop background goroutines
+	resultCh chan any
+	stopCh   chan struct{}
 	quit     bool
 
 	// Chat state
@@ -2010,10 +683,6 @@ type App struct {
 	pasteCount       int
 	pasteStore       map[int]string
 	mode             appMode
-	configForm       configForm
-	modelList        modelList
-	worktreeListC    worktreeList
-	branchListC      branchList
 	models           []ModelDef
 	modelsErr        error
 	modelsLoaded     bool
@@ -2035,8 +704,12 @@ type App struct {
 	streamingText    string
 	pendingToolCall  string
 	needsTextSep     bool
-	logoPrinted      bool
-	printedMsgCount  int
+
+	// Menu state (for inline menus below input - Phase 3)
+	menuLines  []string
+	menuCursor int
+	menuActive bool
+	menuAction func(int)
 }
 
 func newApp() *App {
@@ -2045,308 +718,730 @@ func newApp() *App {
 		log.Printf("warning: loading config: %v (using defaults)", err)
 	}
 
-	ta := NewTextInput(true)
-
 	return &App{
-		textarea: ta,
 		config:   cfg,
-		keyCh:    make(chan EventKey, 32),
-		pasteCh:  make(chan EventPaste, 4),
-		resizeCh: make(chan EventResize, 4),
 		resultCh: make(chan any, 16),
 		stopCh:   make(chan struct{}),
-		renderer: NewRenderer(),
 	}
 }
 
-// Run enters raw mode, starts the event loop, and blocks until quit.
+// ─── Rendering (from simple-chat, adapted) ───
+
+func (a *App) buildBlockRows() []string {
+	var rows []string
+	rows = append(rows, logo...)
+	for _, msg := range a.messages {
+		rendered := renderMessage(msg)
+		for _, logLine := range strings.Split(rendered, "\n") {
+			rows = append(rows, wrapString(logLine, 0, a.width)...)
+		}
+		rows = append(rows, "") // empty line after block
+	}
+	return rows
+}
+
+func (a *App) buildInputRows() []string {
+	sep := strings.Repeat("─", a.width)
+	rows := []string{sep}
+
+	vlines := getVisualLines(a.input, a.cursor, a.width)
+	for i, vl := range vlines {
+		line := string(a.input[vl.start : vl.start+vl.length])
+		if i == 0 {
+			line = promptPrefix + line
+		}
+		rows = append(rows, line)
+	}
+
+	// Ephemeral indicators above bottom separator
+	if a.awaitingApproval {
+		rows = append(rows, fmt.Sprintf("\033[38;5;220;1mAllow %s? [y/n]\033[0m", a.approvalDesc))
+	} else if a.streamingText != "" {
+		rows = append(rows, styledAssistantText(a.streamingText))
+	} else if a.agentRunning {
+		rows = append(rows, "\033[38;5;141;3mthinking...\033[0m")
+	}
+
+	rows = append(rows, sep)
+
+	// Progress bar row
+	totalChars := 0
+	for _, msg := range a.messages {
+		totalChars += len([]rune(msg.content))
+	}
+	totalChars += len(a.input)
+	bar := progressBar(totalChars, charLimit)
+	barWidth := 3
+	padding := a.width - barWidth
+	if padding < 0 {
+		padding = 0
+	}
+	rows = append(rows, strings.Repeat(" ", padding)+bar+"\033[0m\033[K")
+
+	// Autocomplete / status below progress bar
+	if matches := a.autocompleteMatches(); len(matches) > 0 {
+		for i, cmd := range matches {
+			if i == a.autocompleteIdx {
+				rows = append(rows, fmt.Sprintf("\033[38;5;141;1m  > %s\033[0m", cmd))
+			} else {
+				rows = append(rows, fmt.Sprintf("\033[38;5;253m    %s\033[0m", cmd))
+			}
+		}
+	}
+
+	// Menu lines (Phase 3)
+	for i, line := range a.menuLines {
+		if a.menuActive && i == a.menuCursor {
+			rows = append(rows, fmt.Sprintf("\033[38;5;141;1m  > %s\033[0m", line))
+		} else {
+			rows = append(rows, fmt.Sprintf("\033[38;5;253m    %s\033[0m", line))
+		}
+	}
+
+	return rows
+}
+
+func (a *App) positionCursor(buf *strings.Builder) {
+	curLine, curCol := cursorVisualPos(a.input, a.cursor, a.width)
+	buf.WriteString(fmt.Sprintf("\033[%d;%dH", a.inputStartRow+curLine, curCol+1))
+}
+
+func (a *App) render() {
+	blockRows := a.buildBlockRows()
+
+	a.sepRow = len(blockRows) + 1
+	a.inputStartRow = a.sepRow + 1
+
+	inputRows := a.buildInputRows()
+	totalRows := len(blockRows) + len(inputRows)
+
+	var buf strings.Builder
+	writeRows(&buf, blockRows, 1)
+	writeRows(&buf, inputRows, a.sepRow)
+
+	for i := totalRows; i < a.prevRowCount; i++ {
+		buf.WriteString(fmt.Sprintf("\033[%d;1H\033[2K", i+1))
+	}
+	a.prevRowCount = totalRows
+
+	a.positionCursor(&buf)
+	os.Stdout.WriteString(buf.String())
+}
+
+func (a *App) renderInput() {
+	inputRows := a.buildInputRows()
+	totalRows := a.sepRow - 1 + len(inputRows)
+
+	var buf strings.Builder
+	writeRows(&buf, inputRows, a.sepRow)
+
+	for i := totalRows; i < a.prevRowCount; i++ {
+		buf.WriteString(fmt.Sprintf("\033[%d;1H\033[2K", i+1))
+	}
+	a.prevRowCount = totalRows
+
+	a.positionCursor(&buf)
+	os.Stdout.WriteString(buf.String())
+}
+
+// ─── Input helpers (from simple-chat) ───
+
+func (a *App) insertAtCursor(r rune) {
+	a.input = append(a.input, 0)
+	copy(a.input[a.cursor+1:], a.input[a.cursor:])
+	a.input[a.cursor] = r
+	a.cursor++
+}
+
+func (a *App) insertText(s string) {
+	for _, r := range s {
+		a.insertAtCursor(r)
+	}
+}
+
+func (a *App) deleteBeforeCursor() {
+	if a.cursor <= 0 {
+		return
+	}
+	a.cursor--
+	copy(a.input[a.cursor:], a.input[a.cursor+1:])
+	a.input = a.input[:len(a.input)-1]
+}
+
+func (a *App) deleteAtCursor() {
+	if a.cursor >= len(a.input) {
+		return
+	}
+	copy(a.input[a.cursor:], a.input[a.cursor+1:])
+	a.input = a.input[:len(a.input)-1]
+}
+
+func (a *App) deleteWordBackward() {
+	if a.cursor <= 0 {
+		return
+	}
+	// Skip trailing spaces
+	for a.cursor > 0 && a.input[a.cursor-1] == ' ' {
+		a.deleteBeforeCursor()
+	}
+	// Delete word
+	for a.cursor > 0 && a.input[a.cursor-1] != ' ' && a.input[a.cursor-1] != '\n' {
+		a.deleteBeforeCursor()
+	}
+}
+
+func (a *App) killLine() {
+	// Delete from cursor to end of current line (or end of input)
+	end := a.cursor
+	for end < len(a.input) && a.input[end] != '\n' {
+		end++
+	}
+	a.input = append(a.input[:a.cursor], a.input[end:]...)
+}
+
+func (a *App) killToStart() {
+	// Delete from cursor to start of current line
+	start := a.cursor
+	for start > 0 && a.input[start-1] != '\n' {
+		start--
+	}
+	a.input = append(a.input[:start], a.input[a.cursor:]...)
+	a.cursor = start
+}
+
+func (a *App) moveUp() {
+	lineIdx, col := cursorVisualPos(a.input, a.cursor, a.width)
+	if lineIdx == 0 {
+		return
+	}
+	vlines := getVisualLines(a.input, a.cursor, a.width)
+	prev := vlines[lineIdx-1]
+	targetCol := col
+	if targetCol > prev.startCol+prev.length {
+		targetCol = prev.startCol + prev.length
+	}
+	if targetCol < prev.startCol {
+		targetCol = prev.startCol
+	}
+	a.cursor = prev.start + (targetCol - prev.startCol)
+}
+
+func (a *App) moveDown() {
+	lineIdx, _ := cursorVisualPos(a.input, a.cursor, a.width)
+	vlines := getVisualLines(a.input, a.cursor, a.width)
+	if lineIdx >= len(vlines)-1 {
+		return
+	}
+	_, col := cursorVisualPos(a.input, a.cursor, a.width)
+	next := vlines[lineIdx+1]
+	targetCol := col
+	if targetCol > next.startCol+next.length {
+		targetCol = next.startCol + next.length
+	}
+	if targetCol < next.startCol {
+		targetCol = next.startCol
+	}
+	a.cursor = next.start + (targetCol - next.startCol)
+}
+
+func (a *App) moveWordLeft() {
+	if a.cursor <= 0 {
+		return
+	}
+	a.cursor--
+	for a.cursor > 0 && a.input[a.cursor] == ' ' {
+		a.cursor--
+	}
+	for a.cursor > 0 && a.input[a.cursor-1] != ' ' && a.input[a.cursor-1] != '\n' {
+		a.cursor--
+	}
+}
+
+func (a *App) moveWordRight() {
+	if a.cursor >= len(a.input) {
+		return
+	}
+	a.cursor++
+	for a.cursor < len(a.input) && a.input[a.cursor] != ' ' && a.input[a.cursor] != '\n' {
+		a.cursor++
+	}
+	for a.cursor < len(a.input) && a.input[a.cursor] == ' ' {
+		a.cursor++
+	}
+}
+
+func (a *App) inputValue() string {
+	return string(a.input)
+}
+
+func (a *App) setInputValue(s string) {
+	a.input = []rune(s)
+	a.cursor = len(a.input)
+}
+
+func (a *App) resetInput() {
+	a.input = a.input[:0]
+	a.cursor = 0
+}
+
+// ─── Autocomplete ───
+
+func (a *App) autocompleteMatches() []string {
+	if a.mode != modeChat {
+		return nil
+	}
+	val := a.inputValue()
+	if !strings.HasPrefix(val, "/") {
+		return nil
+	}
+	return filterCommands(val)
+}
+
+// ─── Main event loop ───
+
 func (a *App) Run() error {
-	ts, err := enterRawMode()
+	fd := int(os.Stdin.Fd())
+	oldState, err := term.MakeRaw(fd)
 	if err != nil {
 		return fmt.Errorf("entering raw mode: %w", err)
 	}
-	a.term = ts
+	a.fd = fd
+	a.oldState = oldState
 
-	// Panic-safe terminal restoration.
+	startTime := time.Now()
+
+	// Panic-safe terminal restoration
 	defer func() {
 		if r := recover(); r != nil {
-			restoreTerminal(ts)
+			term.Restore(fd, oldState)
 			panic(r)
 		}
 	}()
+
+	// Enter alt-screen, enable bracketed paste
+	fmt.Print("\033[?1049h")
+	fmt.Print("\033[?2004h")
 	defer func() {
-		a.renderer.disableBracketedPaste()
-		a.renderer.showCursor()
-		fmt.Fprint(os.Stdout, "\n")
-		restoreTerminal(ts)
+		fmt.Print("\033[?2004l")
+		fmt.Print("\033[?1049l")
+		end := time.Now()
+		fmt.Printf("[CPSL %s -> %s]\r\n",
+			startTime.Format("Jan 02 15:04"),
+			end.Format("Jan 02 15:04"))
+		term.Restore(fd, oldState)
 	}()
 
-	a.renderer.enableBracketedPaste()
+	a.width = getWidth()
 
-	// Get initial terminal size.
-	if w, h, err := getTerminalSize(); err == nil {
-		a.width = w
-		a.height = h
-		a.ready = true
-		a.textarea.SetWidth(a.inputAreaWidth())
-	}
+	// SIGWINCH handler
+	sigWinch := make(chan os.Signal, 1)
+	signal.Notify(sigWinch, syscall.SIGWINCH)
+	go func() {
+		for range sigWinch {
+			a.width = getWidth()
+			a.render()
+		}
+	}()
 
-	// Start background goroutines.
-	go readInput(a.keyCh, a.pasteCh, a.stopCh)
-	go watchResize(a.resizeCh, a.stopCh)
-
-	// Start async initialization (model fetch, workspace, langdag).
+	// Start async initialization
 	a.startInit()
 
-	// Print logo.
-	a.logoPrinted = true
-	a.renderer.printAbove(renderLogo())
+	// Initial render
 	a.render()
 
-	// Main event loop.
-	for !a.quit {
-		a.eventLoop()
+	// Main byte-reading loop (from simple-chat, extended)
+	raw := make([]byte, 1)
+	for {
+		_, err := os.Stdin.Read(raw)
+		if err != nil {
+			break
+		}
+		ch := raw[0]
+
+		// Check for async results (non-blocking)
+		a.drainResults()
+
+		// Check for agent events (non-blocking)
+		a.drainAgentEvents()
+
+		// Escape sequence
+		if ch == '\033' {
+			a.handleEscapeSequence(raw)
+			continue
+		}
+
+		// Ctrl+C / Ctrl+D
+		if ch == 3 || ch == 4 {
+			break
+		}
+
+		// Handle approval mode
+		if a.awaitingApproval {
+			a.handleApprovalByte(ch)
+			continue
+		}
+
+		// Ctrl+W: delete word backward
+		if ch == 0x17 {
+			a.deleteWordBackward()
+			a.autocompleteIdx = 0
+			a.renderInput()
+			continue
+		}
+
+		// Ctrl+U: kill to start of line
+		if ch == 0x15 {
+			a.killToStart()
+			a.renderInput()
+			continue
+		}
+
+		// Ctrl+K: kill to end of line
+		if ch == 0x0b {
+			a.killLine()
+			a.renderInput()
+			continue
+		}
+
+		// Ctrl+A: home
+		if ch == 0x01 {
+			a.cursor = 0
+			a.renderInput()
+			continue
+		}
+
+		// Ctrl+E: end
+		if ch == 0x05 {
+			a.cursor = len(a.input)
+			a.renderInput()
+			continue
+		}
+
+		// Tab
+		if ch == '\t' {
+			if matches := a.autocompleteMatches(); len(matches) > 0 {
+				idx := a.autocompleteIdx
+				if idx >= len(matches) {
+					idx = 0
+				}
+				a.setInputValue(matches[idx])
+				a.autocompleteIdx = 0
+			}
+			a.renderInput()
+			continue
+		}
+
+		// Shift+Enter (LF) — insert newline
+		if ch == '\n' {
+			a.insertAtCursor('\n')
+			a.renderInput()
+			continue
+		}
+
+		// Enter (CR) — submit
+		if ch == '\r' {
+			a.handleEnter()
+			continue
+		}
+
+		// Backspace
+		if ch == 127 || ch == 0x08 {
+			if a.cursor > 0 {
+				a.deleteBeforeCursor()
+				a.autocompleteIdx = 0
+				a.renderInput()
+			}
+			continue
+		}
+
+		// Regular character (possibly multi-byte UTF-8)
+		r := rune(ch)
+		if ch >= 0x80 {
+			b := []byte{ch}
+			n := utf8ByteLen(ch)
+			for i := 1; i < n; i++ {
+				os.Stdin.Read(raw)
+				b = append(b, raw[0])
+			}
+			r, _ = utf8.DecodeRune(b)
+		}
+
+		prevVal := a.inputValue()
+		a.insertAtCursor(r)
+		if a.inputValue() != prevVal {
+			a.autocompleteIdx = 0
+		}
+		a.renderInput()
 	}
 
 	a.cleanup()
 	return nil
 }
 
-func (a *App) inputAreaWidth() int {
-	w := a.width - 2 // account for border left + right
-	if w < 1 {
-		w = 1
-	}
-	return w
-}
+func (a *App) handleEscapeSequence(raw []byte) {
+	os.Stdin.Read(raw)
 
-// startInit launches the async initialization goroutines.
-func (a *App) startInit() {
-	cfg := a.config
-	go func() { a.resultCh <- fetchModelsCmd() }()
-	go func() { a.resultCh <- fetchSWEScoresCmd() }()
-	go func() { a.resultCh <- resolveWorkspaceCmd(cfg) }()
-	go func() {
-		client, err := newLangdagClient(cfg)
-		a.resultCh <- langdagReadyMsg{client: client, provider: cfg.defaultLangdagProvider(), err: err}
-	}()
-}
-
-// eventLoop runs one iteration of the main event loop: select on all channels,
-// dispatch the event, then re-render.
-func (a *App) eventLoop() {
-	var agentCh <-chan AgentEvent
-	if a.agent != nil && a.agentRunning {
-		agentCh = a.agent.Events()
-	}
-
-	select {
-	case key := <-a.keyCh:
-		a.handleKey(key)
-	case paste := <-a.pasteCh:
-		a.handlePaste(paste)
-	case resize := <-a.resizeCh:
-		a.handleResize(resize)
-	case result := <-a.resultCh:
-		a.handleResult(result)
-	case event, ok := <-agentCh:
-		if !ok {
-			if a.agentRunning {
-				a.handleAgentEvent(AgentEvent{Type: EventDone})
-			}
-			a.agentRunning = false
-		} else {
-			a.handleAgentEvent(event)
+	// Alt+Enter: ESC CR
+	if raw[0] == '\r' {
+		if !a.awaitingApproval {
+			a.insertAtCursor('\n')
+			a.renderInput()
 		}
-	}
-
-	a.render()
-}
-
-// --- Event handlers ---
-
-func (a *App) handleKey(key EventKey) {
-	// Handle approval y/n
-	if a.awaitingApproval {
-		a.handleApprovalKey(key)
 		return
 	}
 
-	// Mode-specific delegation (stubs until phase 5)
-	switch a.mode {
-	case modeConfig:
-		a.handleConfigKey(key)
-		return
-	case modeModel:
-		a.handleModelKey(key)
-		return
-	case modeWorktrees:
-		a.handleWorktreeKey(key)
-		return
-	case modeBranches:
-		a.handleBranchKey(key)
-		return
-	}
-
-	// Chat mode key handling
-	switch key.Key {
-	case KeyRune:
-		if key.Mod&ModCtrl != 0 {
-			switch key.Rune {
-			case 'c':
-				a.quit = true
-				return
-			case 'w':
-				a.textarea.DeleteWordBackward()
-				a.autocompleteIdx = 0
-				a.recalcTextareaHeight()
-				return
-			case 'k':
-				a.textarea.KillLine()
-				return
-			case 'u':
-				a.textarea.KillToStart()
-				return
-			}
-		}
-		if key.Mod == 0 || key.Mod == ModShift {
-			prevVal := a.textarea.Value()
-			a.textarea.InsertRune(key.Rune)
-			if a.textarea.Value() != prevVal {
-				a.autocompleteIdx = 0
-			}
-			a.recalcTextareaHeight()
-		}
-
-	case KeyEnter:
-		if key.Mod&(ModShift|ModAlt) != 0 {
-			a.textarea.InsertNewline()
-			a.recalcTextareaHeight()
+	if raw[0] != '[' {
+		// Escape key
+		if a.awaitingApproval {
 			return
 		}
-		a.handleEnter()
-
-	case KeyBackspace:
-		a.textarea.Backspace()
-		a.autocompleteIdx = 0
-		a.recalcTextareaHeight()
-
-	case KeyDelete:
-		a.textarea.Delete()
-		a.recalcTextareaHeight()
-
-	case KeyLeft:
-		if key.Mod&ModCtrl != 0 {
-			a.textarea.MoveWordLeft()
-		} else {
-			a.textarea.MoveLeft()
+		if strings.HasPrefix(a.inputValue(), "/") {
+			a.resetInput()
+			a.autocompleteIdx = 0
+			a.renderInput()
 		}
+		return
+	}
 
-	case KeyRight:
-		if key.Mod&ModCtrl != 0 {
-			a.textarea.MoveWordRight()
-		} else {
-			a.textarea.MoveRight()
+	// CSI sequence: ESC [
+	os.Stdin.Read(raw)
+
+	// Check for bracketed paste: ESC [ 2 0 0 ~
+	if raw[0] == '2' {
+		a.handlePossibleBracketedPaste(raw)
+		return
+	}
+
+	// Modified key sequences: ESC [ 1 ; <mod> <letter>
+	if raw[0] == '1' {
+		a.handleModifiedCSI(raw)
+		return
+	}
+
+	// Tilde sequences: ESC [ <number> ~
+	if raw[0] >= '3' && raw[0] <= '6' {
+		// Read the tilde
+		var tilde [1]byte
+		os.Stdin.Read(tilde[:])
+		if tilde[0] == '~' {
+			switch raw[0] {
+			case '3': // Delete
+				if !a.awaitingApproval {
+					a.deleteAtCursor()
+					a.renderInput()
+				}
+			}
 		}
+		return
+	}
 
-	case KeyUp:
+	if a.awaitingApproval {
+		return
+	}
+
+	switch raw[0] {
+	case 'A': // Up
 		if matches := a.autocompleteMatches(); len(matches) > 0 {
 			a.autocompleteIdx--
 			if a.autocompleteIdx < 0 {
 				a.autocompleteIdx = len(matches) - 1
 			}
-			return
+		} else {
+			a.moveUp()
 		}
-		a.textarea.MoveUp()
-
-	case KeyDown:
+		a.renderInput()
+	case 'B': // Down
 		if matches := a.autocompleteMatches(); len(matches) > 0 {
 			a.autocompleteIdx++
 			if a.autocompleteIdx >= len(matches) {
 				a.autocompleteIdx = 0
 			}
-			return
+		} else {
+			a.moveDown()
 		}
-		a.textarea.MoveDown()
-
-	case KeyHome:
-		a.textarea.MoveHome()
-
-	case KeyEnd:
-		a.textarea.MoveEnd()
-
-	case KeyTab:
-		if matches := a.autocompleteMatches(); len(matches) > 0 {
-			idx := a.autocompleteIdx
-			if idx >= len(matches) {
-				idx = 0
-			}
-			a.textarea.SetValue(matches[idx])
-			a.textarea.CursorEnd()
-			a.autocompleteIdx = 0
-			a.recalcTextareaHeight()
+		a.renderInput()
+	case 'C': // Right
+		if a.cursor < len(a.input) {
+			a.cursor++
+			a.renderInput()
 		}
-
-	case KeyEscape:
-		if strings.HasPrefix(a.textarea.Value(), "/") {
-			a.textarea.Reset()
-			a.textarea.SetHeight(minInputHeight)
-			a.autocompleteIdx = 0
+	case 'D': // Left
+		if a.cursor > 0 {
+			a.cursor--
+			a.renderInput()
 		}
+	case 'H': // Home
+		a.cursor = 0
+		a.renderInput()
+	case 'F': // End
+		a.cursor = len(a.input)
+		a.renderInput()
 	}
 }
 
-func (a *App) handleApprovalKey(key EventKey) {
-	if key.Key == KeyRune && key.Mod&ModCtrl != 0 && key.Rune == 'c' {
-		a.quit = true
+func (a *App) handlePossibleBracketedPaste(raw []byte) {
+	// We've read ESC [ 2, check for 0 0 ~
+	var buf [3]byte
+	os.Stdin.Read(buf[0:1])
+	os.Stdin.Read(buf[1:2])
+	os.Stdin.Read(buf[2:3])
+
+	if buf[0] == '0' && buf[1] == '0' && buf[2] == '~' {
+		// Bracketed paste start - read until ESC [ 2 0 1 ~
+		var content []byte
+		for {
+			os.Stdin.Read(raw)
+			if raw[0] == '\033' {
+				// Check for paste end sequence
+				var end [5]byte
+				os.Stdin.Read(end[0:1])
+				if end[0] == '[' {
+					os.Stdin.Read(end[1:2])
+					os.Stdin.Read(end[2:3])
+					os.Stdin.Read(end[3:4])
+					os.Stdin.Read(end[4:5])
+					if end[1] == '2' && end[2] == '0' && end[3] == '1' && end[4] == '~' {
+						break
+					}
+					// Not end sequence, include the bytes
+					content = append(content, '\033', end[0], end[1], end[2], end[3], end[4])
+				} else {
+					content = append(content, '\033', end[0])
+				}
+			} else {
+				content = append(content, raw[0])
+			}
+		}
+		a.handlePaste(string(content))
 		return
 	}
-	if key.Key != KeyRune || key.Mod != 0 {
+
+	// Not a bracketed paste, might be another sequence starting with 2
+	// e.g., Insert key (ESC [ 2 ~)
+	if buf[0] == '~' {
+		// ESC [ 2 ~ = Insert
 		return
 	}
-	switch key.Rune {
+}
+
+func (a *App) handleModifiedCSI(raw []byte) {
+	// We've read ESC [ 1, expect ; <mod> <letter>
+	var buf [3]byte
+	n := 0
+	os.Stdin.Read(buf[0:1]) // ;
+	if buf[0] == ';' {
+		os.Stdin.Read(buf[1:2]) // mod digit
+		os.Stdin.Read(buf[2:3]) // letter
+		n = 3
+	}
+	if n < 3 {
+		return
+	}
+
+	if a.awaitingApproval {
+		return
+	}
+
+	modNum := int(buf[1] - '0')
+	modNum-- // CSI encoding
+	isCtrl := modNum&4 != 0
+
+	switch buf[2] {
+	case 'C': // Right
+		if isCtrl {
+			a.moveWordRight()
+		} else if a.cursor < len(a.input) {
+			a.cursor++
+		}
+		a.renderInput()
+	case 'D': // Left
+		if isCtrl {
+			a.moveWordLeft()
+		} else if a.cursor > 0 {
+			a.cursor--
+		}
+		a.renderInput()
+	case 'H': // Home
+		a.cursor = 0
+		a.renderInput()
+	case 'F': // End
+		a.cursor = len(a.input)
+		a.renderInput()
+	}
+}
+
+func (a *App) handlePaste(content string) {
+	if a.awaitingApproval {
+		return
+	}
+	if len(content) >= a.config.PasteCollapseMinChars {
+		a.pasteCount++
+		if a.pasteStore == nil {
+			a.pasteStore = make(map[int]string)
+		}
+		a.pasteStore[a.pasteCount] = content
+		content = fmt.Sprintf("[pasted #%d | %d chars]", a.pasteCount, len(content))
+	}
+	a.insertText(content)
+	a.autocompleteIdx = 0
+	a.renderInput()
+}
+
+func (a *App) handleApprovalByte(ch byte) {
+	switch ch {
 	case 'y', 'Y':
 		a.awaitingApproval = false
 		if a.agent != nil {
 			a.agent.Approve(ApprovalResponse{Approved: true})
 		}
 		a.messages = append(a.messages, chatMessage{kind: msgSuccess, content: "Approved"})
+		a.render()
 	case 'n', 'N':
 		a.awaitingApproval = false
 		if a.agent != nil {
 			a.agent.Approve(ApprovalResponse{Approved: false})
 		}
 		a.messages = append(a.messages, chatMessage{kind: msgError, content: "Denied"})
+		a.render()
 	}
 }
 
 func (a *App) handleEnter() {
+	// Autocomplete first
+	if matches := a.autocompleteMatches(); len(matches) > 0 {
+		idx := a.autocompleteIdx
+		if idx >= len(matches) {
+			idx = 0
+		}
+		val := matches[idx]
+		a.autocompleteIdx = 0
+		a.resetInput()
+		a.handleCommand(val)
+		return
+	}
+
 	if a.agentRunning {
 		return
 	}
-	val := strings.TrimSpace(a.textarea.Value())
+
+	val := strings.TrimSpace(a.inputValue())
 	if val == "" {
 		return
 	}
+
 	if strings.HasPrefix(val, "/") {
-		if matches := filterCommands(val); len(matches) > 0 {
-			idx := a.autocompleteIdx
-			if idx >= len(matches) {
-				idx = 0
-			}
-			val = matches[idx]
-		}
-		a.autocompleteIdx = 0
-		a.appHandleCommand(val)
+		a.resetInput()
+		a.handleCommand(val)
 		return
 	}
+
 	content := expandPastes(val, a.pasteStore)
-	a.textarea.Reset()
-	a.textarea.SetHeight(minInputHeight)
+	a.resetInput()
 
 	if a.langdagClient == nil {
 		a.messages = append(a.messages, chatMessage{kind: msgUser, content: content, leadBlank: true})
 		a.messages = append(a.messages, chatMessage{kind: msgError, content: "No API keys configured. Use /config to add a key first."})
+		a.render()
 		return
 	}
 
@@ -2354,13 +1449,14 @@ func (a *App) handleEnter() {
 	if !a.containerReady {
 		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Container is still starting — the agent won't have bash or file tools until it's ready."})
 	}
-	a.appStartAgent(content)
+	a.startAgent(content)
+	a.render()
 }
 
-func (a *App) appHandleCommand(input string) {
+// ─── Commands ───
+
+func (a *App) handleCommand(input string) {
 	cmd := strings.Fields(input)[0]
-	a.textarea.Reset()
-	a.textarea.SetHeight(minInputHeight)
 
 	switch cmd {
 	case "/clear":
@@ -2368,88 +1464,141 @@ func (a *App) appHandleCommand(input string) {
 		a.streamingText = ""
 		a.pendingToolCall = ""
 		a.messages = nil
-		a.printedMsgCount = 0
-		a.renderer.clearAll()
-		a.logoPrinted = true
-		a.renderer.printAbove(renderLogo())
+		a.render()
+
 	case "/config":
-		a.appEnterConfigMode()
+		// Phase 3: inline config display
+		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: fmt.Sprintf(
+			"Config: paste_collapse=%d, anthropic=%s, openai=%s, grok=%s, gemini=%s, model=%s",
+			a.config.PasteCollapseMinChars,
+			maskKey(a.config.AnthropicAPIKey),
+			maskKey(a.config.OpenAIAPIKey),
+			maskKey(a.config.GrokAPIKey),
+			maskKey(a.config.GeminiAPIKey),
+			a.config.ActiveModel,
+		)})
+		a.render()
+
 	case "/model":
-		a.appEnterModelMode()
+		if !a.modelsLoaded {
+			a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Models are still loading... please try again in a moment."})
+			a.render()
+			return
+		}
+		if a.modelsErr != nil {
+			a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Failed to load models: %v", a.modelsErr)})
+			a.render()
+			return
+		}
+		available := a.config.availableModels(a.models)
+		if len(available) == 0 {
+			a.messages = append(a.messages, chatMessage{kind: msgError, content: "No API keys configured. Use /config to add a key first."})
+			a.render()
+			return
+		}
+		// Phase 3: inline model selection with menu
+		var lines []string
+		for _, m := range available {
+			lines = append(lines, fmt.Sprintf("%s (%s)", m.DisplayName, m.Provider))
+		}
+		a.menuLines = lines
+		a.menuCursor = 0
+		a.menuActive = true
+		a.menuAction = func(idx int) {
+			if idx >= 0 && idx < len(available) {
+				selected := available[idx]
+				a.config.ActiveModel = selected.ID
+				if err := saveConfig(a.config); err != nil {
+					a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error saving model: %v", err)})
+				} else {
+					a.messages = append(a.messages, chatMessage{kind: msgSuccess, content: fmt.Sprintf("Model set to %s.", selected.DisplayName)})
+				}
+			}
+			a.menuLines = nil
+			a.menuActive = false
+			a.menuAction = nil
+		}
+		a.renderInput()
+
 	case "/branches":
-		a.appEnterBranchMode()
+		// Phase 3: inline branch selection
+		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Branch selection not yet implemented in new TUI."})
+		a.render()
+
 	case "/worktrees":
-		a.appEnterWorktreeMode()
+		// Phase 3: inline worktree selection
+		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Worktree selection not yet implemented in new TUI."})
+		a.render()
+
 	case "/shell":
-		a.appEnterShellMode()
+		a.enterShellMode()
+
 	default:
 		a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Unknown command: %s", cmd)})
+		a.render()
 	}
 }
 
-func (a *App) appEnterShellMode() {
+func maskKey(key string) string {
+	if key == "" {
+		return "(not set)"
+	}
+	if len(key) <= 8 {
+		return "****"
+	}
+	return key[:4] + "..." + key[len(key)-4:]
+}
+
+// ─── Shell mode ───
+
+func (a *App) enterShellMode() {
 	if a.containerErr != nil {
 		a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Container error: %v", a.containerErr)})
+		a.render()
 		return
 	}
 	if !a.containerReady {
 		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Container is starting... please try again in a moment."})
+		a.render()
 		return
 	}
 
-	// Stop input reader and resize watcher.
-	close(a.stopCh)
+	// Exit alt screen, restore terminal
+	fmt.Print("\033[?2004l") // disable bracketed paste
+	fmt.Print("\033[?1049l") // exit alt screen
+	term.Restore(a.fd, a.oldState)
 
-	// Restore terminal from raw mode so the shell gets a normal terminal.
-	a.renderer.disableBracketedPaste()
-	a.renderer.clearActiveArea()
-	a.renderer.showCursor()
-	restoreTerminal(a.term)
-
-	// Run the shell synchronously — it owns stdin/stdout/stderr.
+	// Run shell synchronously
 	shellCmd := a.container.ShellCmd()
 	shellErr := shellCmd.Run()
 
-	// Re-enter raw mode.
-	ts, err := enterRawMode()
+	// Re-enter raw mode
+	oldState, err := term.MakeRaw(a.fd)
 	if err != nil {
-		// Fatal: can't recover the TUI.
 		fmt.Fprintf(os.Stderr, "failed to re-enter raw mode: %v\n", err)
 		a.quit = true
 		return
 	}
-	a.term = ts
+	a.oldState = oldState
 
-	// Restart background goroutines with a fresh stop channel.
-	a.stopCh = make(chan struct{})
-	go readInput(a.keyCh, a.pasteCh, a.stopCh)
-	go watchResize(a.resizeCh, a.stopCh)
+	// Re-enter alt screen, re-enable bracketed paste
+	fmt.Print("\033[?1049h")
+	fmt.Print("\033[?2004h")
 
-	a.renderer.enableBracketedPaste()
-
-	// Re-query terminal size.
-	if w, h, err := getTerminalSize(); err == nil {
-		a.width = w
-		a.height = h
-		a.textarea.SetWidth(a.inputAreaWidth())
-	}
-
-	// Reprint scrollback.
-	a.renderer.clearAll()
-	a.renderer.printAbove(renderLogo())
-	for i := 0; i < len(a.messages); i++ {
-		a.renderer.printAbove(renderMessage(a.messages[i], a.width))
-	}
-	a.printedMsgCount = len(a.messages)
+	a.width = getWidth()
 
 	if shellErr != nil {
 		a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Shell error: %v", shellErr)})
 	} else {
 		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Shell session ended."})
 	}
+
+	a.render()
 }
 
-func (a *App) appStartAgent(userMessage string) {
+// ─── Agent ───
+
+func (a *App) startAgent(userMessage string) {
 	var tools []Tool
 	if a.containerReady && a.container != nil {
 		tools = append(tools, NewBashTool(a.container, 120))
@@ -2494,300 +1643,120 @@ func (a *App) appStartAgent(userMessage string) {
 	go agent.Run(context.Background(), userMessage, parentNodeID)
 }
 
-// --- Alt-screen mode enter/exit ---
-
-func (a *App) appEnterConfigMode() {
-	a.mode = modeConfig
-	a.configForm = newConfigForm(a.config, a.width, a.height)
-	a.textarea.Reset()
-	a.textarea.SetHeight(minInputHeight)
-	a.textarea.Blur()
-	a.renderer.enterAltScreen()
-}
-
-func (a *App) appExitConfigMode(save bool) {
-	a.renderer.exitAltScreen()
-	a.mode = modeChat
-	if save {
-		a.configForm.applyTo(&a.config)
-		if err := saveConfig(a.config); err != nil {
-			a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error saving config: %v", err)})
-		} else {
-			a.messages = append(a.messages, chatMessage{kind: msgSuccess, content: "Config saved."})
-			// Reinitialize langdag client with new API keys
-			if a.langdagClient != nil {
-				a.langdagClient.Close()
-				a.langdagClient = nil
-				a.langdagProvider = ""
+func (a *App) drainAgentEvents() {
+	if a.agent == nil || !a.agentRunning {
+		return
+	}
+	for {
+		select {
+		case event, ok := <-a.agent.Events():
+			if !ok {
+				a.agentRunning = false
+				return
 			}
-			cfg := a.config
-			go func() {
-				client, err := newLangdagClient(cfg)
-				a.resultCh <- langdagReadyMsg{client: client, provider: cfg.defaultLangdagProvider(), err: err}
-			}()
+			a.handleAgentEvent(event)
+		default:
+			return
 		}
-	} else {
-		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Config changes discarded."})
 	}
-	a.textarea.Focus()
 }
 
-func (a *App) appEnterModelMode() {
-	if !a.modelsLoaded {
-		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Models are still loading... please try again in a moment."})
-		return
-	}
-	if a.modelsErr != nil {
-		a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Failed to load models: %v", a.modelsErr)})
-		return
-	}
-	available := a.config.availableModels(a.models)
-	if len(available) == 0 {
-		a.messages = append(a.messages, chatMessage{kind: msgError, content: "No API keys configured. Use /config to add a key first."})
-		return
-	}
-	a.mode = modeModel
-	activeModel := a.config.resolveActiveModel(a.models)
-	a.modelList = newModelList(available, activeModel, a.width, a.height, a.config.ModelSortDirs)
-	a.textarea.Reset()
-	a.textarea.SetHeight(minInputHeight)
-	a.textarea.Blur()
-	a.renderer.enterAltScreen()
-}
+func (a *App) handleAgentEvent(event AgentEvent) {
+	debugLog("event=%d text=%q tool=%s err=%v", event.Type, event.Text, event.ToolName, event.Error)
 
-func (a *App) appExitModelMode(save bool) {
-	a.renderer.exitAltScreen()
-	a.mode = modeChat
-	a.config.ModelSortDirs = a.modelList.sortDirsMap()
-	if save {
-		selected := a.modelList.selected()
-		a.config.ActiveModel = selected.ID
-		if err := saveConfig(a.config); err != nil {
-			a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error saving model: %v", err)})
-		} else {
-			a.messages = append(a.messages, chatMessage{kind: msgSuccess, content: fmt.Sprintf("Model set to %s.", selected.DisplayName)})
+	switch event.Type {
+	case EventTextDelta:
+		a.streamingText += event.Text
+		if idx := strings.LastIndex(a.streamingText, "\n"); idx >= 0 {
+			a.messages = append(a.messages, chatMessage{
+				kind:      msgAssistant,
+				content:   a.streamingText[:idx],
+				leadBlank: a.needsTextSep,
+			})
+			a.needsTextSep = false
+			a.streamingText = a.streamingText[idx+1:]
 		}
-	} else {
-		_ = saveConfig(a.config)
-		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Model selection cancelled."})
+		a.render()
+
+	case EventToolCallStart:
+		debugLog("tool_call_start: %s input=%s", event.ToolName, string(event.ToolInput))
+		if a.streamingText != "" {
+			a.messages = append(a.messages, chatMessage{
+				kind:      msgAssistant,
+				content:   a.streamingText,
+				leadBlank: a.needsTextSep,
+			})
+			a.needsTextSep = false
+			a.streamingText = ""
+		}
+		a.messages = append(a.messages, chatMessage{kind: msgToolCall, content: toolCallSummary(event.ToolName, event.ToolInput), leadBlank: true})
+		a.render()
+
+	case EventToolResult:
+		debugLog("tool_result: err=%v result=%q", event.IsError, truncateForLog(event.ToolResult, 500))
+		result := collapseToolResult(event.ToolResult)
+		a.needsTextSep = true
+		a.messages = append(a.messages, chatMessage{kind: msgToolResult, content: result, isError: event.IsError})
+		a.render()
+
+	case EventToolCallDone:
+		// Already handled by EventToolResult
+
+	case EventApprovalReq:
+		debugLog("approval_req: %s", event.ApprovalDesc)
+		a.awaitingApproval = true
+		a.approvalDesc = event.ApprovalDesc
+		a.renderInput()
+
+	case EventDone:
+		debugLog("done: nodeID=%s streamingLen=%d", event.NodeID, len(a.streamingText))
+		a.agentRunning = false
+		if event.NodeID != "" {
+			a.agentNodeID = event.NodeID
+		}
+		if a.streamingText != "" {
+			a.messages = append(a.messages, chatMessage{
+				kind:      msgAssistant,
+				content:   a.streamingText,
+				leadBlank: a.needsTextSep,
+			})
+			a.streamingText = ""
+		}
+		a.render()
+
+	case EventError:
+		errMsg := "Agent error"
+		if event.Error != nil {
+			errMsg = event.Error.Error()
+		}
+		debugLog("error: %s", errMsg)
+		a.messages = append(a.messages, chatMessage{kind: msgError, content: errMsg})
+		a.render()
 	}
-	a.textarea.Focus()
 }
 
-func (a *App) appEnterWorktreeMode() {
-	a.mode = modeWorktrees
-	a.worktreeListC = newWorktreeList(nil, a.worktreePath, a.width, a.height)
-	a.textarea.Reset()
-	a.textarea.SetHeight(minInputHeight)
-	a.textarea.Blur()
-	a.renderer.enterAltScreen()
+// ─── Async results ───
 
-	repoRoot := gitRepoRoot()
+func (a *App) startInit() {
+	cfg := a.config
+	go func() { a.resultCh <- fetchModelsCmd() }()
+	go func() { a.resultCh <- fetchSWEScoresCmd() }()
+	go func() { a.resultCh <- resolveWorkspaceCmd(cfg) }()
 	go func() {
-		if repoRoot == "" {
-			a.resultCh <- worktreeListMsg{err: fmt.Errorf("not in a git repository")}
-			return
-		}
-		projectID, err := ensureProjectID(repoRoot)
-		if err != nil {
-			a.resultCh <- worktreeListMsg{err: err}
-			return
-		}
-		baseDir := worktreeBaseDir(projectID)
-		items, err := listWorktrees(baseDir)
-		a.resultCh <- worktreeListMsg{items: items, err: err}
+		client, err := newLangdagClient(cfg)
+		a.resultCh <- langdagReadyMsg{client: client, provider: cfg.defaultLangdagProvider(), err: err}
 	}()
 }
 
-func (a *App) appExitWorktreeMode() {
-	a.renderer.exitAltScreen()
-	a.mode = modeChat
-	a.textarea.Focus()
-}
-
-func (a *App) appEnterBranchMode() {
-	a.mode = modeBranches
-	a.branchListC = newBranchList(nil, a.status.Branch, a.width, a.height)
-	a.textarea.Reset()
-	a.textarea.SetHeight(minInputHeight)
-	a.textarea.Blur()
-	a.renderer.enterAltScreen()
-
-	wtPath := a.worktreePath
-	go func() {
-		dir := wtPath
-		if dir == "" {
-			dir = "."
-		}
-		headCmd := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD")
-		headOut, err := headCmd.Output()
-		if err != nil {
-			a.resultCh <- branchListMsg{err: fmt.Errorf("not in a git repository")}
-			return
-		}
-		currentBranch := strings.TrimSpace(string(headOut))
-
-		branchCmd := exec.Command("git", "-C", dir, "branch", "-a", "--format=%(refname:short)")
-		branchOut, err := branchCmd.Output()
-		if err != nil {
-			a.resultCh <- branchListMsg{err: fmt.Errorf("failed to list branches: %w", err)}
-			return
-		}
-		var branches []string
-		for _, line := range strings.Split(strings.TrimSpace(string(branchOut)), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				branches = append(branches, line)
-			}
-		}
-		a.resultCh <- branchListMsg{items: branches, currentBranch: currentBranch}
-	}()
-}
-
-func (a *App) appExitBranchMode() {
-	a.renderer.exitAltScreen()
-	a.mode = modeChat
-	a.textarea.Focus()
-}
-
-// --- Alt-screen mode key handlers ---
-
-func (a *App) handleConfigKey(key EventKey) {
-	switch key.Key {
-	case KeyEscape:
-		a.appExitConfigMode(false)
-		return
-	case KeyRune:
-		if key.Mod&ModCtrl != 0 && key.Rune == 'c' {
-			a.appExitConfigMode(false)
-			return
-		}
-	case KeyEnter:
-		if a.configForm.validate() {
-			a.appExitConfigMode(true)
-			return
-		}
-		return
-	}
-	a.configForm.HandleKey(key)
-}
-
-func (a *App) handleModelKey(key EventKey) {
-	switch key.Key {
-	case KeyEscape:
-		a.appExitModelMode(false)
-		return
-	case KeyRune:
-		if key.Mod&ModCtrl != 0 && key.Rune == 'c' {
-			a.appExitModelMode(false)
-			return
-		}
-	case KeyEnter:
-		a.appExitModelMode(true)
-		return
-	}
-	a.modelList.HandleKey(key)
-}
-
-func (a *App) handleWorktreeKey(key EventKey) {
-	switch key.Key {
-	case KeyEscape:
-		a.appExitWorktreeMode()
-		return
-	case KeyRune:
-		if key.Mod&ModCtrl != 0 && key.Rune == 'c' {
-			a.appExitWorktreeMode()
+func (a *App) drainResults() {
+	for {
+		select {
+		case result := <-a.resultCh:
+			a.handleResult(result)
+		default:
 			return
 		}
 	}
-	a.worktreeListC.HandleKey(key)
-}
-
-func (a *App) handleBranchKey(key EventKey) {
-	switch key.Key {
-	case KeyEscape:
-		a.appExitBranchMode()
-		return
-	case KeyRune:
-		if key.Mod&ModCtrl != 0 && key.Rune == 'c' {
-			a.appExitBranchMode()
-			return
-		}
-	}
-	a.branchListC.HandleKey(key)
-	if sel := a.branchListC.selected; sel != "" {
-		a.branchListC.selected = "" // consume
-		branch := sel
-		wtPath := a.worktreePath
-		go func() {
-			dir := wtPath
-			if dir == "" {
-				dir = "."
-			}
-			cmd := exec.Command("git", "-C", dir, "checkout", branch)
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				a.resultCh <- branchCheckoutMsg{branch: branch, err: fmt.Errorf("%s", strings.TrimSpace(string(out)))}
-			} else {
-				a.resultCh <- branchCheckoutMsg{branch: branch}
-			}
-		}()
-	}
-}
-
-func (a *App) handlePaste(paste EventPaste) {
-	content := paste.Content
-	if len(content) >= a.config.PasteCollapseMinChars {
-		a.pasteCount++
-		if a.pasteStore == nil {
-			a.pasteStore = make(map[int]string)
-		}
-		a.pasteStore[a.pasteCount] = content
-		content = fmt.Sprintf("[pasted #%d | %d chars]", a.pasteCount, len(content))
-	}
-	prevVal := a.textarea.Value()
-	a.textarea.InsertText(content)
-	if a.textarea.Value() != prevVal {
-		a.autocompleteIdx = 0
-	}
-	a.recalcTextareaHeight()
-}
-
-func (a *App) handleResize(resize EventResize) {
-	a.width = resize.Width
-	a.height = resize.Height
-	a.textarea.SetWidth(a.inputAreaWidth())
-
-	// Update alt-screen component sizes
-	switch a.mode {
-	case modeConfig:
-		a.configForm.width = a.width
-		a.configForm.height = a.height
-		return
-	case modeModel:
-		a.modelList.width = a.width
-		a.modelList.height = a.height
-		return
-	case modeWorktrees:
-		a.worktreeListC.width = a.width
-		a.worktreeListC.height = a.height
-		return
-	case modeBranches:
-		a.branchListC.width = a.width
-		a.branchListC.height = a.height
-		return
-	}
-
-	// Chat mode: reprint scrollback at new width
-	if a.logoPrinted || a.printedMsgCount > 0 {
-		a.renderer.clearAll()
-		a.renderer.printAbove(renderLogo())
-		for i := 0; i < len(a.messages); i++ {
-			a.renderer.printAbove(renderMessage(a.messages[i], a.width))
-		}
-		a.printedMsgCount = len(a.messages)
-	}
-	a.recalcTextareaHeight()
 }
 
 func (a *App) handleResult(result any) {
@@ -2839,434 +1808,27 @@ func (a *App) handleResult(result any) {
 
 	case worktreeListMsg:
 		if msg.err != nil {
-			a.renderer.exitAltScreen()
-			a.mode = modeChat
 			a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error listing worktrees: %v", msg.err)})
-			a.textarea.Focus()
-		} else {
-			a.worktreeListC = newWorktreeList(msg.items, a.worktreePath, a.width, a.height)
 		}
 
 	case branchListMsg:
 		if msg.err != nil {
-			a.renderer.exitAltScreen()
-			a.mode = modeChat
 			a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error listing branches: %v", msg.err)})
-			a.textarea.Focus()
-		} else {
-			a.branchListC = newBranchList(msg.items, msg.currentBranch, a.width, a.height)
 		}
 
 	case branchCheckoutMsg:
-		a.renderer.exitAltScreen()
-		a.mode = modeChat
 		if msg.err != nil {
 			a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Checkout failed: %v", msg.err)})
 		} else {
 			a.status.Branch = msg.branch
 			a.messages = append(a.messages, chatMessage{kind: msgSuccess, content: fmt.Sprintf("Switched to branch '%s'", msg.branch)})
 		}
-		a.textarea.Focus()
-
-	// shellExitMsg no longer used — shell runs synchronously in appEnterShellMode
 	}
+
+	a.render()
 }
 
-func (a *App) handleAgentEvent(event AgentEvent) {
-	debugLog("event=%d text=%q tool=%s err=%v", event.Type, event.Text, event.ToolName, event.Error)
-
-	switch event.Type {
-	case EventTextDelta:
-		a.streamingText += event.Text
-		if idx := strings.LastIndex(a.streamingText, "\n"); idx >= 0 {
-			a.messages = append(a.messages, chatMessage{
-				kind:      msgAssistant,
-				content:   a.streamingText[:idx],
-				leadBlank: a.needsTextSep,
-			})
-			a.needsTextSep = false
-			a.streamingText = a.streamingText[idx+1:]
-		}
-
-	case EventToolCallStart:
-		debugLog("tool_call_start: %s input=%s", event.ToolName, string(event.ToolInput))
-		if a.streamingText != "" {
-			a.messages = append(a.messages, chatMessage{
-				kind:      msgAssistant,
-				content:   a.streamingText,
-				leadBlank: a.needsTextSep,
-			})
-			a.needsTextSep = false
-			a.streamingText = ""
-		}
-		a.messages = append(a.messages, chatMessage{kind: msgToolCall, content: toolCallSummary(event.ToolName, event.ToolInput), leadBlank: true})
-
-	case EventToolResult:
-		debugLog("tool_result: err=%v result=%q", event.IsError, truncateForLog(event.ToolResult, 500))
-		result := collapseToolResult(event.ToolResult)
-		a.needsTextSep = true
-		a.messages = append(a.messages, chatMessage{kind: msgToolResult, content: result, isError: event.IsError})
-
-	case EventToolCallDone:
-		// Already handled by EventToolResult
-
-	case EventApprovalReq:
-		debugLog("approval_req: %s", event.ApprovalDesc)
-		a.awaitingApproval = true
-		a.approvalDesc = event.ApprovalDesc
-
-	case EventDone:
-		debugLog("done: nodeID=%s streamingLen=%d", event.NodeID, len(a.streamingText))
-		a.agentRunning = false
-		if event.NodeID != "" {
-			a.agentNodeID = event.NodeID
-		}
-		if a.streamingText != "" {
-			a.messages = append(a.messages, chatMessage{
-				kind:      msgAssistant,
-				content:   a.streamingText,
-				leadBlank: a.needsTextSep,
-			})
-			a.streamingText = ""
-		}
-
-	case EventError:
-		errMsg := "Agent error"
-		if event.Error != nil {
-			errMsg = event.Error.Error()
-		}
-		debugLog("error: %s", errMsg)
-		a.messages = append(a.messages, chatMessage{kind: msgError, content: errMsg})
-
-	default:
-		debugLog("unknown event type: %d", event.Type)
-	}
-}
-
-// --- App helpers ---
-
-func (a *App) autocompleteMatches() []string {
-	if a.mode != modeChat {
-		return nil
-	}
-	val := a.textarea.Value()
-	if !strings.HasPrefix(val, "/") {
-		return nil
-	}
-	return filterCommands(val)
-}
-
-func (a *App) recalcTextareaHeight() {
-	newHeight := a.textarea.DisplayLineCount()
-	if newHeight < minInputHeight {
-		newHeight = minInputHeight
-	}
-	if newHeight > maxInputHeight {
-		newHeight = maxInputHeight
-	}
-	a.textarea.SetHeight(newHeight)
-}
-
-func (a *App) printNewMessages() {
-	for a.printedMsgCount < len(a.messages) {
-		msg := a.messages[a.printedMsgCount]
-		a.renderer.printAbove(renderMessage(msg, a.width))
-		a.printedMsgCount++
-	}
-}
-
-func (a *App) renderStreamingText() string {
-	if a.streamingText == "" {
-		return ""
-	}
-	return styledAssistantText(a.streamingText, a.width)
-}
-
-func (a *App) autocompleteHeight() int {
-	if matches := a.autocompleteMatches(); len(matches) > 0 {
-		return len(matches)
-	}
-	return 0
-}
-
-func (a *App) renderAutocomplete() string {
-	matches := a.autocompleteMatches()
-	if len(matches) == 0 {
-		return ""
-	}
-	highlightStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#B88AFF")).
-		Background(lipgloss.Color("#2A1545")).
-		Bold(true).
-		PaddingLeft(1).
-		PaddingRight(1).
-		Width(a.width)
-	normalStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#E0E0E0")).
-		Background(lipgloss.Color("#2A1545")).
-		PaddingLeft(1).
-		PaddingRight(1).
-		Width(a.width)
-	idx := a.autocompleteIdx
-	if idx >= len(matches) {
-		idx = 0
-	}
-	var lines []string
-	for i, cmd := range matches {
-		if i == idx {
-			lines = append(lines, highlightStyle.Render(cmd))
-		} else {
-			lines = append(lines, normalStyle.Render(cmd))
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-func (a *App) renderStatusBar() string {
-	if a.status.Branch == "" {
-		return ""
-	}
-
-	infoStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#6FE7B8"))
-
-	leftFixedW := 3 // "/b " prefix
-
-	var prText string
-	if a.status.PRNumber > 0 {
-		prText = fmt.Sprintf(" PR #%d", a.status.PRNumber)
-		leftFixedW += len([]rune(prText))
-	}
-
-	var diffW int
-	if a.status.DiffAdd > 0 || a.status.DiffDel > 0 {
-		diffW = len(fmt.Sprintf(" +%d/-%d", a.status.DiffAdd, a.status.DiffDel))
-		leftFixedW += diffW
-	}
-
-	rightFixedW := 3 // "/w " prefix
-	var countText string
-	if a.status.TotalCount > 1 {
-		countText = fmt.Sprintf(" (%d/%d)", a.status.ActiveCount, a.status.TotalCount)
-		rightFixedW += len([]rune(countText))
-	}
-
-	overhead := leftFixedW + rightFixedW + 3
-	available := a.width - overhead
-	if available < 4 {
-		available = 4
-	}
-
-	branchNeed := len([]rune(a.status.Branch))
-	wtNeed := len([]rune(a.status.WorktreeName))
-
-	branchBudget := branchNeed
-	wtBudget := wtNeed
-	if branchNeed+wtNeed > available {
-		half := available / 3
-		if half < 2 {
-			half = 2
-		}
-		if branchNeed <= half {
-			wtBudget = available - branchNeed
-		} else if wtNeed <= half {
-			branchBudget = available - wtNeed
-		} else {
-			branchBudget = available * 3 / 5
-			wtBudget = available - branchBudget
-		}
-	}
-
-	branchName := truncateWithEllipsis(a.status.Branch, branchBudget)
-	wtName := truncateWithEllipsis(a.status.WorktreeName, wtBudget)
-
-	left := infoStyle.Render("/b " + branchName)
-	if a.status.PRNumber > 0 {
-		left += infoStyle.Render(prText)
-	}
-
-	if a.status.DiffAdd > 0 || a.status.DiffDel > 0 {
-		addStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6FE7B8"))
-		delStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B"))
-		left += " " + addStyle.Render(fmt.Sprintf("+%d", a.status.DiffAdd)) +
-			delStyle.Render(fmt.Sprintf("/-%d", a.status.DiffDel))
-	}
-
-	right := infoStyle.Render("/w " + wtName)
-	if a.status.TotalCount > 1 {
-		right += infoStyle.Render(countText)
-	}
-
-	leftW := lipgloss.Width(left)
-	rightW := lipgloss.Width(right)
-	gap := a.width - leftW - rightW - 2
-	if gap < 1 {
-		gap = 1
-	}
-
-	bar := " " + left + strings.Repeat(" ", gap) + right + " "
-
-	barStyle := lipgloss.NewStyle().Width(a.width)
-
-	return barStyle.Render(bar)
-}
-
-func (a *App) render() {
-	if !a.ready {
-		return
-	}
-
-	// Alt-screen modes render their own content
-	switch a.mode {
-	case modeConfig:
-		a.renderConfigScreen()
-		return
-	case modeModel:
-		a.renderModelScreen()
-		return
-	case modeWorktrees:
-		a.renderWorktreeScreen()
-		return
-	case modeBranches:
-		a.renderBranchScreen()
-		return
-	}
-
-	a.printNewMessages()
-
-	// Build input box with gradient border
-	inputBorderStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderLeft(false).
-		BorderRight(false).
-		BorderForegroundBlend(borderGradientColors...).
-		Width(a.width)
-
-	prefixStyle := lipgloss.NewStyle().Foreground(borderGradientColors[0])
-	prefix := prefixStyle.Render("❯ ")
-	textareaLines := strings.Split(a.textarea.View(), "\n")
-	for i, line := range textareaLines {
-		textareaLines[i] = prefix + line
-	}
-	inputBox := inputBorderStyle.Render(strings.Join(textareaLines, "\n"))
-
-	acHeight := a.autocompleteHeight()
-
-	// Build active area: ephemeral content + status/autocomplete + input
-	var viewParts []string
-	linesAbove := 0
-
-	// Ephemeral streaming text / thinking indicator / approval prompt
-	if a.awaitingApproval {
-		approvalPrompt := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FFD700")).
-			Bold(true).
-			Render(fmt.Sprintf("Allow %s? [y/n]", a.approvalDesc))
-		viewParts = append(viewParts, approvalPrompt)
-		linesAbove += lipgloss.Height(approvalPrompt)
-	} else if streaming := a.renderStreamingText(); streaming != "" {
-		viewParts = append(viewParts, streaming)
-		linesAbove += lipgloss.Height(streaming)
-	} else if a.agentRunning {
-		indicator := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#B88AFF")).
-			Italic(true).
-			Render("thinking...")
-		viewParts = append(viewParts, indicator)
-		linesAbove += 1
-	}
-
-	if acHeight == 0 {
-		if statusBar := a.renderStatusBar(); statusBar != "" {
-			viewParts = append(viewParts, statusBar)
-			linesAbove += 1
-		}
-	} else {
-		viewParts = append(viewParts, a.renderAutocomplete())
-		linesAbove += acHeight
-	}
-
-	viewParts = append(viewParts, inputBox)
-	linesAbove += 1 // top border of input box
-
-	// Compute cursor position within the active area
-	cx, cy := a.textarea.CursorPosition()
-	cx += 2 // +2 for "❯ " prefix
-	cy += linesAbove
-
-	activeContent := strings.Join(viewParts, "\n")
-	activeLines := strings.Split(activeContent, "\n")
-
-	a.renderer.renderActiveArea(activeLines, cx, cy)
-}
-
-// --- Alt-screen rendering ---
-
-func (a *App) renderAltScreen(content string) {
-	// Clear alt screen and write content
-	fmt.Fprint(a.renderer.out, "\033[2J\033[H") // clear + home
-	fmt.Fprint(a.renderer.out, content)
-	a.renderer.out.Flush()
-}
-
-func (a *App) renderConfigScreen() {
-	formBorder := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForegroundBlend(borderGradientColors...).
-		Width(a.width).
-		Padding(1, 0)
-
-	formContent := a.configForm.View()
-	rendered := formBorder.Render(formContent)
-
-	// Center vertically
-	formHeight := lipgloss.Height(rendered)
-	padding := (a.height - formHeight) / 2
-	if padding < 0 {
-		padding = 0
-	}
-
-	a.renderAltScreen(strings.Repeat("\n", padding) + rendered)
-}
-
-func (a *App) renderModelScreen() {
-	formBorder := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForegroundBlend(borderGradientColors...).
-		Width(a.width).
-		Height(a.height - 2).
-		Padding(1, 0)
-
-	formContent := a.modelList.View()
-	rendered := formBorder.Render(formContent)
-	a.renderAltScreen(rendered)
-}
-
-func (a *App) renderWorktreeScreen() {
-	formBorder := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForegroundBlend(borderGradientColors...).
-		Width(a.width).
-		Height(a.height - 2).
-		Padding(1, 0)
-
-	formContent := a.worktreeListC.View()
-	rendered := formBorder.Render(formContent)
-	a.renderAltScreen(rendered)
-}
-
-func (a *App) renderBranchScreen() {
-	formBorder := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForegroundBlend(borderGradientColors...).
-		Width(a.width).
-		Height(a.height - 2).
-		Padding(1, 0)
-
-	formContent := a.branchListC.View()
-	rendered := formBorder.Render(formContent)
-	a.renderAltScreen(rendered)
-}
+// ─── Cleanup ───
 
 func (a *App) cleanup() {
 	close(a.stopCh)
@@ -3284,9 +1846,32 @@ func (a *App) cleanup() {
 	}
 }
 
+// ─── Helpers ───
+
+func getWidth() int {
+	w, _, err := term.GetSize(int(os.Stdin.Fd()))
+	if err != nil {
+		return 80
+	}
+	return w
+}
+
+func utf8ByteLen(first byte) int {
+	switch {
+	case first&0x80 == 0:
+		return 1
+	case first&0xE0 == 0xC0:
+		return 2
+	case first&0xF0 == 0xE0:
+		return 3
+	default:
+		return 4
+	}
+}
+
+// ─── main ───
+
 func main() {
-	// Silence the default logger so library log.Printf calls don't
-	// corrupt the TUI output.
 	log.SetOutput(io.Discard)
 
 	app := newApp()
