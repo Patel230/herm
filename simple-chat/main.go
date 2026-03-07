@@ -32,7 +32,8 @@ var (
 	width         int
 	input         []rune
 	cursor        int // rune position within input
-	prevRowCount  int // number of rows drawn last frame
+	prevRowCount  int // total rows drawn last frame
+	sepRow        int // 1-based screen row of top separator
 	inputStartRow int // 1-based screen row of first input line
 )
 
@@ -112,21 +113,10 @@ func wrapString(s string, startCol int) []string {
 	return rows
 }
 
-// buildScreenRows constructs every visual row for the entire screen.
-func buildScreenRows() []string {
-	var rows []string
-
-	for _, b := range blocks {
-		for _, logLine := range strings.Split(b.Text, "\n") {
-			rows = append(rows, wrapString(logLine, 0)...)
-		}
-		rows = append(rows, "") // empty line after block
-	}
-
+// buildInputRows builds just the input area: top separator, input lines, bottom separator.
+func buildInputRows() []string {
 	sep := strings.Repeat("─", width)
-	rows = append(rows, sep)
-
-	inputStartRow = len(rows) + 1 // 1-based screen row of first input line
+	rows := []string{sep}
 
 	vlines := getVisualLines()
 	for i, vl := range vlines {
@@ -141,25 +131,65 @@ func buildScreenRows() []string {
 	return rows
 }
 
-func render() {
-	rows := buildScreenRows()
-
-	var buf strings.Builder
-	// Write each row with absolute positioning + line clear (no screen clear needed)
+// writeRows writes rows to buf starting at screen row `from` (1-based).
+func writeRows(buf *strings.Builder, rows []string, from int) {
 	for i, row := range rows {
-		buf.WriteString(fmt.Sprintf("\033[%d;1H\033[2K%s", i+1, row))
+		buf.WriteString(fmt.Sprintf("\033[%d;1H\033[2K%s", from+i, row))
 	}
+}
 
-	// Clear any leftover rows from the previous frame
-	for i := len(rows); i < prevRowCount; i++ {
-		buf.WriteString(fmt.Sprintf("\033[%d;1H\033[2K", i+1))
-	}
-	prevRowCount = len(rows)
-
-	// Position cursor using absolute coordinates
+// positionCursor appends the escape to move cursor to its position in the input area.
+func positionCursor(buf *strings.Builder) {
 	curLine, curCol := cursorVisualPos()
 	buf.WriteString(fmt.Sprintf("\033[%d;%dH", inputStartRow+curLine, curCol+1))
+}
 
+// render redraws the entire screen (blocks + input area).
+func render() {
+	var blockRows []string
+	for _, b := range blocks {
+		for _, logLine := range strings.Split(b.Text, "\n") {
+			blockRows = append(blockRows, wrapString(logLine, 0)...)
+		}
+		blockRows = append(blockRows, "") // empty line after block
+	}
+
+	sepRow = len(blockRows) + 1
+	inputStartRow = sepRow + 1
+
+	inputRows := buildInputRows()
+	totalRows := len(blockRows) + len(inputRows)
+
+	var buf strings.Builder
+	writeRows(&buf, blockRows, 1)
+	writeRows(&buf, inputRows, sepRow)
+
+	// Clear leftover rows from previous frame
+	for i := totalRows; i < prevRowCount; i++ {
+		buf.WriteString(fmt.Sprintf("\033[%d;1H\033[2K", i+1))
+	}
+	prevRowCount = totalRows
+
+	positionCursor(&buf)
+	os.Stdout.WriteString(buf.String())
+}
+
+// renderInput redraws only the input area (separators + input lines).
+// Blocks above are untouched.
+func renderInput() {
+	inputRows := buildInputRows()
+	totalRows := sepRow - 1 + len(inputRows)
+
+	var buf strings.Builder
+	writeRows(&buf, inputRows, sepRow)
+
+	// Clear leftover rows below input area
+	for i := totalRows; i < prevRowCount; i++ {
+		buf.WriteString(fmt.Sprintf("\033[%d;1H\033[2K", i+1))
+	}
+	prevRowCount = totalRows
+
+	positionCursor(&buf)
 	os.Stdout.WriteString(buf.String())
 }
 
@@ -194,7 +224,7 @@ func moveUp() {
 		targetCol = prev.startCol
 	}
 	cursor = prev.start + (targetCol - prev.startCol)
-	render()
+	renderInput()
 }
 
 func moveDown() {
@@ -212,7 +242,7 @@ func moveDown() {
 		targetCol = next.startCol
 	}
 	cursor = next.start + (targetCol - next.startCol)
-	render()
+	renderInput()
 }
 
 func main() {
@@ -262,12 +292,12 @@ func main() {
 			case 'C': // right
 				if cursor < len(input) {
 					cursor++
-					render()
+					renderInput()
 				}
 			case 'D': // left
 				if cursor > 0 {
 					cursor--
-					render()
+					renderInput()
 				}
 			}
 			continue
@@ -281,7 +311,7 @@ func main() {
 		// Shift+Enter — insert newline
 		if ch == '\n' {
 			insertAtCursor('\n')
-			render()
+			renderInput()
 			continue
 		}
 
@@ -300,7 +330,7 @@ func main() {
 		if ch == 127 {
 			if cursor > 0 {
 				deleteBeforeCursor()
-				render()
+				renderInput()
 			}
 			continue
 		}
@@ -318,7 +348,7 @@ func main() {
 		}
 
 		insertAtCursor(r)
-		render()
+		renderInput()
 	}
 }
 
