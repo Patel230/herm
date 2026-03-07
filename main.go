@@ -730,12 +730,16 @@ func newApp() *App {
 func (a *App) buildBlockRows() []string {
 	var rows []string
 	rows = append(rows, logo...)
-	for _, msg := range a.messages {
+	for i, msg := range a.messages {
 		rendered := renderMessage(msg)
 		for _, logLine := range strings.Split(rendered, "\n") {
 			rows = append(rows, wrapString(logLine, 0, a.width)...)
 		}
-		rows = append(rows, "") // empty line after block
+		// Add blank line after block, unless next message already has leadBlank
+		nextHasBlank := i+1 < len(a.messages) && a.messages[i+1].leadBlank
+		if !nextHasBlank {
+			rows = append(rows, "")
+		}
 	}
 	// Show streaming text or thinking indicator above the input area
 	if a.streamingText != "" {
