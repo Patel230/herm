@@ -17,14 +17,23 @@ type Block struct {
 
 const (
 	promptPrefix     = "❯ "
-	promptPrefixCols = 2 // display width of "❯ "
+	promptPrefixCols = 2
 )
 
+// vline represents one visual line of the input area.
+type vline struct {
+	start    int // rune index of first char
+	length   int // number of runes
+	startCol int // visual column where text starts
+}
+
 var (
-	blocks []Block
-	width  int
-	input  string
-	sepRow int // 1-based row where the top separator lives
+	blocks        []Block
+	width         int
+	input         []rune
+	cursor        int // rune position within input
+	prevRowCount  int // number of rows drawn last frame
+	inputStartRow int // 1-based screen row of first input line
 )
 
 func getWidth() int {
@@ -35,66 +44,175 @@ func getWidth() int {
 	return w
 }
 
-func lastInputLine() string {
-	if idx := strings.LastIndex(input, "\n"); idx >= 0 {
-		return input[idx+1:]
-	}
-	return input
-}
+// getVisualLines splits the input into visual lines, accounting for
+// the prompt prefix on the first line and terminal-width wrapping.
+func getVisualLines() []vline {
+	var lines []vline
+	start := 0
+	startCol := promptPrefixCols
+	length := 0
 
-func cursorCol() int {
-	col := utf8.RuneCountInString(lastInputLine()) + 1
-	if !strings.Contains(input, "\n") {
-		col += promptPrefixCols
-	}
-	return col
-}
-
-// writeInputArea writes the top separator, prompt+input, and bottom separator.
-// It then positions the cursor at the end of the input text.
-func writeInputArea(buf *strings.Builder) {
-	buf.WriteString(strings.Repeat("─", width))
-	buf.WriteString("\r\n")
-
-	displayInput := strings.ReplaceAll(input, "\n", "\r\n")
-	buf.WriteString(promptPrefix + displayInput)
-	buf.WriteString("\r\n")
-
-	buf.WriteString(strings.Repeat("─", width))
-
-	// Move cursor back up to the last input line (1 up from bottom separator)
-	buf.WriteString(fmt.Sprintf("\033[A\033[%dG", cursorCol()))
-}
-
-// renderAll clears the entire screen and redraws everything.
-func renderAll() {
-	var buf strings.Builder
-	buf.WriteString("\033[H\033[2J\033[3J")
-
-	row := 1
-	for _, b := range blocks {
-		lines := strings.Split(b.Text, "\n")
-		for _, l := range lines {
-			buf.WriteString(l)
-			buf.WriteString("\r\n")
-			row++
+	for i, r := range input {
+		if r == '\n' {
+			lines = append(lines, vline{start, length, startCol})
+			start = i + 1
+			startCol = 0
+			length = 0
+			continue
 		}
-		// empty line after each block
-		buf.WriteString("\r\n")
-		row++
+		length++
+		if startCol+length >= width {
+			lines = append(lines, vline{start, length, startCol})
+			start = i + 1
+			startCol = 0
+			length = 0
+		}
+	}
+	lines = append(lines, vline{start, length, startCol})
+	return lines
+}
+
+// cursorVisualPos returns the visual line index and column for the cursor.
+func cursorVisualPos() (int, int) {
+	vlines := getVisualLines()
+	for i, vl := range vlines {
+		end := vl.start + vl.length
+		if cursor >= vl.start && cursor <= end {
+			if cursor == end && i < len(vlines)-1 && vl.startCol+vl.length >= width {
+				continue
+			}
+			return i, vl.startCol + (cursor - vl.start)
+		}
+	}
+	last := len(vlines) - 1
+	vl := vlines[last]
+	return last, vl.startCol + vl.length
+}
+
+// wrapString splits a string into visual rows of at most `width` runes.
+func wrapString(s string, startCol int) []string {
+	runes := []rune(s)
+	if len(runes) == 0 {
+		return []string{""}
+	}
+	var rows []string
+	col := startCol
+	lineStart := 0
+	for i := range runes {
+		col++
+		if col >= width {
+			rows = append(rows, string(runes[lineStart:i+1]))
+			lineStart = i + 1
+			col = 0
+		}
+	}
+	if lineStart <= len(runes) {
+		rows = append(rows, string(runes[lineStart:]))
+	}
+	return rows
+}
+
+// buildScreenRows constructs every visual row for the entire screen.
+func buildScreenRows() []string {
+	var rows []string
+
+	for _, b := range blocks {
+		for _, logLine := range strings.Split(b.Text, "\n") {
+			rows = append(rows, wrapString(logLine, 0)...)
+		}
+		rows = append(rows, "") // empty line after block
 	}
 
-	sepRow = row
-	writeInputArea(&buf)
+	sep := strings.Repeat("─", width)
+	rows = append(rows, sep)
+
+	inputStartRow = len(rows) + 1 // 1-based screen row of first input line
+
+	vlines := getVisualLines()
+	for i, vl := range vlines {
+		line := string(input[vl.start : vl.start+vl.length])
+		if i == 0 {
+			line = promptPrefix + line
+		}
+		rows = append(rows, line)
+	}
+
+	rows = append(rows, sep)
+	return rows
+}
+
+func render() {
+	rows := buildScreenRows()
+
+	var buf strings.Builder
+	// Write each row with absolute positioning + line clear (no screen clear needed)
+	for i, row := range rows {
+		buf.WriteString(fmt.Sprintf("\033[%d;1H\033[2K%s", i+1, row))
+	}
+
+	// Clear any leftover rows from the previous frame
+	for i := len(rows); i < prevRowCount; i++ {
+		buf.WriteString(fmt.Sprintf("\033[%d;1H\033[2K", i+1))
+	}
+	prevRowCount = len(rows)
+
+	// Position cursor using absolute coordinates
+	curLine, curCol := cursorVisualPos()
+	buf.WriteString(fmt.Sprintf("\033[%d;%dH", inputStartRow+curLine, curCol+1))
+
 	os.Stdout.WriteString(buf.String())
 }
 
-// renderInput redraws only from the top separator down (no full screen clear).
-func renderInput() {
-	var buf strings.Builder
-	buf.WriteString(fmt.Sprintf("\033[%d;1H\033[J", sepRow))
-	writeInputArea(&buf)
-	os.Stdout.WriteString(buf.String())
+func insertAtCursor(r rune) {
+	input = append(input, 0)
+	copy(input[cursor+1:], input[cursor:])
+	input[cursor] = r
+	cursor++
+}
+
+func deleteBeforeCursor() {
+	if cursor <= 0 {
+		return
+	}
+	cursor--
+	copy(input[cursor:], input[cursor+1:])
+	input = input[:len(input)-1]
+}
+
+func moveUp() {
+	lineIdx, col := cursorVisualPos()
+	if lineIdx == 0 {
+		return
+	}
+	vlines := getVisualLines()
+	prev := vlines[lineIdx-1]
+	targetCol := col
+	if targetCol > prev.startCol+prev.length {
+		targetCol = prev.startCol + prev.length
+	}
+	if targetCol < prev.startCol {
+		targetCol = prev.startCol
+	}
+	cursor = prev.start + (targetCol - prev.startCol)
+	render()
+}
+
+func moveDown() {
+	lineIdx, col := cursorVisualPos()
+	vlines := getVisualLines()
+	if lineIdx >= len(vlines)-1 {
+		return
+	}
+	next := vlines[lineIdx+1]
+	targetCol := col
+	if targetCol > next.startCol+next.length {
+		targetCol = next.startCol + next.length
+	}
+	if targetCol < next.startCol {
+		targetCol = next.startCol
+	}
+	cursor = next.start + (targetCol - next.startCol)
+	render()
 }
 
 func main() {
@@ -105,66 +223,114 @@ func main() {
 	}
 	defer term.Restore(int(os.Stdin.Fd()), oldState)
 
-	// Enter alternate screen
 	fmt.Print("\033[?1049h")
 	defer fmt.Print("\033[?1049l")
 
 	width = getWidth()
 
-	// Listen for window resize
 	sigWinch := make(chan os.Signal, 1)
 	signal.Notify(sigWinch, syscall.SIGWINCH)
 	go func() {
 		for range sigWinch {
 			width = getWidth()
-			renderAll()
+			render()
 		}
 	}()
 
-	renderAll()
+	render()
 
-	buf := make([]byte, 1)
+	raw := make([]byte, 1)
 	for {
-		_, err := os.Stdin.Read(buf)
+		_, err := os.Stdin.Read(raw)
 		if err != nil {
 			break
 		}
-		// Ctrl-C or Ctrl-D to quit
-		if buf[0] == 3 || buf[0] == 4 {
-			break
-		}
-		// Shift+Enter (newline)
-		if buf[0] == '\n' {
-			input += "\n"
-			renderInput()
-			continue
-		}
-		// Enter — submit
-		if buf[0] == '\r' {
-			if input != "" {
-				blocks = append(blocks, Block{Text: input})
-				input = ""
+		ch := raw[0]
+
+		// Escape sequence (arrow keys)
+		if ch == '\033' {
+			os.Stdin.Read(raw)
+			if raw[0] != '[' {
+				continue
 			}
-			renderAll()
-			continue
-		}
-		// Backspace
-		if buf[0] == 127 {
-			if len(input) > 0 {
-				removed := input[len(input)-1]
-				input = input[:len(input)-1]
-				if removed == '\n' {
-					// Line count changed — re-render input area
-					renderInput()
-				} else {
-					// Same line — just erase one character
-					os.Stdout.WriteString("\b \b")
+			os.Stdin.Read(raw)
+			switch raw[0] {
+			case 'A':
+				moveUp()
+			case 'B':
+				moveDown()
+			case 'C': // right
+				if cursor < len(input) {
+					cursor++
+					render()
+				}
+			case 'D': // left
+				if cursor > 0 {
+					cursor--
+					render()
 				}
 			}
 			continue
 		}
-		// Regular character — append and echo directly (no re-render)
-		input += string(buf[0])
-		os.Stdout.WriteString(string(buf[0]))
+
+		// Ctrl-C / Ctrl-D
+		if ch == 3 || ch == 4 {
+			break
+		}
+
+		// Shift+Enter — insert newline
+		if ch == '\n' {
+			insertAtCursor('\n')
+			render()
+			continue
+		}
+
+		// Enter — submit
+		if ch == '\r' {
+			if len(input) > 0 {
+				blocks = append(blocks, Block{Text: string(input)})
+				input = input[:0]
+				cursor = 0
+			}
+			render()
+			continue
+		}
+
+		// Backspace
+		if ch == 127 {
+			if cursor > 0 {
+				deleteBeforeCursor()
+				render()
+			}
+			continue
+		}
+
+		// Regular character
+		r := rune(ch)
+		if ch >= 0x80 {
+			b := []byte{ch}
+			n := utf8ByteLen(ch)
+			for i := 1; i < n; i++ {
+				os.Stdin.Read(raw)
+				b = append(b, raw[0])
+			}
+			r, _ = utf8.DecodeRune(b)
+		}
+
+		insertAtCursor(r)
+		render()
+	}
+}
+
+func utf8ByteLen(first byte) int {
+	switch {
+	case first&0x80 == 0:
+		return 1
+	case first&0xE0 == 0xC0:
+		return 2
+	case first&0xF0 == 0xE0:
+		return 3
+	default:
+		return 4
 	}
 }
