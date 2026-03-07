@@ -202,8 +202,7 @@ func progressBar(n, max int) string {
 
 	r, g, b := lerpColor(78, 201, 100, 230, 70, 70, ratio)
 	fillFg := fmt.Sprintf("\033[38;2;%d;%d;%dm", r, g, b)
-	dimFg := "\033[2m"
-	dimBg := "\033[2m"
+	dimBg := "\033[48;5;240m"
 
 	const reset = "\033[0m"
 
@@ -212,13 +211,14 @@ func progressBar(n, max int) string {
 		cellFilled := filled - i*8
 		switch {
 		case cellFilled >= 8:
-			buf.WriteString(fillFg + "█" + reset)
+			buf.WriteString(dimBg + fillFg + "█")
 		case cellFilled <= 0:
-			buf.WriteString(dimFg + "█" + reset)
+			buf.WriteString(dimBg + " ")
 		default:
-			buf.WriteString(dimBg + fillFg + string(partials[8-cellFilled]) + reset)
+			buf.WriteString(dimBg + fillFg + string(partials[8-cellFilled]))
 		}
 	}
+	buf.WriteString(reset)
 	return buf.String()
 }
 
@@ -799,8 +799,13 @@ func (a *App) buildInputRows() []string {
 		}
 	}
 
-	// Progress bar row (only when no action is active)
+	// Status indicators (only when no action is active)
 	if !hasAction {
+		// Line 1: /b branch + progress bar on right
+		branchLabel := ""
+		if a.status.Branch != "" {
+			branchLabel = "\033[2m/b " + a.status.Branch + "\033[0m"
+		}
 		totalChars := 0
 		for _, msg := range a.messages {
 			totalChars += len([]rune(msg.content))
@@ -808,11 +813,20 @@ func (a *App) buildInputRows() []string {
 		totalChars += len(a.input)
 		bar := progressBar(totalChars, charLimit)
 		barWidth := 3
-		padding := a.width - barWidth
+		branchTextWidth := 0
+		if a.status.Branch != "" {
+			branchTextWidth = 3 + len(a.status.Branch) // "/b " + branch name
+		}
+		padding := a.width - branchTextWidth - barWidth - 1 // -1 for trailing space after bar
 		if padding < 0 {
 			padding = 0
 		}
-		rows = append(rows, strings.Repeat(" ", padding)+bar+"\033[0m\033[K")
+		rows = append(rows, branchLabel+strings.Repeat(" ", padding)+bar+" ")
+
+		// Line 2: /w worktree
+		if a.status.WorktreeName != "" {
+			rows = append(rows, "\033[2m/w "+a.status.WorktreeName+"\033[0m\033[K")
+		}
 	}
 
 	return rows
