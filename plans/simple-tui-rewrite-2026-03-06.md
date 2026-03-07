@@ -122,9 +122,9 @@ Port simple-chat's rendering engine into the main app, adapted for the richer co
 
 Connect the agent/LLM system to the new rendering engine.
 
-- [ ] 2a: Modify agent event delivery in `agent.go`: replace the bubbletea `tea.Cmd` pattern with a Go channel (`chan AgentEvent`). The agent loop sends events (text delta, tool call, tool result, done, error) to the channel. Define `AgentEvent` struct with event type enum and payload fields.
-- [ ] 2b: Add agent event handling to the main loop: use a separate goroutine that reads from the agent event channel and writes to a pipe/signal that the main byte-reading loop can select on (or use `os.Pipe` + poll, or switch main loop to use `select` with channels). On text delta: append to `streamingText`, call `renderInput()` to update display. On tool call/result: add block, call `render()`. On done: flush `streamingText` to a block, mark `agentRunning = false`.
-- [ ] 2c: Wire up message submission: on Enter, if input is not a command and `agentRunning` is false, create user block, expand pastes, start agent goroutine with the message. Handle approval flow: when agent sends approval event, set `awaitingApproval = true`, show `[y/n]` below input, wait for key press.
+- [x] 2a: Modify agent event delivery in `agent.go`: replace the bubbletea `tea.Cmd` pattern with a Go channel (`chan AgentEvent`). The agent loop sends events (text delta, tool call, tool result, done, error) to the channel. Define `AgentEvent` struct with event type enum and payload fields.
+- [x] 2b: Add agent event handling to the main loop: use a separate goroutine that reads from the agent event channel and writes to a pipe/signal that the main byte-reading loop can select on (or use `os.Pipe` + poll, or switch main loop to use `select` with channels). On text delta: append to `streamingText`, call `renderInput()` to update display. On tool call/result: add block, call `render()`. On done: flush `streamingText` to a block, mark `agentRunning = false`.
+- [x] 2c: Wire up message submission: on Enter, if input is not a command and `agentRunning` is false, create user block, expand pastes, start agent goroutine with the message. Handle approval flow: when agent sends approval event, set `awaitingApproval = true`, show `[y/n]` below input, wait for key press.
 
 ## Phase 3: Commands and inline menus
 
