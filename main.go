@@ -780,9 +780,9 @@ func (a *App) buildInputRows() []string {
 		hasAction = true
 		for i, cmd := range matches {
 			if i == a.autocompleteIdx {
-				rows = append(rows, fmt.Sprintf("\033[36;1m  > %s\033[0m", cmd))
+				rows = append(rows, fmt.Sprintf("\033[36;1m%s ◆\033[0m", cmd))
 			} else {
-				rows = append(rows, fmt.Sprintf("    %s", cmd))
+				rows = append(rows, cmd)
 			}
 		}
 	}
@@ -792,9 +792,9 @@ func (a *App) buildInputRows() []string {
 		hasAction = true
 		for i, line := range a.menuLines {
 			if a.menuActive && i == a.menuCursor {
-				rows = append(rows, fmt.Sprintf("\033[36;1m  > %s\033[0m", line))
+				rows = append(rows, fmt.Sprintf("\033[36;1m%s ◆\033[0m", line))
 			} else {
-				rows = append(rows, fmt.Sprintf("    %s", line))
+				rows = append(rows, line)
 			}
 		}
 	}
