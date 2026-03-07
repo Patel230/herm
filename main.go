@@ -202,8 +202,8 @@ func progressBar(n, max int) string {
 
 	r, g, b := lerpColor(78, 201, 100, 230, 70, 70, ratio)
 	fillFg := fmt.Sprintf("\033[38;2;%d;%d;%dm", r, g, b)
-	dimFg := "\033[38;5;240m"
-	dimBg := "\033[48;5;240m"
+	dimFg := "\033[2m"
+	dimBg := "\033[2m"
 
 	const reset = "\033[0m"
 
@@ -243,34 +243,34 @@ var logo = []string{
 // ─── Styling helpers ───
 
 func styledUserMsg(content string) string {
-	return "\033[38;5;253m❯ " + content + "\033[0m"
+	return "\033[1m❯ " + content + "\033[0m"
 }
 
 func styledAssistantText(content string) string {
-	return "\033[38;5;141m" + content + "\033[0m"
+	return content
 }
 
 func styledToolCall(summary string) string {
-	return "\033[38;5;242;3m" + summary + "\033[0m"
+	return "\033[2;3m" + summary + "\033[0m"
 }
 
 func styledToolResult(result string, isError bool) string {
 	if isError {
 		return styledError(result)
 	}
-	return "\033[38;5;240m" + result + "\033[0m"
+	return "\033[2m" + result + "\033[0m"
 }
 
 func styledError(msg string) string {
-	return "\033[38;5;203;3m" + msg + "\033[0m"
+	return "\033[31;3m" + msg + "\033[0m"
 }
 
 func styledSuccess(msg string) string {
-	return "\033[38;5;114;3m" + msg + "\033[0m"
+	return "\033[32;3m" + msg + "\033[0m"
 }
 
 func styledInfo(msg string) string {
-	return "\033[38;5;103;3m" + msg + "\033[0m"
+	return "\033[34;3m" + msg + "\033[0m"
 }
 
 func renderMessage(msg chatMessage) string {
@@ -748,7 +748,7 @@ func (a *App) buildBlockRows() []string {
 		}
 		rows = append(rows, "")
 	} else if a.agentRunning {
-		rows = append(rows, "\033[38;5;141;3mthinking...\033[0m")
+		rows = append(rows, "\033[2;3mthinking...\033[0m")
 		rows = append(rows, "")
 	}
 	return rows
@@ -769,43 +769,50 @@ func (a *App) buildInputRows() []string {
 
 	// Approval prompt inside input area
 	if a.awaitingApproval {
-		rows = append(rows, fmt.Sprintf("\033[38;5;220;1mAllow %s? [y/n]\033[0m", a.approvalDesc))
+		rows = append(rows, fmt.Sprintf("\033[33;1mAllow %s? [y/n]\033[0m", a.approvalDesc))
 	}
 
 	rows = append(rows, sep)
 
-	// Progress bar row
-	totalChars := 0
-	for _, msg := range a.messages {
-		totalChars += len([]rune(msg.content))
-	}
-	totalChars += len(a.input)
-	bar := progressBar(totalChars, charLimit)
-	barWidth := 3
-	padding := a.width - barWidth
-	if padding < 0 {
-		padding = 0
-	}
-	rows = append(rows, strings.Repeat(" ", padding)+bar+"\033[0m\033[K")
-
-	// Autocomplete / status below progress bar
+	// Autocomplete or menu (shown directly below input, replacing progress bar)
+	hasAction := false
 	if matches := a.autocompleteMatches(); len(matches) > 0 {
+		hasAction = true
 		for i, cmd := range matches {
 			if i == a.autocompleteIdx {
-				rows = append(rows, fmt.Sprintf("\033[38;5;141;1m  > %s\033[0m", cmd))
+				rows = append(rows, fmt.Sprintf("\033[36;1m  > %s\033[0m", cmd))
 			} else {
-				rows = append(rows, fmt.Sprintf("\033[38;5;253m    %s\033[0m", cmd))
+				rows = append(rows, fmt.Sprintf("    %s", cmd))
 			}
 		}
 	}
 
 	// Menu lines (Phase 3)
-	for i, line := range a.menuLines {
-		if a.menuActive && i == a.menuCursor {
-			rows = append(rows, fmt.Sprintf("\033[38;5;141;1m  > %s\033[0m", line))
-		} else {
-			rows = append(rows, fmt.Sprintf("\033[38;5;253m    %s\033[0m", line))
+	if len(a.menuLines) > 0 {
+		hasAction = true
+		for i, line := range a.menuLines {
+			if a.menuActive && i == a.menuCursor {
+				rows = append(rows, fmt.Sprintf("\033[36;1m  > %s\033[0m", line))
+			} else {
+				rows = append(rows, fmt.Sprintf("    %s", line))
+			}
 		}
+	}
+
+	// Progress bar row (only when no action is active)
+	if !hasAction {
+		totalChars := 0
+		for _, msg := range a.messages {
+			totalChars += len([]rune(msg.content))
+		}
+		totalChars += len(a.input)
+		bar := progressBar(totalChars, charLimit)
+		barWidth := 3
+		padding := a.width - barWidth
+		if padding < 0 {
+			padding = 0
+		}
+		rows = append(rows, strings.Repeat(" ", padding)+bar+"\033[0m\033[K")
 	}
 
 	return rows
