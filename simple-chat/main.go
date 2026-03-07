@@ -184,7 +184,7 @@ func buildInputRows() []string {
 	if padding < 0 {
 		padding = 0
 	}
-	rows = append(rows, strings.Repeat(" ", padding)+bar)
+	rows = append(rows, strings.Repeat(" ", padding)+bar+"\033[0m\033[K")
 
 	return rows
 }
