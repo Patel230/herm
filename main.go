@@ -737,6 +737,16 @@ func (a *App) buildBlockRows() []string {
 		}
 		rows = append(rows, "") // empty line after block
 	}
+	// Show streaming text or thinking indicator above the input area
+	if a.streamingText != "" {
+		for _, logLine := range strings.Split(styledAssistantText(a.streamingText), "\n") {
+			rows = append(rows, wrapString(logLine, 0, a.width)...)
+		}
+		rows = append(rows, "")
+	} else if a.agentRunning {
+		rows = append(rows, "\033[38;5;141;3mthinking...\033[0m")
+		rows = append(rows, "")
+	}
 	return rows
 }
 
@@ -753,13 +763,9 @@ func (a *App) buildInputRows() []string {
 		rows = append(rows, line)
 	}
 
-	// Ephemeral indicators above bottom separator
+	// Approval prompt inside input area
 	if a.awaitingApproval {
 		rows = append(rows, fmt.Sprintf("\033[38;5;220;1mAllow %s? [y/n]\033[0m", a.approvalDesc))
-	} else if a.streamingText != "" {
-		rows = append(rows, styledAssistantText(a.streamingText))
-	} else if a.agentRunning {
-		rows = append(rows, "\033[38;5;141;3mthinking...\033[0m")
 	}
 
 	rows = append(rows, sep)
@@ -1049,145 +1055,202 @@ func (a *App) Run() error {
 	// Initial render
 	a.render()
 
-	// Main byte-reading loop (from simple-chat, extended)
-	raw := make([]byte, 1)
-	for {
-		_, err := os.Stdin.Read(raw)
-		if err != nil {
-			break
-		}
-		ch := raw[0]
-
-		// Check for async results (non-blocking)
-		a.drainResults()
-
-		// Check for agent events (non-blocking)
-		a.drainAgentEvents()
-
-		// Escape sequence
-		if ch == '\033' {
-			a.handleEscapeSequence(raw)
-			continue
-		}
-
-		// Ctrl+C / Ctrl+D
-		if ch == 3 || ch == 4 {
-			break
-		}
-
-		// Handle approval mode
-		if a.awaitingApproval {
-			a.handleApprovalByte(ch)
-			continue
-		}
-
-		// Ctrl+W: delete word backward
-		if ch == 0x17 {
-			a.deleteWordBackward()
-			a.autocompleteIdx = 0
-			a.renderInput()
-			continue
-		}
-
-		// Ctrl+U: kill to start of line
-		if ch == 0x15 {
-			a.killToStart()
-			a.renderInput()
-			continue
-		}
-
-		// Ctrl+K: kill to end of line
-		if ch == 0x0b {
-			a.killLine()
-			a.renderInput()
-			continue
-		}
-
-		// Ctrl+A: home
-		if ch == 0x01 {
-			a.cursor = 0
-			a.renderInput()
-			continue
-		}
-
-		// Ctrl+E: end
-		if ch == 0x05 {
-			a.cursor = len(a.input)
-			a.renderInput()
-			continue
-		}
-
-		// Tab
-		if ch == '\t' {
-			if matches := a.autocompleteMatches(); len(matches) > 0 {
-				idx := a.autocompleteIdx
-				if idx >= len(matches) {
-					idx = 0
-				}
-				a.setInputValue(matches[idx])
-				a.autocompleteIdx = 0
+	// Read stdin in a goroutine so we can select on it alongside channels
+	stdinCh := make(chan byte, 64)
+	go func() {
+		buf := make([]byte, 1)
+		for {
+			_, err := os.Stdin.Read(buf)
+			if err != nil {
+				close(stdinCh)
+				return
 			}
-			a.renderInput()
-			continue
+			stdinCh <- buf[0]
 		}
+	}()
 
-		// Shift+Enter (LF) — insert newline
-		if ch == '\n' {
-			a.insertAtCursor('\n')
-			a.renderInput()
-			continue
-		}
-
-		// Enter (CR) — submit or menu select
-		if ch == '\r' {
-			if a.menuActive && a.menuAction != nil {
-				a.menuAction(a.menuCursor)
-				a.render()
-				continue
-			}
-			a.handleEnter()
-			continue
-		}
-
-		// Backspace
-		if ch == 127 || ch == 0x08 {
-			if a.cursor > 0 {
-				a.deleteBeforeCursor()
-				a.autocompleteIdx = 0
-				a.renderInput()
-			}
-			continue
-		}
-
-		// Regular character (possibly multi-byte UTF-8)
-		r := rune(ch)
-		if ch >= 0x80 {
-			b := []byte{ch}
-			n := utf8ByteLen(ch)
-			for i := 1; i < n; i++ {
-				os.Stdin.Read(raw)
-				b = append(b, raw[0])
-			}
-			r, _ = utf8.DecodeRune(b)
-		}
-
-		prevVal := a.inputValue()
-		a.insertAtCursor(r)
-		if a.inputValue() != prevVal {
-			a.autocompleteIdx = 0
-		}
-		a.renderInput()
+	// readByte reads a single byte from the stdin channel (blocking).
+	readByte := func() (byte, bool) {
+		b, ok := <-stdinCh
+		return b, ok
 	}
+
+	// Main event loop — selects on stdin, agent events, and async results
+	for {
+		// If agent is running, select on all channels.
+		// Otherwise, just wait for stdin or async results.
+		if a.agent != nil && a.agentRunning {
+			select {
+			case ch, ok := <-stdinCh:
+				if !ok {
+					goto done
+				}
+				a.drainResults()
+				a.drainAgentEvents()
+				if a.handleByte(ch, stdinCh, readByte) {
+					goto done
+				}
+			case event, ok := <-a.agent.Events():
+				if ok {
+					a.handleAgentEvent(event)
+				}
+				a.drainResults()
+				a.drainAgentEvents()
+			case result := <-a.resultCh:
+				a.handleResult(result)
+				a.drainAgentEvents()
+			}
+		} else {
+			select {
+			case ch, ok := <-stdinCh:
+				if !ok {
+					goto done
+				}
+				a.drainResults()
+				a.drainAgentEvents()
+				if a.handleByte(ch, stdinCh, readByte) {
+					goto done
+				}
+			case result := <-a.resultCh:
+				a.handleResult(result)
+			}
+		}
+	}
+done:
 
 	a.cleanup()
 	return nil
 }
 
-func (a *App) handleEscapeSequence(raw []byte) {
-	os.Stdin.Read(raw)
+// handleByte processes a single byte from stdin. Returns true if the app should quit.
+func (a *App) handleByte(ch byte, stdinCh chan byte, readByte func() (byte, bool)) bool {
+	// Escape sequence
+	if ch == '\033' {
+		a.handleEscapeSequence(stdinCh, readByte)
+		return false
+	}
+
+	// Ctrl+C / Ctrl+D
+	if ch == 3 || ch == 4 {
+		return true
+	}
+
+	// Handle approval mode
+	if a.awaitingApproval {
+		a.handleApprovalByte(ch)
+		return false
+	}
+
+	// Ctrl+W: delete word backward
+	if ch == 0x17 {
+		a.deleteWordBackward()
+		a.autocompleteIdx = 0
+		a.renderInput()
+		return false
+	}
+
+	// Ctrl+U: kill to start of line
+	if ch == 0x15 {
+		a.killToStart()
+		a.renderInput()
+		return false
+	}
+
+	// Ctrl+K: kill to end of line
+	if ch == 0x0b {
+		a.killLine()
+		a.renderInput()
+		return false
+	}
+
+	// Ctrl+A: home
+	if ch == 0x01 {
+		a.cursor = 0
+		a.renderInput()
+		return false
+	}
+
+	// Ctrl+E: end
+	if ch == 0x05 {
+		a.cursor = len(a.input)
+		a.renderInput()
+		return false
+	}
+
+	// Tab
+	if ch == '\t' {
+		if matches := a.autocompleteMatches(); len(matches) > 0 {
+			idx := a.autocompleteIdx
+			if idx >= len(matches) {
+				idx = 0
+			}
+			a.setInputValue(matches[idx])
+			a.autocompleteIdx = 0
+		}
+		a.renderInput()
+		return false
+	}
+
+	// Shift+Enter (LF) — insert newline
+	if ch == '\n' {
+		a.insertAtCursor('\n')
+		a.renderInput()
+		return false
+	}
+
+	// Enter (CR) — submit or menu select
+	if ch == '\r' {
+		if a.menuActive && a.menuAction != nil {
+			a.menuAction(a.menuCursor)
+			a.render()
+			return false
+		}
+		a.handleEnter()
+		return false
+	}
+
+	// Backspace
+	if ch == 127 || ch == 0x08 {
+		if a.cursor > 0 {
+			a.deleteBeforeCursor()
+			a.autocompleteIdx = 0
+			a.renderInput()
+		}
+		return false
+	}
+
+	// Regular character (possibly multi-byte UTF-8)
+	r := rune(ch)
+	if ch >= 0x80 {
+		b := []byte{ch}
+		n := utf8ByteLen(ch)
+		for i := 1; i < n; i++ {
+			next, ok := readByte()
+			if !ok {
+				return true
+			}
+			b = append(b, next)
+		}
+		r, _ = utf8.DecodeRune(b)
+	}
+
+	prevVal := a.inputValue()
+	a.insertAtCursor(r)
+	if a.inputValue() != prevVal {
+		a.autocompleteIdx = 0
+	}
+	a.renderInput()
+	return false
+}
+
+func (a *App) handleEscapeSequence(stdinCh chan byte, readByte func() (byte, bool)) {
+	b, ok := readByte()
+	if !ok {
+		return
+	}
 
 	// Alt+Enter: ESC CR
-	if raw[0] == '\r' {
+	if b == '\r' {
 		if !a.awaitingApproval {
 			a.insertAtCursor('\n')
 			a.renderInput()
@@ -1195,7 +1258,7 @@ func (a *App) handleEscapeSequence(raw []byte) {
 		return
 	}
 
-	if raw[0] != '[' {
+	if b != '[' {
 		// Escape key
 		if a.awaitingApproval {
 			return
@@ -1217,27 +1280,31 @@ func (a *App) handleEscapeSequence(raw []byte) {
 	}
 
 	// CSI sequence: ESC [
-	os.Stdin.Read(raw)
+	b, ok = readByte()
+	if !ok {
+		return
+	}
 
 	// Check for bracketed paste: ESC [ 2 0 0 ~
-	if raw[0] == '2' {
-		a.handlePossibleBracketedPaste(raw)
+	if b == '2' {
+		a.handlePossibleBracketedPaste(readByte)
 		return
 	}
 
 	// Modified key sequences: ESC [ 1 ; <mod> <letter>
-	if raw[0] == '1' {
-		a.handleModifiedCSI(raw)
+	if b == '1' {
+		a.handleModifiedCSI(readByte)
 		return
 	}
 
 	// Tilde sequences: ESC [ <number> ~
-	if raw[0] >= '3' && raw[0] <= '6' {
-		// Read the tilde
-		var tilde [1]byte
-		os.Stdin.Read(tilde[:])
-		if tilde[0] == '~' {
-			switch raw[0] {
+	if b >= '3' && b <= '6' {
+		tilde, ok := readByte()
+		if !ok {
+			return
+		}
+		if tilde == '~' {
+			switch b {
 			case '3': // Delete
 				if !a.awaitingApproval {
 					a.deleteAtCursor()
@@ -1252,7 +1319,7 @@ func (a *App) handleEscapeSequence(raw []byte) {
 		return
 	}
 
-	switch raw[0] {
+	switch b {
 	case 'A': // Up
 		if a.menuActive {
 			a.menuCursor--
@@ -1302,37 +1369,48 @@ func (a *App) handleEscapeSequence(raw []byte) {
 	}
 }
 
-func (a *App) handlePossibleBracketedPaste(raw []byte) {
+func (a *App) handlePossibleBracketedPaste(readByte func() (byte, bool)) {
 	// We've read ESC [ 2, check for 0 0 ~
-	var buf [3]byte
-	os.Stdin.Read(buf[0:1])
-	os.Stdin.Read(buf[1:2])
-	os.Stdin.Read(buf[2:3])
+	b0, ok := readByte()
+	if !ok {
+		return
+	}
+	b1, ok := readByte()
+	if !ok {
+		return
+	}
+	b2, ok := readByte()
+	if !ok {
+		return
+	}
 
-	if buf[0] == '0' && buf[1] == '0' && buf[2] == '~' {
+	if b0 == '0' && b1 == '0' && b2 == '~' {
 		// Bracketed paste start - read until ESC [ 2 0 1 ~
 		var content []byte
 		for {
-			os.Stdin.Read(raw)
-			if raw[0] == '\033' {
-				// Check for paste end sequence
-				var end [5]byte
-				os.Stdin.Read(end[0:1])
-				if end[0] == '[' {
-					os.Stdin.Read(end[1:2])
-					os.Stdin.Read(end[2:3])
-					os.Stdin.Read(end[3:4])
-					os.Stdin.Read(end[4:5])
-					if end[1] == '2' && end[2] == '0' && end[3] == '1' && end[4] == '~' {
+			ch, ok := readByte()
+			if !ok {
+				break
+			}
+			if ch == '\033' {
+				e0, ok := readByte()
+				if !ok {
+					break
+				}
+				if e0 == '[' {
+					e1, _ := readByte()
+					e2, _ := readByte()
+					e3, _ := readByte()
+					e4, _ := readByte()
+					if e1 == '2' && e2 == '0' && e3 == '1' && e4 == '~' {
 						break
 					}
-					// Not end sequence, include the bytes
-					content = append(content, '\033', end[0], end[1], end[2], end[3], end[4])
+					content = append(content, '\033', e0, e1, e2, e3, e4)
 				} else {
-					content = append(content, '\033', end[0])
+					content = append(content, '\033', e0)
 				}
 			} else {
-				content = append(content, raw[0])
+				content = append(content, ch)
 			}
 		}
 		a.handlePaste(string(content))
@@ -1341,23 +1419,27 @@ func (a *App) handlePossibleBracketedPaste(raw []byte) {
 
 	// Not a bracketed paste, might be another sequence starting with 2
 	// e.g., Insert key (ESC [ 2 ~)
-	if buf[0] == '~' {
+	if b0 == '~' {
 		// ESC [ 2 ~ = Insert
 		return
 	}
 }
 
-func (a *App) handleModifiedCSI(raw []byte) {
+func (a *App) handleModifiedCSI(readByte func() (byte, bool)) {
 	// We've read ESC [ 1, expect ; <mod> <letter>
-	var buf [3]byte
-	n := 0
-	os.Stdin.Read(buf[0:1]) // ;
-	if buf[0] == ';' {
-		os.Stdin.Read(buf[1:2]) // mod digit
-		os.Stdin.Read(buf[2:3]) // letter
-		n = 3
+	semi, ok := readByte()
+	if !ok {
+		return
 	}
-	if n < 3 {
+	if semi != ';' {
+		return
+	}
+	modByte, ok := readByte()
+	if !ok {
+		return
+	}
+	letter, ok := readByte()
+	if !ok {
 		return
 	}
 
@@ -1365,11 +1447,11 @@ func (a *App) handleModifiedCSI(raw []byte) {
 		return
 	}
 
-	modNum := int(buf[1] - '0')
+	modNum := int(modByte - '0')
 	modNum-- // CSI encoding
 	isCtrl := modNum&4 != 0
 
-	switch buf[2] {
+	switch letter {
 	case 'C': // Right
 		if isCtrl {
 			a.moveWordRight()
