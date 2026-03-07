@@ -113,6 +113,49 @@ func wrapString(s string, startCol int) []string {
 	return rows
 }
 
+const charLimit = 250
+
+// lerpColor interpolates between two RGB colors based on t (0.0 to 1.0).
+func lerpColor(r1, g1, b1, r2, g2, b2 int, t float64) (int, int, int) {
+	lerp := func(a, b int) int { return a + int(float64(b-a)*t) }
+	return lerp(r1, r2), lerp(g1, g2), lerp(b1, b2)
+}
+
+// progressBar returns a 3-character wide ANSI-styled string using block elements.
+// Dim █ for empty cells, colored █ for filled, colored partial on dim bg for transition.
+func progressBar(n, max int) string {
+	if n > max {
+		n = max
+	}
+	ratio := float64(n) / float64(max)
+	filled := int(ratio * 24) // 0..24
+	partials := []rune("█▉▊▋▌▍▎▏")
+
+	// Green (78, 201, 100) → Red (230, 70, 70)
+	r, g, b := lerpColor(78, 201, 100, 230, 70, 70, ratio)
+	fillFg := fmt.Sprintf("\033[38;2;%d;%d;%dm", r, g, b)
+	dimFg := "\033[38;5;240m"
+	// For the partial cell: use dim color as bg so the unfilled part matches empty cells
+	dimBg := "\033[48;5;240m"
+
+	const reset = "\033[0m"
+
+	var buf strings.Builder
+	for i := range 3 {
+		cellFilled := filled - i*8
+		switch {
+		case cellFilled >= 8:
+			buf.WriteString(fillFg + "█" + reset)
+		case cellFilled <= 0:
+			buf.WriteString(dimFg + "█" + reset)
+		default:
+			// Partial: colored partial block on dim background (single cell only)
+			buf.WriteString(dimBg + fillFg + string(partials[8-cellFilled]) + reset)
+		}
+	}
+	return buf.String()
+}
+
 // buildInputRows builds just the input area: top separator, input lines, bottom separator.
 func buildInputRows() []string {
 	sep := strings.Repeat("─", width)
@@ -127,14 +170,29 @@ func buildInputRows() []string {
 		rows = append(rows, line)
 	}
 
-	rows = append(rows, sep)
+	rows = append(rows, strings.Repeat("─", width))
+
+	// Progress bar row below bottom separator, right-aligned
+	totalChars := 0
+	for _, b := range blocks {
+		totalChars += len([]rune(b.Text))
+	}
+	totalChars += len(input)
+	bar := progressBar(totalChars, charLimit)
+	barWidth := 3
+	padding := width - barWidth
+	if padding < 0 {
+		padding = 0
+	}
+	rows = append(rows, strings.Repeat(" ", padding)+bar)
+
 	return rows
 }
 
 // writeRows writes rows to buf starting at screen row `from` (1-based).
 func writeRows(buf *strings.Builder, rows []string, from int) {
 	for i, row := range rows {
-		buf.WriteString(fmt.Sprintf("\033[%d;1H\033[2K%s", from+i, row))
+		buf.WriteString(fmt.Sprintf("\033[%d;1H\033[0m\033[2K%s", from+i, row))
 	}
 }
 
