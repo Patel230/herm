@@ -225,8 +225,16 @@ func progressBar(n, max int) string {
 // ─── ANSI rendering helpers (from simple-chat) ───
 
 func writeRows(buf *strings.Builder, rows []string, from int) {
+	if len(rows) == 0 {
+		return
+	}
+	buf.WriteString(fmt.Sprintf("\033[%d;1H", from))
 	for i, row := range rows {
-		buf.WriteString(fmt.Sprintf("\033[%d;1H\033[0m\033[2K%s", from+i, row))
+		if i > 0 {
+			buf.WriteString("\r\n")
+		}
+		buf.WriteString("\033[0m\033[2K")
+		buf.WriteString(row)
 	}
 }
 
@@ -667,6 +675,7 @@ type App struct {
 	prevRowCount  int
 	sepRow        int
 	inputStartRow int
+	scrollShift   int // rows scrolled off top when content > terminal height
 
 	// Input buffer (from simple-chat)
 	input  []rune
@@ -799,11 +808,9 @@ func (a *App) buildInputRows() []string {
 				rows = append(rows, line)
 			}
 		}
-		if total > maxVisible {
-			first := a.menuScrollOffset + 1
-			last := end
-			rows = append(rows, fmt.Sprintf("\033[2m(%d->%d / %d)\033[0m", first, last, total))
-		}
+		first := a.menuScrollOffset + 1
+		last := end
+		rows = append(rows, fmt.Sprintf("\033[2m(%d->%d / %d)\033[0m", first, last, total))
 		rows = append(rows, sep)
 		return rows
 	}
@@ -871,6 +878,7 @@ func (a *App) buildInputRows() []string {
 }
 
 func (a *App) positionCursor(buf *strings.Builder) {
+	s := a.scrollShift
 	if a.cfgActive {
 		if a.cfgEditing {
 			// Position cursor in the edit field: separator + tab bar (1) + cursor row
@@ -881,19 +889,19 @@ func (a *App) positionCursor(buf *strings.Builder) {
 				col = len(fields[a.cfgCursor].label) + 2 // "label: "
 			}
 			col += a.cfgEditCursor
-			buf.WriteString(fmt.Sprintf("\033[%d;%dH", fieldRow, col+1))
+			buf.WriteString(fmt.Sprintf("\033[%d;%dH", fieldRow-s, col+1))
 		} else {
-			buf.WriteString(fmt.Sprintf("\033[%d;1H", a.sepRow+1))
+			buf.WriteString(fmt.Sprintf("\033[%d;1H", a.sepRow+1-s))
 		}
 		return
 	}
 	if a.menuActive && len(a.menuLines) > 0 {
 		// Menu between separators — hide cursor
-		buf.WriteString(fmt.Sprintf("\033[%d;1H", a.sepRow+1))
+		buf.WriteString(fmt.Sprintf("\033[%d;1H", a.sepRow+1-s))
 		return
 	}
 	curLine, curCol := cursorVisualPos(a.input, a.cursor, a.width)
-	buf.WriteString(fmt.Sprintf("\033[%d;%dH", a.inputStartRow+curLine, curCol+1))
+	buf.WriteString(fmt.Sprintf("\033[%d;%dH", a.inputStartRow+curLine-s, curCol+1))
 }
 
 func (a *App) render() {
@@ -903,16 +911,21 @@ func (a *App) render() {
 	a.inputStartRow = a.sepRow + 1
 
 	inputRows := a.buildInputRows()
-	totalRows := len(blockRows) + len(inputRows)
+	allRows := append(blockRows, inputRows...)
+	totalRows := len(allRows)
 
 	var buf strings.Builder
-	writeRows(&buf, blockRows, 1)
-	writeRows(&buf, inputRows, a.sepRow)
+	buf.WriteString("\033[3J") // clear scrollback from previous renders
+	writeRows(&buf, allRows, 1)
+	buf.WriteString("\033[0m\033[J") // clear from cursor to end of screen
 
-	for i := totalRows; i < a.prevRowCount; i++ {
-		buf.WriteString(fmt.Sprintf("\033[%d;1H\033[2K", i+1))
-	}
 	a.prevRowCount = totalRows
+	th := getTerminalHeight()
+	if totalRows > th {
+		a.scrollShift = totalRows - th
+	} else {
+		a.scrollShift = 0
+	}
 
 	a.positionCursor(&buf)
 	os.Stdout.WriteString(buf.String())
@@ -921,13 +934,19 @@ func (a *App) render() {
 func (a *App) renderInput() {
 	inputRows := a.buildInputRows()
 	totalRows := a.sepRow - 1 + len(inputRows)
+	th := getTerminalHeight()
 
+	// If scrolling is involved (past or present), do a full render
+	if totalRows > th || a.scrollShift > 0 {
+		a.render()
+		return
+	}
+
+	// Fast path: content fits in terminal, use absolute positioning
 	var buf strings.Builder
 	writeRows(&buf, inputRows, a.sepRow)
+	buf.WriteString("\033[0m\033[J") // clear remaining lines
 
-	for i := totalRows; i < a.prevRowCount; i++ {
-		buf.WriteString(fmt.Sprintf("\033[%d;1H\033[2K", i+1))
-	}
 	a.prevRowCount = totalRows
 
 	a.positionCursor(&buf)
