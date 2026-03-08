@@ -914,21 +914,47 @@ func (a *App) render() {
 	allRows := append(blockRows, inputRows...)
 	totalRows := len(allRows)
 
+	th := getTerminalHeight()
+	newScrollShift := 0
+	if totalRows > th {
+		newScrollShift = totalRows - th
+	}
+
 	var buf strings.Builder
-	buf.WriteString("\033[3J") // clear scrollback from previous renders
-	writeRows(&buf, allRows, 1)
+
+	if newScrollShift > 0 && a.scrollShift > 0 && newScrollShift >= a.scrollShift {
+		// Content overflows and grew or stayed same: write only visible portion.
+		// Scroll terminal down if content grew, then overwrite visible rows.
+		if extra := newScrollShift - a.scrollShift; extra > 0 {
+			buf.WriteString(fmt.Sprintf("\033[%d;1H", th))
+			for i := 0; i < extra; i++ {
+				buf.WriteString("\r\n")
+			}
+		}
+		visibleRows := allRows[newScrollShift:]
+		writeRows(&buf, visibleRows, 1)
+	} else {
+		// No overflow, or content shrank: write from top.
+		if a.scrollShift > 0 {
+			buf.WriteString("\033[3J") // clear stale scrollback
+		}
+		writeRows(&buf, allRows, 1)
+	}
+
 	buf.WriteString("\033[0m\033[J") // clear from cursor to end of screen
 
 	a.prevRowCount = totalRows
-	th := getTerminalHeight()
-	if totalRows > th {
-		a.scrollShift = totalRows - th
-	} else {
-		a.scrollShift = 0
-	}
+	a.scrollShift = newScrollShift
 
 	a.positionCursor(&buf)
 	os.Stdout.WriteString(buf.String())
+}
+
+// renderFull clears scrollback and does a full render. Use on resize.
+func (a *App) renderFull() {
+	a.scrollShift = 0 // reset so render() writes from top
+	os.Stdout.WriteString("\033[3J")
+	a.render()
 }
 
 func (a *App) renderInput() {
@@ -936,17 +962,29 @@ func (a *App) renderInput() {
 	totalRows := a.sepRow - 1 + len(inputRows)
 	th := getTerminalHeight()
 
-	// If scrolling is involved (past or present), do a full render
-	if totalRows > th || a.scrollShift > 0 {
+	newScrollShift := 0
+	if totalRows > th {
+		newScrollShift = totalRows - th
+	}
+
+	// If content shrank and we need to un-scroll, do a full render
+	if newScrollShift < a.scrollShift {
 		a.render()
 		return
 	}
 
-	// Fast path: content fits in terminal, use absolute positioning
+	// Compute screen position of sepRow using current scroll state
+	screenSepRow := a.sepRow - a.scrollShift
+	if screenSepRow < 1 {
+		a.render()
+		return
+	}
+
 	var buf strings.Builder
-	writeRows(&buf, inputRows, a.sepRow)
+	writeRows(&buf, inputRows, screenSepRow)
 	buf.WriteString("\033[0m\033[J") // clear remaining lines
 
+	a.scrollShift = newScrollShift
 	a.prevRowCount = totalRows
 
 	a.positionCursor(&buf)
@@ -1199,7 +1237,7 @@ func (a *App) Run() error {
 	go func() {
 		for range sigWinch {
 			a.width = getWidth()
-			a.render()
+			a.renderFull()
 		}
 	}()
 
