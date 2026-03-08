@@ -238,6 +238,30 @@ func TestBuiltinModelsHaveMultipleProviders(t *testing.T) {
 	}
 }
 
+func TestModelsJSONLoadsAllEntries(t *testing.T) {
+	models := builtinModels()
+	if len(models) < 20 {
+		t.Errorf("expected at least 20 models from models.json, got %d", len(models))
+	}
+	providers := make(map[string]int)
+	for _, m := range models {
+		providers[m.Provider]++
+	}
+	for _, p := range []string{ProviderAnthropic, ProviderGrok, ProviderOpenAI, ProviderGemini} {
+		if providers[p] == 0 {
+			t.Errorf("expected at least one model for provider %q", p)
+		}
+	}
+}
+
+func TestModelsJSONContextWindows(t *testing.T) {
+	for _, m := range builtinModels() {
+		if m.ContextWindow < 100000 {
+			t.Errorf("model %q has unexpectedly small context window: %d", m.ID, m.ContextWindow)
+		}
+	}
+}
+
 // --- parseSWEScores tests ---
 
 func TestParseSWEScoresBasic(t *testing.T) {
