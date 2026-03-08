@@ -815,6 +815,10 @@ func (a *App) refreshModelMenu() {
 	} else if a.menuCursor >= a.menuScrollOffset+maxVisible {
 		a.menuScrollOffset = a.menuCursor - maxVisible + 1
 	}
+	// Persist sort preferences
+	a.config.ModelSortCol = sortColNames[a.menuSortCol]
+	a.config.ModelSortDesc = !a.menuSortAsc
+	_ = saveConfig(a.config)
 }
 
 func (a *App) buildInputRows() []string {
@@ -1873,8 +1877,8 @@ func (a *App) handleCommand(input string) {
 		activeID := a.config.resolveActiveModel(a.models)
 		a.menuModels = available
 		a.menuActiveID = activeID
-		a.menuSortCol = 0
-		a.menuSortAsc = true
+		a.menuSortCol = sortColFromName(a.config.ModelSortCol)
+		a.menuSortAsc = !a.config.ModelSortDesc
 		sortModelsByCol(a.menuModels, a.menuSortCol, a.menuSortAsc)
 		header, lines := formatModelMenuLines(a.menuModels, activeID, a.menuSortCol, a.menuSortAsc)
 		activeIdx := 0

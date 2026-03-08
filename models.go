@@ -87,6 +87,19 @@ func sortModelsByCol(models []ModelDef, col int, asc bool) {
 	})
 }
 
+// sortColNames maps column indices to config-friendly names.
+var sortColNames = [4]string{"name", "provider", "price", "context"}
+
+// sortColFromName returns the column index for a name, defaulting to 0.
+func sortColFromName(name string) int {
+	for i, n := range sortColNames {
+		if n == name {
+			return i
+		}
+	}
+	return 0
+}
+
 // formatPrice formats a per-million-token price as "$X.XX".
 func formatPrice(price float64) string {
 	return fmt.Sprintf("$%.2f", price)
