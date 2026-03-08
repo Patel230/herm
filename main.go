@@ -711,10 +711,11 @@ type App struct {
 	needsTextSep     bool
 
 	// Menu state (for inline menus below input - Phase 3)
-	menuLines  []string
-	menuCursor int
-	menuActive bool
-	menuAction func(int)
+	menuLines        []string
+	menuCursor       int
+	menuActive       bool
+	menuAction       func(int)
+	menuScrollOffset int
 
 	// Config editor state
 	cfgActive     bool
@@ -781,7 +782,17 @@ func (a *App) buildInputRows() []string {
 
 	// Menu mode replaces input area
 	if a.menuActive && len(a.menuLines) > 0 {
-		for i, line := range a.menuLines {
+		maxVisible := getTerminalHeight() * 60 / 100
+		if maxVisible < 1 {
+			maxVisible = 1
+		}
+		total := len(a.menuLines)
+		end := a.menuScrollOffset + maxVisible
+		if end > total {
+			end = total
+		}
+		for i := a.menuScrollOffset; i < end; i++ {
+			line := a.menuLines[i]
 			if i == a.menuCursor {
 				rows = append(rows, fmt.Sprintf("\033[36;1m%s ◆\033[0m", line))
 			} else {
@@ -1368,6 +1379,7 @@ func (a *App) handlePlainEscape() {
 		a.menuActive = false
 		a.menuAction = nil
 		a.menuCursor = 0
+		a.menuScrollOffset = 0
 		a.renderInput()
 		return
 	}
@@ -1453,9 +1465,11 @@ func (a *App) handleEscapeSequence(stdinCh chan byte, readByte func() (byte, boo
 	switch b {
 	case 'A': // Up
 		if a.menuActive {
-			a.menuCursor--
-			if a.menuCursor < 0 {
-				a.menuCursor = len(a.menuLines) - 1
+			if a.menuCursor > 0 {
+				a.menuCursor--
+				if a.menuCursor < a.menuScrollOffset {
+					a.menuScrollOffset = a.menuCursor
+				}
 			}
 		} else if matches := a.autocompleteMatches(); len(matches) > 0 {
 			a.autocompleteIdx--
@@ -1468,9 +1482,15 @@ func (a *App) handleEscapeSequence(stdinCh chan byte, readByte func() (byte, boo
 		a.renderInput()
 	case 'B': // Down
 		if a.menuActive {
-			a.menuCursor++
-			if a.menuCursor >= len(a.menuLines) {
-				a.menuCursor = 0
+			if a.menuCursor < len(a.menuLines)-1 {
+				a.menuCursor++
+				maxVisible := getTerminalHeight() * 60 / 100
+				if maxVisible < 1 {
+					maxVisible = 1
+				}
+				if a.menuCursor >= a.menuScrollOffset+maxVisible {
+					a.menuScrollOffset = a.menuCursor - maxVisible + 1
+				}
 			}
 		} else if matches := a.autocompleteMatches(); len(matches) > 0 {
 			a.autocompleteIdx++
@@ -1729,6 +1749,7 @@ func (a *App) handleCommand(input string) {
 		}
 		a.menuLines = lines
 		a.menuCursor = 0
+		a.menuScrollOffset = 0
 		a.menuActive = true
 		a.menuAction = func(idx int) {
 			if idx >= 0 && idx < len(available) {
@@ -1743,6 +1764,7 @@ func (a *App) handleCommand(input string) {
 			a.menuLines = nil
 			a.menuActive = false
 			a.menuAction = nil
+			a.menuScrollOffset = 0
 		}
 		a.renderInput()
 
@@ -1768,6 +1790,7 @@ func (a *App) handleCommand(input string) {
 		}
 		a.menuLines = branches
 		a.menuCursor = 0
+		a.menuScrollOffset = 0
 		a.menuActive = true
 		a.menuAction = func(idx int) {
 			if idx >= 0 && idx < len(branches) {
@@ -1784,6 +1807,7 @@ func (a *App) handleCommand(input string) {
 			a.menuLines = nil
 			a.menuActive = false
 			a.menuAction = nil
+			a.menuScrollOffset = 0
 		}
 		a.renderInput()
 
@@ -1825,6 +1849,7 @@ func (a *App) handleCommand(input string) {
 		}
 		a.menuLines = lines
 		a.menuCursor = 0
+		a.menuScrollOffset = 0
 		a.menuActive = true
 		a.menuAction = func(idx int) {
 			if idx >= 0 && idx < len(wts) {
@@ -1837,6 +1862,7 @@ func (a *App) handleCommand(input string) {
 			a.menuLines = nil
 			a.menuActive = false
 			a.menuAction = nil
+			a.menuScrollOffset = 0
 		}
 		a.renderInput()
 

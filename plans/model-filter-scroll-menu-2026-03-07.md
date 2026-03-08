@@ -26,8 +26,8 @@
 
 ## Phase 2: Scrollable menu with 60% height cap
 
-- [ ] 2a: Add scroll state to menu: `menuScrollOffset int` in the App struct. Compute `menuMaxVisible` as `60% of getTerminalHeight()`. In `buildInputRows`, only render the visible window slice `[scrollOffset : scrollOffset+maxVisible]`.
-- [ ] 2b: Update Up/Down key handling to adjust `menuScrollOffset` when cursor moves beyond visible bounds (scroll up when cursor < offset, scroll down when cursor >= offset+maxVisible). No wraparound — stop at top/bottom.
+- [x] 2a: Add scroll state to menu: `menuScrollOffset int` in the App struct. Compute `menuMaxVisible` as `60% of getTerminalHeight()`. In `buildInputRows`, only render the visible window slice `[scrollOffset : scrollOffset+maxVisible]`.
+- [x] 2b: Update Up/Down key handling to adjust `menuScrollOffset` when cursor moves beyond visible bounds (scroll up when cursor < offset, scroll down when cursor >= offset+maxVisible). No wraparound — stop at top/bottom.
 - [ ] 2c: Render a position indicator line below the menu items showing `(first->last / total)` format, e.g., `(3->10 / 40)`. Style it dim like status indicators.
 - [ ] 2d: Apply the same scroll behavior to `/branches` and `/worktrees` menus (they share the same menu system, so this should work automatically — verify and test).
 
