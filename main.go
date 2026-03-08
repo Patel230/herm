@@ -721,6 +721,7 @@ type App struct {
 
 	// Menu state (for inline menus below input - Phase 3)
 	menuLines        []string
+	menuHeader       string // optional header row above scrollable items
 	menuCursor       int
 	menuActive       bool
 	menuAction       func(int)
@@ -791,6 +792,9 @@ func (a *App) buildInputRows() []string {
 
 	// Menu mode replaces input area
 	if a.menuActive && len(a.menuLines) > 0 {
+		if a.menuHeader != "" {
+			rows = append(rows, fmt.Sprintf("\033[1m%s\033[0m", a.menuHeader))
+		}
 		maxVisible := getTerminalHeight() * 60 / 100
 		if maxVisible < 1 {
 			maxVisible = 1
@@ -1442,6 +1446,7 @@ func (a *App) handlePlainEscape() {
 	}
 	if a.menuActive {
 		a.menuLines = nil
+		a.menuHeader = ""
 		a.menuActive = false
 		a.menuAction = nil
 		a.menuCursor = 0
@@ -1810,7 +1815,7 @@ func (a *App) handleCommand(input string) {
 		}
 		// Phase 3: inline model selection with menu
 		activeID := a.config.resolveActiveModel(a.models)
-		lines := formatModelMenuLines(available, activeID)
+		header, lines := formatModelMenuLines(available, activeID, 0, true)
 		activeIdx := 0
 		for i, m := range available {
 			if m.ID == activeID {
@@ -1818,6 +1823,7 @@ func (a *App) handleCommand(input string) {
 				break
 			}
 		}
+		a.menuHeader = header
 		a.menuLines = lines
 		a.menuCursor = activeIdx
 		// Scroll so active model is visible
@@ -1842,6 +1848,7 @@ func (a *App) handleCommand(input string) {
 				}
 			}
 			a.menuLines = nil
+			a.menuHeader = ""
 			a.menuActive = false
 			a.menuAction = nil
 			a.menuScrollOffset = 0
@@ -1885,6 +1892,7 @@ func (a *App) handleCommand(input string) {
 				}
 			}
 			a.menuLines = nil
+			a.menuHeader = ""
 			a.menuActive = false
 			a.menuAction = nil
 			a.menuScrollOffset = 0
@@ -1940,6 +1948,7 @@ func (a *App) handleCommand(input string) {
 				a.messages = append(a.messages, chatMessage{kind: msgSuccess, content: fmt.Sprintf("Switched to worktree '%s' (%s)", filepath.Base(selected.Path), selected.Branch)})
 			}
 			a.menuLines = nil
+			a.menuHeader = ""
 			a.menuActive = false
 			a.menuAction = nil
 			a.menuScrollOffset = 0

@@ -87,10 +87,19 @@ func formatContextWindow(tokens int) string {
 
 // formatModelMenuLines formats models as aligned multi-column menu lines.
 // Columns: Name, Provider, Price (prompt), Context Window.
+// Returns a header string and the data lines.
 // The active model is marked with ● at the end.
-func formatModelMenuLines(models []ModelDef, activeID string) []string {
-	// Compute column widths
-	maxName, maxProv, maxPrice, maxCtx := 0, 0, 0, 0
+// sortCol (0-3) determines which column header is highlighted.
+func formatModelMenuLines(models []ModelDef, activeID string, sortCol int, sortAsc bool) (string, []string) {
+	// Column headers
+	headers := [4]string{"Name", "Provider", "Price", "Context"}
+
+	// Compute column widths (at least as wide as headers)
+	maxName := len(headers[0])
+	maxProv := len(headers[1])
+	maxPrice := len(headers[2])
+	maxCtx := len(headers[3])
+
 	type entry struct {
 		name, prov, price, ctx string
 		active                 bool
@@ -119,6 +128,27 @@ func formatModelMenuLines(models []ModelDef, activeID string) []string {
 		entries[i] = e
 	}
 
+	// Build header with sort indicator on active column
+	arrow := "▲"
+	if !sortAsc {
+		arrow = "▼"
+	}
+	hdrParts := make([]string, 4)
+	widths := [4]int{maxName, maxProv, maxPrice, maxCtx}
+	rightAlign := [4]bool{false, false, true, true}
+	for j, h := range headers {
+		label := h
+		if j == sortCol {
+			label = h + arrow
+		}
+		if rightAlign[j] {
+			hdrParts[j] = fmt.Sprintf("%*s", widths[j], label)
+		} else {
+			hdrParts[j] = fmt.Sprintf("%-*s", widths[j], label)
+		}
+	}
+	header := hdrParts[0] + "  " + hdrParts[1] + "  " + hdrParts[2] + "  " + hdrParts[3]
+
 	lines := make([]string, len(entries))
 	for i, e := range entries {
 		marker := " "
@@ -132,7 +162,7 @@ func formatModelMenuLines(models []ModelDef, activeID string) []string {
 			maxCtx, e.ctx,
 			marker)
 	}
-	return lines
+	return header, lines
 }
 
 // SWE-bench leaderboard types
