@@ -727,6 +727,7 @@ type App struct {
 	menuAction       func(int)
 	menuScrollOffset int
 	menuSortCol      int        // active sort column (0=name,1=provider,2=price,3=context)
+	menuSortAsc      bool       // sort direction: true=ascending, false=descending
 	menuModels       []ModelDef // model list for re-sorting (nil for non-model menus)
 	menuActiveID     string     // active model ID for re-sorting
 
@@ -793,8 +794,8 @@ func (a *App) refreshModelMenu() {
 	if a.menuCursor >= 0 && a.menuCursor < len(a.menuModels) {
 		cursorID = a.menuModels[a.menuCursor].ID
 	}
-	sortModelsByCol(a.menuModels, a.menuSortCol, true)
-	header, lines := formatModelMenuLines(a.menuModels, a.menuActiveID, a.menuSortCol, true)
+	sortModelsByCol(a.menuModels, a.menuSortCol, a.menuSortAsc)
+	header, lines := formatModelMenuLines(a.menuModels, a.menuActiveID, a.menuSortCol, a.menuSortAsc)
 	a.menuHeader = header
 	a.menuLines = lines
 	// Restore cursor position
@@ -1405,6 +1406,12 @@ func (a *App) handleByte(ch byte, stdinCh chan byte, readByte func() (byte, bool
 
 	// Tab
 	if ch == '\t' {
+		if a.menuActive && a.menuModels != nil {
+			a.menuSortAsc = !a.menuSortAsc
+			a.refreshModelMenu()
+			a.renderInput()
+			return false
+		}
 		if matches := a.autocompleteMatches(); len(matches) > 0 {
 			idx := a.autocompleteIdx
 			if idx >= len(matches) {
@@ -1867,8 +1874,9 @@ func (a *App) handleCommand(input string) {
 		a.menuModels = available
 		a.menuActiveID = activeID
 		a.menuSortCol = 0
-		sortModelsByCol(a.menuModels, a.menuSortCol, true)
-		header, lines := formatModelMenuLines(a.menuModels, activeID, a.menuSortCol, true)
+		a.menuSortAsc = true
+		sortModelsByCol(a.menuModels, a.menuSortCol, a.menuSortAsc)
+		header, lines := formatModelMenuLines(a.menuModels, activeID, a.menuSortCol, a.menuSortAsc)
 		activeIdx := 0
 		for i, m := range a.menuModels {
 			if m.ID == activeID {
