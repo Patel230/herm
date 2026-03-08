@@ -1,12 +1,16 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 )
+
+//go:embed models.json
+var modelsJSON []byte
 
 // Provider constants for supported AI providers.
 const (
@@ -19,50 +23,22 @@ const (
 // ModelDef describes a model available for selection.
 // IDs are native API model identifiers (not OpenRouter format).
 type ModelDef struct {
-	Provider        string
-	ID              string
-	DisplayName     string
-	PromptPrice     float64 // USD per million input tokens
-	CompletionPrice float64 // USD per million output tokens
-	SWEScore        float64 // SWE-bench Verified score (0 = no data)
+	Provider        string  `json:"provider"`
+	ID              string  `json:"id"`
+	DisplayName     string  `json:"display_name"`
+	PromptPrice     float64 `json:"prompt_price"`      // USD per million input tokens
+	CompletionPrice float64 `json:"completion_price"`   // USD per million output tokens
+	ContextWindow   int     `json:"context_window"`     // tokens
+	SWEScore        float64 `json:"-"`                  // SWE-bench Verified score (0 = no data), populated at runtime
 }
 
-// builtinModels returns the hardcoded list of supported models with native API IDs and prices.
+// builtinModels returns the list of supported models loaded from the embedded models.json.
 func builtinModels() []ModelDef {
-	return []ModelDef{
-		// Anthropic
-		{ProviderAnthropic, "claude-opus-4-1-20250620", "Claude Opus 4.1", 15.0, 75.0, 0},
-		{ProviderAnthropic, "claude-opus-4-0-20250514", "Claude Opus 4", 15.0, 75.0, 0},
-		{ProviderAnthropic, "claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet", 6.0, 30.0, 0},
-		{ProviderAnthropic, "claude-opus-4-6-20250801", "Claude Opus 4.6", 5.0, 25.0, 0},
-		{ProviderAnthropic, "claude-opus-4-5-20250620", "Claude Opus 4.5", 5.0, 25.0, 0},
-		{ProviderAnthropic, "claude-sonnet-4-6-20250801", "Claude Sonnet 4.6", 3.0, 15.0, 0},
-		{ProviderAnthropic, "claude-sonnet-4-5-20250514", "Claude Sonnet 4.5", 3.0, 15.0, 0},
-		{ProviderAnthropic, "claude-sonnet-4-0-20250514", "Claude Sonnet 4", 3.0, 15.0, 0},
-		{ProviderAnthropic, "claude-3-7-sonnet-20250219", "Claude 3.7 Sonnet", 3.0, 15.0, 0},
-		{ProviderAnthropic, "claude-haiku-4-5-20250414", "Claude Haiku 4.5", 1.0, 5.0, 0},
-		{ProviderAnthropic, "claude-3-5-haiku-20241022", "Claude 3.5 Haiku", 0.80, 4.0, 0},
-		{ProviderAnthropic, "claude-3-haiku-20240307", "Claude 3 Haiku", 0.25, 1.25, 0},
-
-		// Grok (x.ai)
-		{ProviderGrok, "grok-4", "Grok 4", 3.0, 15.0, 0},
-		{ProviderGrok, "grok-3", "Grok 3", 3.0, 15.0, 0},
-		{ProviderGrok, "grok-3-beta", "Grok 3 Beta", 3.0, 15.0, 0},
-		{ProviderGrok, "grok-3-mini", "Grok 3 Mini", 0.30, 0.50, 0},
-		{ProviderGrok, "grok-3-mini-beta", "Grok 3 Mini Beta", 0.30, 0.50, 0},
-		{ProviderGrok, "grok-4-1-fast", "Grok 4.1 Fast", 0.20, 0.50, 0},
-		{ProviderGrok, "grok-4-fast", "Grok 4 Fast", 0.20, 0.50, 0},
-		{ProviderGrok, "grok-code-fast-1", "Grok Code Fast 1", 0.20, 1.50, 0},
-
-		// OpenAI
-		{ProviderOpenAI, "gpt-4o", "GPT-4o", 2.50, 10.0, 0},
-		{ProviderOpenAI, "gpt-4o-mini", "GPT-4o Mini", 0.15, 0.60, 0},
-		{ProviderOpenAI, "o3-mini", "o3-mini", 1.10, 4.40, 0},
-
-		// Gemini
-		{ProviderGemini, "gemini-2.5-pro", "Gemini 2.5 Pro", 1.25, 10.0, 0},
-		{ProviderGemini, "gemini-2.5-flash", "Gemini 2.5 Flash", 0.15, 0.60, 0},
+	var models []ModelDef
+	if err := json.Unmarshal(modelsJSON, &models); err != nil {
+		panic(fmt.Sprintf("failed to parse embedded models.json: %v", err))
 	}
+	return models
 }
 
 // filterModelsByProviders returns models whose provider is in the given set.

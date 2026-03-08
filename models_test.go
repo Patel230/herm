@@ -222,6 +222,9 @@ func TestBuiltinModelsHaveRequiredFields(t *testing.T) {
 		if m.CompletionPrice <= 0 {
 			t.Errorf("model %q has non-positive completion price", m.ID)
 		}
+		if m.ContextWindow <= 0 {
+			t.Errorf("model %q has non-positive context window", m.ID)
+		}
 	}
 }
 
