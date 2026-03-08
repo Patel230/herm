@@ -710,6 +710,15 @@ type App struct {
 	menuCursor int
 	menuActive bool
 	menuAction func(int)
+
+	// Config editor state
+	cfgActive     bool
+	cfgTab        int
+	cfgCursor     int
+	cfgEditing    bool
+	cfgEditBuf    []rune
+	cfgEditCursor int
+	cfgDraft      Config
 }
 
 func newApp() *App {
@@ -758,6 +767,26 @@ func (a *App) buildInputRows() []string {
 	sep := strings.Repeat("─", a.width)
 	rows := []string{sep}
 
+	// Config editor mode replaces input area
+	if a.cfgActive {
+		rows = append(rows, a.buildConfigRows()...)
+		rows = append(rows, sep)
+		return rows
+	}
+
+	// Menu mode replaces input area
+	if a.menuActive && len(a.menuLines) > 0 {
+		for i, line := range a.menuLines {
+			if i == a.menuCursor {
+				rows = append(rows, fmt.Sprintf("\033[36;1m%s ◆\033[0m", line))
+			} else {
+				rows = append(rows, line)
+			}
+		}
+		rows = append(rows, sep)
+		return rows
+	}
+
 	vlines := getVisualLines(a.input, a.cursor, a.width)
 	for i, vl := range vlines {
 		line := string(a.input[vl.start : vl.start+vl.length])
@@ -774,7 +803,7 @@ func (a *App) buildInputRows() []string {
 
 	rows = append(rows, sep)
 
-	// Autocomplete or menu (shown directly below input, replacing progress bar)
+	// Autocomplete (shown below input)
 	hasAction := false
 	if matches := a.autocompleteMatches(); len(matches) > 0 {
 		hasAction = true
@@ -783,18 +812,6 @@ func (a *App) buildInputRows() []string {
 				rows = append(rows, fmt.Sprintf("\033[36;1m%s ◆\033[0m", cmd))
 			} else {
 				rows = append(rows, cmd)
-			}
-		}
-	}
-
-	// Menu lines (Phase 3)
-	if len(a.menuLines) > 0 {
-		hasAction = true
-		for i, line := range a.menuLines {
-			if a.menuActive && i == a.menuCursor {
-				rows = append(rows, fmt.Sprintf("\033[36;1m%s ◆\033[0m", line))
-			} else {
-				rows = append(rows, line)
 			}
 		}
 	}
@@ -833,6 +850,27 @@ func (a *App) buildInputRows() []string {
 }
 
 func (a *App) positionCursor(buf *strings.Builder) {
+	if a.cfgActive {
+		if a.cfgEditing {
+			// Position cursor in the edit field: separator + tab bar (1) + cursor row
+			fieldRow := a.sepRow + 1 + a.cfgCursor + 1 // +1 for tab bar row
+			fields := a.cfgCurrentFields()
+			col := 0
+			if a.cfgCursor < len(fields) {
+				col = len(fields[a.cfgCursor].label) + 2 // "label: "
+			}
+			col += a.cfgEditCursor
+			buf.WriteString(fmt.Sprintf("\033[%d;%dH", fieldRow, col+1))
+		} else {
+			buf.WriteString(fmt.Sprintf("\033[%d;1H", a.sepRow+1))
+		}
+		return
+	}
+	if a.menuActive && len(a.menuLines) > 0 {
+		// Menu between separators — hide cursor
+		buf.WriteString(fmt.Sprintf("\033[%d;1H", a.sepRow+1))
+		return
+	}
 	curLine, curCol := cursorVisualPos(a.input, a.cursor, a.width)
 	buf.WriteString(fmt.Sprintf("\033[%d;%dH", a.inputStartRow+curLine, curCol+1))
 }
@@ -1149,6 +1187,12 @@ done:
 
 // handleByte processes a single byte from stdin. Returns true if the app should quit.
 func (a *App) handleByte(ch byte, stdinCh chan byte, readByte func() (byte, bool)) bool {
+	// Config editor mode intercept
+	if a.cfgActive {
+		a.handleConfigByte(ch, readByte)
+		return false
+	}
+
 	// Escape sequence
 	if ch == '\033' {
 		a.handleEscapeSequence(stdinCh, readByte)
@@ -1218,6 +1262,9 @@ func (a *App) handleByte(ch byte, stdinCh chan byte, readByte func() (byte, bool
 
 	// Shift+Enter (LF) — insert newline
 	if ch == '\n' {
+		if a.menuActive {
+			return false
+		}
 		a.insertAtCursor('\n')
 		a.renderInput()
 		return false
@@ -1231,6 +1278,11 @@ func (a *App) handleByte(ch byte, stdinCh chan byte, readByte func() (byte, bool
 			return false
 		}
 		a.handleEnter()
+		return false
+	}
+
+	// When menu is active, block all other input
+	if a.menuActive {
 		return false
 	}
 
@@ -1597,17 +1649,7 @@ func (a *App) handleCommand(input string) {
 		a.render()
 
 	case "/config":
-		// Phase 3: inline config display
-		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: fmt.Sprintf(
-			"Config: paste_collapse=%d, anthropic=%s, openai=%s, grok=%s, gemini=%s, model=%s",
-			a.config.PasteCollapseMinChars,
-			maskKey(a.config.AnthropicAPIKey),
-			maskKey(a.config.OpenAIAPIKey),
-			maskKey(a.config.GrokAPIKey),
-			maskKey(a.config.GeminiAPIKey),
-			a.config.ActiveModel,
-		)})
-		a.render()
+		a.enterConfigMode()
 
 	case "/model":
 		if !a.modelsLoaded {
@@ -1761,6 +1803,319 @@ func maskKey(key string) string {
 		return "****"
 	}
 	return key[:4] + "..." + key[len(key)-4:]
+}
+
+// ─── Config editor ───
+
+var cfgTabNames = []string{"API Keys", "Settings"}
+
+type cfgField struct {
+	label   string
+	get     func(Config) string
+	display func(Config) string // masked display; nil means use get
+	set     func(*Config, string)
+}
+
+var cfgTabFields = [][]cfgField{
+	{ // Tab 0: API Keys
+		{label: "Anthropic", get: func(c Config) string { return c.AnthropicAPIKey }, display: func(c Config) string { return maskKey(c.AnthropicAPIKey) }, set: func(c *Config, v string) { c.AnthropicAPIKey = v }},
+		{label: "OpenAI", get: func(c Config) string { return c.OpenAIAPIKey }, display: func(c Config) string { return maskKey(c.OpenAIAPIKey) }, set: func(c *Config, v string) { c.OpenAIAPIKey = v }},
+		{label: "Grok", get: func(c Config) string { return c.GrokAPIKey }, display: func(c Config) string { return maskKey(c.GrokAPIKey) }, set: func(c *Config, v string) { c.GrokAPIKey = v }},
+		{label: "Gemini", get: func(c Config) string { return c.GeminiAPIKey }, display: func(c Config) string { return maskKey(c.GeminiAPIKey) }, set: func(c *Config, v string) { c.GeminiAPIKey = v }},
+	},
+	{ // Tab 1: Settings
+		{label: "Paste Collapse", get: func(c Config) string { return strconv.Itoa(c.PasteCollapseMinChars) }, set: func(c *Config, v string) { if n, err := strconv.Atoi(v); err == nil { c.PasteCollapseMinChars = n } }},
+		{label: "Container Image", get: func(c Config) string { if c.ContainerImage == "" { return defaultContainerImage }; return c.ContainerImage }, set: func(c *Config, v string) { c.ContainerImage = v }},
+	},
+}
+
+func (a *App) enterConfigMode() {
+	a.cfgActive = true
+	a.cfgTab = 0
+	a.cfgCursor = 0
+	a.cfgEditing = false
+	a.cfgEditBuf = nil
+	a.cfgEditCursor = 0
+	a.cfgDraft = a.config
+	a.renderInput()
+}
+
+func (a *App) exitConfigMode(save bool) {
+	if save {
+		a.config = a.cfgDraft
+		if err := saveConfig(a.config); err != nil {
+			a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error saving config: %v", err)})
+		} else {
+			a.messages = append(a.messages, chatMessage{kind: msgSuccess, content: "Config saved."})
+		}
+		// Reinitialize langdag client with updated config
+		go func() {
+			client, err := newLangdagClient(a.config)
+			a.resultCh <- langdagReadyMsg{client: client, provider: a.config.defaultLangdagProvider(), err: err}
+		}()
+	}
+	a.cfgActive = false
+	a.cfgEditing = false
+	a.cfgEditBuf = nil
+	a.render()
+}
+
+func (a *App) cfgCurrentFields() []cfgField {
+	if a.cfgTab >= 0 && a.cfgTab < len(cfgTabFields) {
+		return cfgTabFields[a.cfgTab]
+	}
+	return nil
+}
+
+func (a *App) buildConfigRows() []string {
+	var rows []string
+
+	// Tab bar
+	var tabParts []string
+	for i, name := range cfgTabNames {
+		if i == a.cfgTab {
+			tabParts = append(tabParts, fmt.Sprintf("\033[36;1m[%s]\033[0m", name))
+		} else {
+			tabParts = append(tabParts, fmt.Sprintf("\033[2m %s \033[0m", name))
+		}
+	}
+	rows = append(rows, strings.Join(tabParts, " "))
+
+	// Fields
+	fields := a.cfgCurrentFields()
+	for i, f := range fields {
+		if a.cfgEditing && i == a.cfgCursor {
+			// Show editable text input with underline
+			editStr := string(a.cfgEditBuf)
+			rows = append(rows, fmt.Sprintf("\033[36;1m%s: \033[4m%s\033[0m \033[36;1m◆\033[0m", f.label, editStr))
+		} else {
+			val := ""
+			if f.display != nil {
+				val = f.display(a.cfgDraft)
+			} else {
+				val = f.get(a.cfgDraft)
+			}
+			if val == "" {
+				val = "(not set)"
+			}
+			if i == a.cfgCursor {
+				rows = append(rows, fmt.Sprintf("\033[36;1m%s: %s ◆\033[0m", f.label, val))
+			} else {
+				rows = append(rows, fmt.Sprintf("%s: %s", f.label, val))
+			}
+		}
+	}
+
+	// Help line
+	if a.cfgEditing {
+		rows = append(rows, "\033[2mEnter=confirm  Esc=cancel\033[0m")
+	} else {
+		rows = append(rows, "\033[2m←/→=tab  ↑/↓=select  Enter=edit  Esc=close  Ctrl+S=save & close\033[0m")
+	}
+
+	return rows
+}
+
+func (a *App) handleConfigByte(ch byte, readByte func() (byte, bool)) {
+	if a.cfgEditing {
+		a.handleConfigEditByte(ch, readByte)
+		return
+	}
+
+	switch {
+	case ch == '\033': // Escape sequence
+		b, ok := readByte()
+		if !ok {
+			return
+		}
+		if b != '[' {
+			// Plain Escape - exit config
+			a.exitConfigMode(false)
+			return
+		}
+		b, ok = readByte()
+		if !ok {
+			return
+		}
+		switch b {
+		case 'A': // Up
+			if a.cfgCursor > 0 {
+				a.cfgCursor--
+			} else {
+				fields := a.cfgCurrentFields()
+				if len(fields) > 0 {
+					a.cfgCursor = len(fields) - 1
+				}
+			}
+			a.renderInput()
+		case 'B': // Down
+			fields := a.cfgCurrentFields()
+			if a.cfgCursor < len(fields)-1 {
+				a.cfgCursor++
+			} else {
+				a.cfgCursor = 0
+			}
+			a.renderInput()
+		case 'C': // Right - next tab
+			a.cfgTab++
+			if a.cfgTab >= len(cfgTabNames) {
+				a.cfgTab = 0
+			}
+			a.cfgCursor = 0
+			a.renderInput()
+		case 'D': // Left - prev tab
+			a.cfgTab--
+			if a.cfgTab < 0 {
+				a.cfgTab = len(cfgTabNames) - 1
+			}
+			a.cfgCursor = 0
+			a.renderInput()
+		default:
+			// Consume modified key sequences (ESC [ 1 ; mod letter)
+			if b == '1' {
+				readByte() // ;
+				readByte() // mod
+				readByte() // letter
+			}
+		}
+
+	case ch == '\r': // Enter - start editing current field
+		fields := a.cfgCurrentFields()
+		if len(fields) > 0 && a.cfgCursor < len(fields) {
+			f := fields[a.cfgCursor]
+			a.cfgEditing = true
+			val := f.get(a.cfgDraft)
+			a.cfgEditBuf = []rune(val)
+			a.cfgEditCursor = len(a.cfgEditBuf)
+		}
+		a.renderInput()
+
+	case ch == 0x13: // Ctrl+S - save and close
+		a.exitConfigMode(true)
+
+	case ch == 3 || ch == 4: // Ctrl+C/D - exit without saving
+		a.exitConfigMode(false)
+	}
+}
+
+func (a *App) handleConfigEditByte(ch byte, readByte func() (byte, bool)) {
+	switch {
+	case ch == '\033': // Escape
+		b, ok := readByte()
+		if !ok {
+			return
+		}
+		if b != '[' {
+			// Plain Escape - cancel edit
+			a.cfgEditing = false
+			a.cfgEditBuf = nil
+			a.renderInput()
+			return
+		}
+		b, ok = readByte()
+		if !ok {
+			return
+		}
+		switch b {
+		case 'C': // Right
+			if a.cfgEditCursor < len(a.cfgEditBuf) {
+				a.cfgEditCursor++
+				a.renderInput()
+			}
+		case 'D': // Left
+			if a.cfgEditCursor > 0 {
+				a.cfgEditCursor--
+				a.renderInput()
+			}
+		case 'H': // Home
+			a.cfgEditCursor = 0
+			a.renderInput()
+		case 'F': // End
+			a.cfgEditCursor = len(a.cfgEditBuf)
+			a.renderInput()
+		case '3': // Delete
+			if t, ok := readByte(); ok && t == '~' {
+				if a.cfgEditCursor < len(a.cfgEditBuf) {
+					a.cfgEditBuf = append(a.cfgEditBuf[:a.cfgEditCursor], a.cfgEditBuf[a.cfgEditCursor+1:]...)
+					a.renderInput()
+				}
+			}
+		default:
+			// consume remaining bytes of sequences
+			if b == '1' {
+				readByte()
+				readByte()
+				readByte()
+			}
+		}
+
+	case ch == '\r': // Enter - confirm edit
+		fields := a.cfgCurrentFields()
+		if a.cfgCursor < len(fields) {
+			fields[a.cfgCursor].set(&a.cfgDraft, string(a.cfgEditBuf))
+		}
+		a.cfgEditing = false
+		a.cfgEditBuf = nil
+		a.renderInput()
+
+	case ch == 127 || ch == 0x08: // Backspace
+		if a.cfgEditCursor > 0 {
+			a.cfgEditCursor--
+			a.cfgEditBuf = append(a.cfgEditBuf[:a.cfgEditCursor], a.cfgEditBuf[a.cfgEditCursor+1:]...)
+			a.renderInput()
+		}
+
+	case ch == 0x01: // Ctrl+A
+		a.cfgEditCursor = 0
+		a.renderInput()
+
+	case ch == 0x05: // Ctrl+E
+		a.cfgEditCursor = len(a.cfgEditBuf)
+		a.renderInput()
+
+	case ch == 0x15: // Ctrl+U - kill to start
+		a.cfgEditBuf = a.cfgEditBuf[a.cfgEditCursor:]
+		a.cfgEditCursor = 0
+		a.renderInput()
+
+	case ch == 0x0b: // Ctrl+K - kill to end
+		a.cfgEditBuf = a.cfgEditBuf[:a.cfgEditCursor]
+		a.renderInput()
+
+	case ch == 0x17: // Ctrl+W - delete word backward
+		if a.cfgEditCursor > 0 {
+			i := a.cfgEditCursor - 1
+			for i > 0 && a.cfgEditBuf[i] == ' ' {
+				i--
+			}
+			for i > 0 && a.cfgEditBuf[i-1] != ' ' {
+				i--
+			}
+			a.cfgEditBuf = append(a.cfgEditBuf[:i], a.cfgEditBuf[a.cfgEditCursor:]...)
+			a.cfgEditCursor = i
+			a.renderInput()
+		}
+
+	case ch >= 0x20: // Printable character
+		r := rune(ch)
+		if ch >= 0x80 {
+			b := []byte{ch}
+			n := utf8ByteLen(ch)
+			for i := 1; i < n; i++ {
+				next, ok := readByte()
+				if !ok {
+					return
+				}
+				b = append(b, next)
+			}
+			r, _ = utf8.DecodeRune(b)
+		}
+		a.cfgEditBuf = append(a.cfgEditBuf, 0)
+		copy(a.cfgEditBuf[a.cfgEditCursor+1:], a.cfgEditBuf[a.cfgEditCursor:])
+		a.cfgEditBuf[a.cfgEditCursor] = r
+		a.cfgEditCursor++
+		a.renderInput()
+	}
 }
 
 // ─── Shell mode ───
