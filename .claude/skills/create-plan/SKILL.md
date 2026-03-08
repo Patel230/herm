@@ -59,7 +59,7 @@ A good plan includes:
 - **Contracts and interfaces** — inputs, outputs, behaviors
 - **Failure modes** — what can go wrong
 - **Open questions** — decisions blocked on missing information
-- **Tests** — every plan should include a phase (or tasks within phases) for adding or updating tests that verify the new behavior. Model-level tests using bubbletea's Update loop are the primary way to test UI behavior (window resizes, key events, state transitions)
+- **Tests** — every plan should include a phase (or tasks within phases) for adding or updating tests that verify the new behavior
 - **Success criteria** — what tests would prove this works
 
 A good plan does NOT contain:
