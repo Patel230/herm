@@ -445,3 +445,98 @@ func TestMatchSWEScoresEmptyScores(t *testing.T) {
 		}
 	}
 }
+
+// --- sortModelsByCol tests ---
+
+func sortTestModels() []ModelDef {
+	return []ModelDef{
+		{Provider: "openai", ID: "gpt-4o", DisplayName: "GPT-4o", PromptPrice: 2.5, ContextWindow: 128000},
+		{Provider: "anthropic", ID: "claude-opus", DisplayName: "Claude Opus", PromptPrice: 15.0, ContextWindow: 200000},
+		{Provider: "gemini", ID: "gemini-pro", DisplayName: "Gemini Pro", PromptPrice: 1.25, ContextWindow: 1000000},
+	}
+}
+
+func TestSortModelsByColNameAsc(t *testing.T) {
+	m := sortTestModels()
+	sortModelsByCol(m, 0, true)
+	want := []string{"Claude Opus", "Gemini Pro", "GPT-4o"}
+	for i, w := range want {
+		if m[i].DisplayName != w {
+			t.Errorf("index %d: got %s, want %s", i, m[i].DisplayName, w)
+		}
+	}
+}
+
+func TestSortModelsByColNameDesc(t *testing.T) {
+	m := sortTestModels()
+	sortModelsByCol(m, 0, false)
+	want := []string{"GPT-4o", "Gemini Pro", "Claude Opus"}
+	for i, w := range want {
+		if m[i].DisplayName != w {
+			t.Errorf("index %d: got %s, want %s", i, m[i].DisplayName, w)
+		}
+	}
+}
+
+func TestSortModelsByColProvider(t *testing.T) {
+	m := sortTestModels()
+	sortModelsByCol(m, 1, true)
+	want := []string{"anthropic", "gemini", "openai"}
+	for i, w := range want {
+		if m[i].Provider != w {
+			t.Errorf("index %d: got %s, want %s", i, m[i].Provider, w)
+		}
+	}
+}
+
+func TestSortModelsByColPrice(t *testing.T) {
+	m := sortTestModels()
+	sortModelsByCol(m, 2, true)
+	want := []float64{1.25, 2.5, 15.0}
+	for i, w := range want {
+		if m[i].PromptPrice != w {
+			t.Errorf("index %d: got %f, want %f", i, m[i].PromptPrice, w)
+		}
+	}
+}
+
+func TestSortModelsByColPriceDesc(t *testing.T) {
+	m := sortTestModels()
+	sortModelsByCol(m, 2, false)
+	want := []float64{15.0, 2.5, 1.25}
+	for i, w := range want {
+		if m[i].PromptPrice != w {
+			t.Errorf("index %d: got %f, want %f", i, m[i].PromptPrice, w)
+		}
+	}
+}
+
+func TestSortModelsByColContext(t *testing.T) {
+	m := sortTestModels()
+	sortModelsByCol(m, 3, true)
+	want := []int{128000, 200000, 1000000}
+	for i, w := range want {
+		if m[i].ContextWindow != w {
+			t.Errorf("index %d: got %d, want %d", i, m[i].ContextWindow, w)
+		}
+	}
+}
+
+func TestSortColFromName(t *testing.T) {
+	tests := []struct {
+		name string
+		want int
+	}{
+		{"name", 0},
+		{"provider", 1},
+		{"price", 2},
+		{"context", 3},
+		{"unknown", 0},
+		{"", 0},
+	}
+	for _, tt := range tests {
+		if got := sortColFromName(tt.name); got != tt.want {
+			t.Errorf("sortColFromName(%q) = %d, want %d", tt.name, got, tt.want)
+		}
+	}
+}

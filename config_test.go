@@ -113,6 +113,52 @@ func TestLoadConfigMergesNewFields(t *testing.T) {
 	}
 }
 
+func TestSortPrefsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+
+	cfg := Config{
+		PasteCollapseMinChars: 200,
+		ModelSortCol:          "price",
+		ModelSortDesc:         true,
+	}
+	if err := saveConfigTo(dir, cfg); err != nil {
+		t.Fatalf("saveConfigTo: %v", err)
+	}
+
+	loaded, err := loadConfigFrom(dir)
+	if err != nil {
+		t.Fatalf("loadConfigFrom: %v", err)
+	}
+
+	if loaded.ModelSortCol != "price" {
+		t.Errorf("ModelSortCol = %q, want %q", loaded.ModelSortCol, "price")
+	}
+	if !loaded.ModelSortDesc {
+		t.Error("ModelSortDesc = false, want true")
+	}
+}
+
+func TestSortPrefsDefaultsWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+
+	cfg := Config{PasteCollapseMinChars: 200}
+	if err := saveConfigTo(dir, cfg); err != nil {
+		t.Fatalf("saveConfigTo: %v", err)
+	}
+
+	loaded, err := loadConfigFrom(dir)
+	if err != nil {
+		t.Fatalf("loadConfigFrom: %v", err)
+	}
+
+	if loaded.ModelSortCol != "" {
+		t.Errorf("ModelSortCol = %q, want empty (default)", loaded.ModelSortCol)
+	}
+	if loaded.ModelSortDesc {
+		t.Error("ModelSortDesc = true, want false (default)")
+	}
+}
+
 func TestSaveConfigCreatesDir(t *testing.T) {
 	dir := t.TempDir()
 	subdir := filepath.Join(dir, "nested", "path")
