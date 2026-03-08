@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -60,6 +61,30 @@ func findModelByID(models []ModelDef, id string) *ModelDef {
 		}
 	}
 	return nil
+}
+
+// sortModelsByCol sorts models in place by the given column.
+// col: 0=Name, 1=Provider, 2=Price(prompt), 3=ContextWindow.
+func sortModelsByCol(models []ModelDef, col int, asc bool) {
+	sort.SliceStable(models, func(i, j int) bool {
+		var less bool
+		switch col {
+		case 0:
+			less = strings.ToLower(models[i].DisplayName) < strings.ToLower(models[j].DisplayName)
+		case 1:
+			less = strings.ToLower(models[i].Provider) < strings.ToLower(models[j].Provider)
+		case 2:
+			less = models[i].PromptPrice < models[j].PromptPrice
+		case 3:
+			less = models[i].ContextWindow < models[j].ContextWindow
+		default:
+			less = strings.ToLower(models[i].DisplayName) < strings.ToLower(models[j].DisplayName)
+		}
+		if !asc {
+			return !less
+		}
+		return less
+	})
 }
 
 // formatPrice formats a per-million-token price as "$X.XX".

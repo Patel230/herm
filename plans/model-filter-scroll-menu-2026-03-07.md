@@ -38,7 +38,7 @@
 
 ## Phase 4: Column sorting with Left/Right and Tab
 
-- [ ] 4a: Add `menuSortCol int` (0=name, 1=provider, 2=price, 3=context) to App struct. When menu is active and Left/Right arrow pressed, change active sort column. Re-sort the model list and re-render.
+- [x] 4a: Add `menuSortCol int` (0=name, 1=provider, 2=price, 3=context) to App struct. When menu is active and Left/Right arrow pressed, change active sort column. Re-sort the model list and re-render.
 - [ ] 4b: Add `menuSortAsc bool` to App struct. Tab toggles ASC/DESC for current column. Update header to show sort direction indicator (▲/▼). Re-sort and re-render.
 - [ ] 4c: Persist sort preferences: on sort change, save `ModelSortDirs` to config (reuse existing field). On `/model` open, restore last sort column and direction from config. Update `ModelSortDirs` format if needed — current `map[string]bool` may need to also store which column is active.
 - [ ] 4d: Add tests for sorting logic: sort by each column ASC/DESC, verify order. Test persistence round-trip.

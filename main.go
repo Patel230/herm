@@ -726,6 +726,9 @@ type App struct {
 	menuActive       bool
 	menuAction       func(int)
 	menuScrollOffset int
+	menuSortCol      int        // active sort column (0=name,1=provider,2=price,3=context)
+	menuModels       []ModelDef // model list for re-sorting (nil for non-model menus)
+	menuActiveID     string     // active model ID for re-sorting
 
 	// Config editor state
 	cfgActive     bool
@@ -777,6 +780,40 @@ func (a *App) buildBlockRows() []string {
 		rows = append(rows, "")
 	}
 	return rows
+}
+
+// refreshModelMenu re-sorts and re-formats the model menu after a sort change.
+// Preserves the cursor on the same model.
+func (a *App) refreshModelMenu() {
+	if len(a.menuModels) == 0 {
+		return
+	}
+	// Remember which model the cursor is on
+	var cursorID string
+	if a.menuCursor >= 0 && a.menuCursor < len(a.menuModels) {
+		cursorID = a.menuModels[a.menuCursor].ID
+	}
+	sortModelsByCol(a.menuModels, a.menuSortCol, true)
+	header, lines := formatModelMenuLines(a.menuModels, a.menuActiveID, a.menuSortCol, true)
+	a.menuHeader = header
+	a.menuLines = lines
+	// Restore cursor position
+	for i, m := range a.menuModels {
+		if m.ID == cursorID {
+			a.menuCursor = i
+			break
+		}
+	}
+	// Adjust scroll to keep cursor visible
+	maxVisible := getTerminalHeight() * 60 / 100
+	if maxVisible < 1 {
+		maxVisible = 1
+	}
+	if a.menuCursor < a.menuScrollOffset {
+		a.menuScrollOffset = a.menuCursor
+	} else if a.menuCursor >= a.menuScrollOffset+maxVisible {
+		a.menuScrollOffset = a.menuCursor - maxVisible + 1
+	}
 }
 
 func (a *App) buildInputRows() []string {
@@ -1573,12 +1610,24 @@ func (a *App) handleEscapeSequence(stdinCh chan byte, readByte func() (byte, boo
 		}
 		a.renderInput()
 	case 'C': // Right
-		if a.cursor < len(a.input) {
+		if a.menuActive && a.menuModels != nil {
+			if a.menuSortCol < 3 {
+				a.menuSortCol++
+				a.refreshModelMenu()
+			}
+			a.renderInput()
+		} else if a.cursor < len(a.input) {
 			a.cursor++
 			a.renderInput()
 		}
 	case 'D': // Left
-		if a.cursor > 0 {
+		if a.menuActive && a.menuModels != nil {
+			if a.menuSortCol > 0 {
+				a.menuSortCol--
+				a.refreshModelMenu()
+			}
+			a.renderInput()
+		} else if a.cursor > 0 {
 			a.cursor--
 			a.renderInput()
 		}
@@ -1815,9 +1864,13 @@ func (a *App) handleCommand(input string) {
 		}
 		// Phase 3: inline model selection with menu
 		activeID := a.config.resolveActiveModel(a.models)
-		header, lines := formatModelMenuLines(available, activeID, 0, true)
+		a.menuModels = available
+		a.menuActiveID = activeID
+		a.menuSortCol = 0
+		sortModelsByCol(a.menuModels, a.menuSortCol, true)
+		header, lines := formatModelMenuLines(a.menuModels, activeID, a.menuSortCol, true)
 		activeIdx := 0
-		for i, m := range available {
+		for i, m := range a.menuModels {
 			if m.ID == activeID {
 				activeIdx = i
 				break
@@ -1838,8 +1891,8 @@ func (a *App) handleCommand(input string) {
 		}
 		a.menuActive = true
 		a.menuAction = func(idx int) {
-			if idx >= 0 && idx < len(available) {
-				selected := available[idx]
+			if idx >= 0 && idx < len(a.menuModels) {
+				selected := a.menuModels[idx]
 				a.config.ActiveModel = selected.ID
 				if err := saveConfig(a.config); err != nil {
 					a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error saving model: %v", err)})
@@ -1852,6 +1905,8 @@ func (a *App) handleCommand(input string) {
 			a.menuActive = false
 			a.menuAction = nil
 			a.menuScrollOffset = 0
+			a.menuModels = nil
+			a.menuActiveID = ""
 		}
 		a.renderInput()
 
