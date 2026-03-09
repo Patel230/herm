@@ -816,6 +816,8 @@ type App struct {
 	needsTextSep     bool
 	sessionCostUSD   float64
 	scratchpad       Scratchpad
+	subAgentBuf      string   // accumulates sub-agent streaming text
+	subAgentLines    []string // completed lines from sub-agent output
 
 	// Menu state (for inline menus below input - Phase 3)
 	menuLines        []string
@@ -881,7 +883,38 @@ func (a *App) buildBlockRows() []string {
 		rows = append(rows, "\033[2;3mthinking...\033[0m")
 		rows = append(rows, "")
 	}
+	// Show live sub-agent activity (capped to 3 lines, dim/italic)
+	if subLines := a.subAgentDisplayLines(); len(subLines) > 0 {
+		for _, line := range subLines {
+			rows = append(rows, wrapString(line, 0, a.width)...)
+		}
+		rows = append(rows, "")
+	}
 	return rows
+}
+
+// subAgentDisplayLines returns up to 3 dim/italic lines showing live sub-agent activity.
+func (a *App) subAgentDisplayLines() []string {
+	// Collect all available lines: completed lines + current partial line.
+	all := a.subAgentLines
+	if a.subAgentBuf != "" {
+		all = append(append([]string{}, all...), a.subAgentBuf)
+	}
+	if len(all) == 0 {
+		return nil
+	}
+	// Take the last 3 lines.
+	start := 0
+	if len(all) > 3 {
+		start = len(all) - 3
+	}
+	visible := all[start:]
+	out := make([]string, len(visible))
+	for i, line := range visible {
+		// dim (2) + italic (3), with [sub-agent] prefix
+		out[i] = "\033[2;3m[sub-agent] " + line + "\033[0m"
+	}
+	return out
 }
 
 // refreshModelMenu re-sorts and re-formats the model menu after a sort change.
@@ -2720,6 +2753,29 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 				leadBlank: a.needsTextSep,
 			})
 			a.streamingText = ""
+		}
+		a.render()
+
+	case EventSubAgentDelta:
+		a.subAgentBuf += event.Text
+		// Split completed lines.
+		for {
+			idx := strings.Index(a.subAgentBuf, "\n")
+			if idx < 0 {
+				break
+			}
+			a.subAgentLines = append(a.subAgentLines, a.subAgentBuf[:idx])
+			a.subAgentBuf = a.subAgentBuf[idx+1:]
+		}
+		a.render()
+
+	case EventSubAgentStatus:
+		if event.Text == "done" {
+			a.subAgentBuf = ""
+			a.subAgentLines = nil
+		} else {
+			// Tool call status — show as a status line.
+			a.subAgentLines = append(a.subAgentLines, event.Text)
 		}
 		a.render()
 
