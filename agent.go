@@ -56,12 +56,8 @@ func newLangdagClientForProvider(cfg Config, provider string) (*langdag.Client, 
 		langdagCfg.Provider = "openai"
 		langdagCfg.APIKeys = map[string]string{"openai": cfg.OpenAIAPIKey}
 	case ProviderGrok:
-		// Grok uses OpenAI-compatible API at api.x.ai
-		langdagCfg.Provider = "openai"
-		langdagCfg.APIKeys = map[string]string{"openai": cfg.GrokAPIKey}
-		langdagCfg.OpenAIConfig = &langdag.OpenAIConfig{
-			BaseURL: "https://api.x.ai/v1",
-		}
+		langdagCfg.Provider = "grok"
+		langdagCfg.APIKeys = map[string]string{"grok": cfg.GrokAPIKey}
 	case ProviderGemini:
 		langdagCfg.Provider = "gemini"
 		langdagCfg.APIKeys = map[string]string{"gemini": cfg.GeminiAPIKey}
@@ -146,14 +142,17 @@ type Agent struct {
 }
 
 // NewAgent creates an agent with the given langdag client, tools, and configuration.
-func NewAgent(client *langdag.Client, tools []Tool, systemPrompt, model string) *Agent {
+// serverTools are provider-side tools (e.g. web search) that are declared in the
+// tool list but executed by the LLM provider, not the client.
+func NewAgent(client *langdag.Client, tools []Tool, serverTools []types.ToolDefinition, systemPrompt, model string) *Agent {
 	toolMap := make(map[string]Tool, len(tools))
-	toolDefs := make([]types.ToolDefinition, 0, len(tools))
+	toolDefs := make([]types.ToolDefinition, 0, len(tools)+len(serverTools))
 	for _, t := range tools {
 		def := t.Definition()
 		toolMap[def.Name] = t
 		toolDefs = append(toolDefs, def)
 	}
+	toolDefs = append(toolDefs, serverTools...)
 
 	return &Agent{
 		client:       client,

@@ -5,10 +5,8 @@ go 1.25.6
 require (
 	github.com/rivo/uniseg v0.4.7
 	golang.org/x/term v0.40.0
-	langdag.com/langdag v0.1.0
+	langdag.com/langdag v0.2.0
 )
-
-replace langdag.com/langdag => github.com/aduermael/langdag v0.1.1
 
 require (
 	cloud.google.com/go/auth v0.7.2 // indirect
