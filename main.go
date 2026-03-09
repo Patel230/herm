@@ -2444,6 +2444,14 @@ func (a *App) startAgent(userMessage string) {
 	var tools []Tool
 	if a.containerReady && a.container != nil {
 		tools = append(tools, NewBashTool(a.container, 120))
+		if a.worktreePath != "" {
+			cpslDir := filepath.Join(a.worktreePath, ".cpsl")
+			mounts := []MountSpec{{
+				Source:      a.worktreePath,
+				Destination: "/workspace",
+			}}
+			tools = append(tools, NewDevEnvTool(a.container, cpslDir, a.worktreePath, mounts))
+		}
 	}
 	if a.worktreePath != "" {
 		tools = append(tools, NewGitTool(a.worktreePath))

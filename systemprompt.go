@@ -35,7 +35,23 @@ Guidelines:
 - If a command produces very long output, consider piping through head/tail or grep to focus on relevant parts.`)
 	}
 
-	// 3. Git guidelines (conditional on git tool)
+	// 3. Devenv guidelines (conditional on devenv tool)
+	if toolNames["devenv"] {
+		b.WriteString(`
+
+## Dev Environment Tool
+
+Use the devenv tool to customize the development container. You can read the current Dockerfile, write a new one, and build it to replace the running container.
+
+Guidelines:
+- Use 'read' first to check if a Dockerfile already exists.
+- If no .cpsl/Dockerfile exists but the project has a Dockerfile in the root, consider adapting it.
+- Use 'write' to create or update .cpsl/Dockerfile with the desired environment setup.
+- Use 'build' to build the image and hot-swap the running container.
+- Install languages, tools, and dependencies via the Dockerfile rather than ad-hoc bash commands when the user wants a persistent environment.`)
+	}
+
+	// 4. Git guidelines (conditional on git tool)
 	if toolNames["git"] {
 		b.WriteString(`
 
@@ -50,7 +66,7 @@ Guidelines:
 - Do not force-push unless the user explicitly requests it.`)
 	}
 
-	// 4. General coding guidelines
+	// 5. General coding guidelines
 	b.WriteString(`
 
 ## General Guidelines
@@ -62,7 +78,7 @@ Guidelines:
 - Run existing tests after changes. If there are no tests, consider whether the change warrants adding them.
 - If you're unsure about something, say so rather than guessing.`)
 
-	// 5. Skills (if any loaded)
+	// 6. Skills (if any loaded)
 	if len(skills) > 0 {
 		b.WriteString(`
 
@@ -79,7 +95,7 @@ You have the following skills available. Apply them when relevant to the user's 
 		}
 	}
 
-	// 6. Current date/time and working directory (always last)
+	// 7. Current date/time and working directory (always last)
 	b.WriteString(fmt.Sprintf(`
 
 ## Environment
