@@ -20,6 +20,7 @@ import (
 
 	"golang.org/x/term"
 	"langdag.com/langdag"
+	"langdag.com/langdag/types"
 	"github.com/rivo/uniseg"
 )
 
@@ -2487,13 +2488,17 @@ func (a *App) startAgent(userMessage string) {
 	}
 
 	workDir := "/workspace"
-	systemPrompt := buildSystemPrompt(tools, skills, workDir)
+
+	// Server-side tools are handled by the LLM provider, not the client.
+	serverTools := []types.ToolDefinition{WebSearchToolDef()}
+
+	systemPrompt := buildSystemPrompt(tools, serverTools, skills, workDir)
 
 	if a.displaySystemPrompts {
 		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "── System Prompt ──\n" + systemPrompt})
 	}
 
-	agent := NewAgent(a.langdagClient, tools, systemPrompt, modelID)
+	agent := NewAgent(a.langdagClient, tools, serverTools, systemPrompt, modelID)
 	a.agent = agent
 	a.agentRunning = true
 	a.streamingText = ""

@@ -36,7 +36,8 @@ func TestBuildSystemPromptAllTools(t *testing.T) {
 		stubTool{"git"},
 		stubTool{"devenv"},
 	}
-	prompt := buildSystemPrompt(tools, nil, "/workspace")
+	serverTools := []types.ToolDefinition{WebSearchToolDef()}
+	prompt := buildSystemPrompt(tools, serverTools, nil, "/workspace")
 
 	sections := []string{
 		"expert coding agent",
@@ -44,6 +45,7 @@ func TestBuildSystemPromptAllTools(t *testing.T) {
 		"### bash",
 		"### git",
 		"### devenv",
+		"### web_search",
 		"## Practices",
 		"## Communication",
 		"## Environment",
@@ -58,7 +60,7 @@ func TestBuildSystemPromptAllTools(t *testing.T) {
 
 func TestBuildSystemPromptBashOnly(t *testing.T) {
 	tools := []Tool{stubTool{"bash"}}
-	prompt := buildSystemPrompt(tools, nil, "/work")
+	prompt := buildSystemPrompt(tools, nil, nil, "/work")
 
 	if !strings.Contains(prompt, "### bash") {
 		t.Error("prompt missing bash section")
@@ -69,11 +71,14 @@ func TestBuildSystemPromptBashOnly(t *testing.T) {
 	if strings.Contains(prompt, "### devenv") {
 		t.Error("prompt should not contain devenv section when devenv tool absent")
 	}
+	if strings.Contains(prompt, "### web_search") {
+		t.Error("prompt should not contain web_search section when not registered")
+	}
 }
 
 func TestBuildSystemPromptGitOnly(t *testing.T) {
 	tools := []Tool{stubTool{"git"}}
-	prompt := buildSystemPrompt(tools, nil, "/work")
+	prompt := buildSystemPrompt(tools, nil, nil, "/work")
 
 	if !strings.Contains(prompt, "### git") {
 		t.Error("prompt missing git section")
@@ -84,7 +89,7 @@ func TestBuildSystemPromptGitOnly(t *testing.T) {
 }
 
 func TestBuildSystemPromptNoTools(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, "/work")
+	prompt := buildSystemPrompt(nil, nil, nil, "/work")
 
 	// Should still have the structural sections
 	if !strings.Contains(prompt, "## Tools") {
@@ -107,7 +112,7 @@ func TestBuildSystemPromptWithSkills(t *testing.T) {
 		{Name: "Testing", Description: "How to test", Content: "Write table-driven tests."},
 		{Name: "Style", Description: "Code style", Content: "Use gofmt."},
 	}
-	prompt := buildSystemPrompt(nil, skills, "/work")
+	prompt := buildSystemPrompt(nil, nil, skills, "/work")
 
 	if !strings.Contains(prompt, "## Skills") {
 		t.Error("prompt missing Skills section")
@@ -130,7 +135,7 @@ func TestBuildSystemPromptWithSkills(t *testing.T) {
 }
 
 func TestBuildSystemPromptNoSkills(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, "/work")
+	prompt := buildSystemPrompt(nil, nil, nil, "/work")
 
 	if strings.Contains(prompt, "## Skills") {
 		t.Error("prompt should not contain Skills section when no skills loaded")
@@ -138,12 +143,45 @@ func TestBuildSystemPromptNoSkills(t *testing.T) {
 }
 
 func TestBuildSystemPromptEnvironment(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, "/my/project")
+	prompt := buildSystemPrompt(nil, nil, nil, "/my/project")
 
 	if !strings.Contains(prompt, "/my/project") {
 		t.Error("prompt missing working directory")
 	}
 	if !strings.Contains(prompt, "Date:") {
 		t.Error("prompt missing date")
+	}
+}
+
+func TestBuildSystemPromptWebSearch(t *testing.T) {
+	serverTools := []types.ToolDefinition{WebSearchToolDef()}
+	prompt := buildSystemPrompt(nil, serverTools, nil, "/work")
+
+	if !strings.Contains(prompt, "### web_search") {
+		t.Error("prompt missing web_search section")
+	}
+	if !strings.Contains(prompt, "unfamiliar APIs") {
+		t.Error("prompt missing web search usage guidance")
+	}
+}
+
+func TestBuildSystemPromptNoWebSearch(t *testing.T) {
+	prompt := buildSystemPrompt(nil, nil, nil, "/work")
+
+	if strings.Contains(prompt, "### web_search") {
+		t.Error("prompt should not contain web_search section when not registered")
+	}
+}
+
+func TestWebSearchToolDef(t *testing.T) {
+	def := WebSearchToolDef()
+	if def.Name != types.ServerToolWebSearch {
+		t.Errorf("Name = %q, want %q", def.Name, types.ServerToolWebSearch)
+	}
+	if def.IsClientTool() {
+		t.Error("web search should be a server tool (no InputSchema)")
+	}
+	if def.Description == "" {
+		t.Error("web search tool should have a description")
 	}
 }

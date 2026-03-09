@@ -326,3 +326,14 @@ func (t *DevEnvTool) buildAndReplace() (string, error) {
 	}
 	return "Container rebuilt successfully with the new Dockerfile.", nil
 }
+
+// WebSearchToolDef returns a server-side web search tool definition.
+// The LLM provider handles the actual search — this just declares the capability.
+// langdag maps the standardized name to each provider's native tool
+// (Anthropic: web_search_20250305, OpenAI: web_search_preview, Gemini: google_search).
+func WebSearchToolDef() types.ToolDefinition {
+	return types.ToolDefinition{
+		Name:        types.ServerToolWebSearch,
+		Description: "Search the web for current information",
+	}
+}

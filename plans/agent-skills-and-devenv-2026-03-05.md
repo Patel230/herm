@@ -62,14 +62,14 @@ Improve the coding agent with:
 - [x] 3b: Improve per-tool descriptions in tool `Definition()` methods — make descriptions more actionable and specific about when/how to use each tool. These are what the LLM sees in the tool schema.
 - [x] 3c: Tests — verify system prompt includes expected sections for different tool combinations, verify skills are included.
 
-## Phase 4: Web Search Tool (Grok-only initial)
+## Phase 4: Web Search Tool (all providers)
 
-**Context**: When using Grok models, the API supports web/X search natively. Add a `WebSearchTool` that searches the web and returns results. Initially Grok-only; other providers can be added later.
+**Context**: langdag v0.2.0 adds server-side tool support. A `ToolDefinition` with no `InputSchema` and name `types.ServerToolWebSearch` is automatically mapped to each provider's native web search (Anthropic: `web_search_20250305`, OpenAI: `web_search_preview`, Grok: `web_search`, Gemini: `google_search`).
 
-- [ ] 4a: Add `WebSearchTool` in `tools.go` — implements `Tool` interface. Input: `{query: string, source?: "web"|"x"}`. For Grok provider, uses the Grok API's search feature. Returns formatted search results. The tool needs to know the active provider to decide availability.
-- [ ] 4b: Conditional registration — only register `WebSearchTool` when using Grok provider. Update tool wiring in `main.go`.
-- [ ] 4c: Add web_search section to system prompt — guidelines for when to search (unfamiliar APIs, recent docs, debugging obscure errors).
-- [ ] 4d: Tests for WebSearchTool — test input parsing, provider check, error handling.
+- [x] 4a: Add `WebSearchToolDef()` in `tools.go` — returns a server-side `types.ToolDefinition` for web search. No `Tool` interface needed since the provider handles execution. Upgrade langdag to v0.2.0. Update Grok provider to use native `"grok"` provider.
+- [x] 4b: Always register web search — pass as server tool to `NewAgent`. Update `NewAgent` to accept `serverTools []types.ToolDefinition` alongside client tools. Update `buildSystemPrompt` to accept server tools.
+- [x] 4c: Add web_search section to system prompt — guidelines for when to search (unfamiliar APIs, recent docs, debugging obscure errors).
+- [x] 4d: Tests — `WebSearchToolDef` returns correct server tool, system prompt includes/excludes web_search section based on registration.
 
 ## Success Criteria
 
@@ -77,6 +77,6 @@ Improve the coding agent with:
 - Agent can modify dev environment by editing Dockerfile and rebuilding container mid-session
 - Agent detects existing project Dockerfiles and suggests using them
 - System prompt produces more effective agent behavior (qualitative)
-- Web search works when using Grok models
+- Web search works across all providers via langdag server tools
 - All new code has tests
 - Existing tests still pass

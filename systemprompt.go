@@ -4,15 +4,21 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"langdag.com/langdag/types"
 )
 
 // buildSystemPrompt constructs the system prompt for the coding agent.
 // Tool-specific guidelines are included only when the corresponding tool is available.
+// serverTools are provider-side tools (e.g. web search) declared but not executed by the client.
 // Structured into: Role, Tools, Practices, Communication, Skills, Environment.
-func buildSystemPrompt(tools []Tool, skills []Skill, workDir string) string {
+func buildSystemPrompt(tools []Tool, serverTools []types.ToolDefinition, skills []Skill, workDir string) string {
 	toolNames := make(map[string]bool)
 	for _, t := range tools {
 		toolNames[t.Definition().Name] = true
+	}
+	for _, st := range serverTools {
+		toolNames[st.Name] = true
 	}
 
 	var b strings.Builder
@@ -56,6 +62,16 @@ Runs git commands on the host in the project worktree (not inside the container)
 Manages the dev container's Dockerfile at .cpsl/Dockerfile.
 - Read first to check existing state. Adapt the project root Dockerfile if one exists.
 - Write to create/update, then build to apply. Prefer Dockerfile over ad-hoc installs for persistent tooling.`)
+	}
+
+	if toolNames[types.ServerToolWebSearch] {
+		b.WriteString(`
+
+### web_search
+Searches the web for current information. Handled by the LLM provider — no input needed from you.
+- Use when you encounter unfamiliar APIs, libraries, or recent changes not in your training data.
+- Useful for debugging obscure errors, checking latest docs, or verifying current best practices.
+- Don't search for things you already know well — only when current information adds value.`)
 	}
 
 	// --- Coding Practices ---
