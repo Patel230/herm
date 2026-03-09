@@ -758,10 +758,9 @@ func fetchSWEScoresCmd() sweScoresMsg {
 
 type App struct {
 	// Terminal
-	fd          int
-	oldState    *term.State
-	width       int
-	resizeTimer *time.Timer
+	fd       int
+	oldState *term.State
+	width    int
 
 	// Rendering state (from simple-chat)
 	prevRowCount  int
@@ -1387,18 +1386,15 @@ func (a *App) Run() error {
 	// SIGWINCH handler with debounce
 	sigWinch := make(chan os.Signal, 1)
 	signal.Notify(sigWinch, syscall.SIGWINCH)
+	resizeDb := newDebouncer(100*time.Millisecond, func() {
+		a.resultCh <- resizeMsg{}
+	})
 	go func() {
 		for range sigWinch {
 			a.width = getWidth()
 			// Show brief indicator immediately
 			os.Stdout.WriteString("\033[H\033[2J" + styledInfo("  resizing..."))
-			// Reset debounce timer — only render after 100ms of quiet
-			if a.resizeTimer != nil {
-				a.resizeTimer.Stop()
-			}
-			a.resizeTimer = time.AfterFunc(100*time.Millisecond, func() {
-				a.resultCh <- resizeMsg{}
-			})
+			resizeDb.Trigger()
 		}
 	}()
 
@@ -2823,6 +2819,24 @@ func (a *App) cleanup() {
 }
 
 // ─── Helpers ───
+
+// debouncer delays a function call, resetting the timer on each trigger.
+type debouncer struct {
+	delay time.Duration
+	fire  func()
+	timer *time.Timer
+}
+
+func newDebouncer(delay time.Duration, fire func()) *debouncer {
+	return &debouncer{delay: delay, fire: fire}
+}
+
+func (d *debouncer) Trigger() {
+	if d.timer != nil {
+		d.timer.Stop()
+	}
+	d.timer = time.AfterFunc(d.delay, d.fire)
+}
 
 // flushStdin discards any bytes pending in the terminal input buffer.
 // A brief pause lets in-flight terminal responses (e.g. DSR cursor position
