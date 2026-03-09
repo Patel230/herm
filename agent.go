@@ -90,6 +90,7 @@ const (
 	EventToolCallDone                        // tool execution finished
 	EventToolResult                          // tool result available
 	EventApprovalReq                         // tool needs user approval
+	EventUsage                               // token usage from an LLM call
 	EventDone                                // agent loop finished
 	EventError                               // error occurred
 )
@@ -115,6 +116,10 @@ type AgentEvent struct {
 
 	// EventError
 	Error error
+
+	// EventUsage
+	Usage *types.Usage
+	Model string
 
 	// EventDone
 	NodeID string // final assistant node ID
@@ -216,6 +221,28 @@ func (a *Agent) emit(e AgentEvent) {
 	a.events <- e
 }
 
+// emitUsage fetches the node by ID and emits an EventUsage with token counts.
+func (a *Agent) emitUsage(ctx context.Context, nodeID string) {
+	if nodeID == "" {
+		return
+	}
+	node, err := a.client.GetNode(ctx, nodeID)
+	if err != nil || node == nil {
+		return
+	}
+	a.emit(AgentEvent{
+		Type:  EventUsage,
+		Model: node.Model,
+		Usage: &types.Usage{
+			InputTokens:              node.TokensIn,
+			OutputTokens:             node.TokensOut,
+			CacheReadInputTokens:     node.TokensCacheRead,
+			CacheCreationInputTokens: node.TokensCacheCreation,
+			ReasoningTokens:          node.TokensReasoning,
+		},
+	})
+}
+
 // runLoop is the core agent loop: call LLM, handle tool calls, repeat.
 func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID string) {
 	opts := []langdag.PromptOption{
@@ -265,6 +292,7 @@ func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID st
 		a.emit(AgentEvent{Type: EventDone})
 		return
 	}
+	a.emitUsage(ctx, nodeID)
 
 	// Tool loop
 	for iteration := 0; iteration < maxToolIterations && len(toolCalls) > 0; iteration++ {
@@ -401,6 +429,7 @@ func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID st
 		if nodeID == "" {
 			break
 		}
+		a.emitUsage(ctx, nodeID)
 	}
 
 	a.emit(AgentEvent{Type: EventDone, NodeID: nodeID})
