@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"langdag.com/langdag"
 )
 
 //go:embed models.json
@@ -234,6 +238,38 @@ func formatModelMenuLines(models []ModelDef, activeID string, sortCol int, sortA
 			marker)
 	}
 	return header, lines
+}
+
+// catalogCachePath returns the path to the langdag model catalog cache file.
+func catalogCachePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "."
+	}
+	return filepath.Join(home, ".cpsl", "model_catalog.json")
+}
+
+// enrichModelsFromCatalog updates model pricing and context window from the
+// langdag catalog, falling back to models.json values when a model isn't found.
+func enrichModelsFromCatalog(models []ModelDef, catalog *langdag.ModelCatalog) {
+	if catalog == nil {
+		return
+	}
+	for i := range models {
+		pricing, _, found := catalog.LookupModel(models[i].ID)
+		if !found {
+			continue
+		}
+		if pricing.InputPricePer1M > 0 {
+			models[i].PromptPrice = pricing.InputPricePer1M
+		}
+		if pricing.OutputPricePer1M > 0 {
+			models[i].CompletionPrice = pricing.OutputPricePer1M
+		}
+		if pricing.ContextWindow > 0 {
+			models[i].ContextWindow = pricing.ContextWindow
+		}
+	}
 }
 
 // SWE-bench leaderboard types

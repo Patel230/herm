@@ -599,6 +599,10 @@ type langdagReadyMsg struct {
 	err      error
 }
 
+type catalogMsg struct {
+	catalog *langdag.ModelCatalog
+}
+
 type resizeMsg struct{}
 
 // ─── Debug logging ───
@@ -798,6 +802,7 @@ type App struct {
 	containerReady   bool
 	containerErr     error
 	status           statusInfo
+	modelCatalog     *langdag.ModelCatalog
 	langdagClient    *langdag.Client
 	langdagProvider  string
 	agent            *Agent
@@ -2711,6 +2716,13 @@ func (a *App) startInit() {
 		client, err := newLangdagClient(cfg)
 		a.resultCh <- langdagReadyMsg{client: client, provider: cfg.defaultLangdagProvider(), err: err}
 	}()
+	go func() {
+		catalog, err := langdag.LoadModelCatalog(catalogCachePath())
+		if err != nil {
+			log.Printf("warning: loading model catalog: %v", err)
+		}
+		a.resultCh <- catalogMsg{catalog: catalog}
+	}()
 }
 
 func (a *App) drainResults() {
@@ -2731,6 +2743,9 @@ func (a *App) handleResult(result any) {
 		a.modelsErr = msg.err
 		if msg.err == nil {
 			a.models = msg.models
+			if a.modelCatalog != nil {
+				enrichModelsFromCatalog(a.models, a.modelCatalog)
+			}
 			if a.sweLoaded && a.sweScores != nil {
 				matchSWEScores(a.models, a.sweScores)
 			}
@@ -2742,6 +2757,14 @@ func (a *App) handleResult(result any) {
 			a.sweScores = msg.scores
 			if a.modelsLoaded && a.models != nil {
 				matchSWEScores(a.models, a.sweScores)
+			}
+		}
+
+	case catalogMsg:
+		if msg.catalog != nil {
+			a.modelCatalog = msg.catalog
+			if a.modelsLoaded && a.models != nil {
+				enrichModelsFromCatalog(a.models, a.modelCatalog)
 			}
 		}
 
