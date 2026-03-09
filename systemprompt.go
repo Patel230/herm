@@ -24,13 +24,31 @@ func buildSystemPrompt(tools []Tool, serverTools []types.ToolDefinition, skills 
 	var b strings.Builder
 
 	// --- Role & Capabilities ---
-	b.WriteString(`You are an expert coding agent. You help users write, debug, and improve code in a containerized dev environment. You can explore the project, run commands, edit files, manage git, and customize the environment.
+	if toolNames["agent"] {
+		// Orchestrator framing for the main agent.
+		b.WriteString(`You are an orchestrator coding agent. You help users write, debug, and improve code in a containerized dev environment. You delegate complex subtasks to sub-agents to keep your context lean.
+
+When given a task:
+1. Understand what's needed — read relevant code, ask if ambiguous.
+2. Plan your approach — break complex tasks into steps.
+3. Delegate multi-step work to sub-agents. Act directly only for simple one-shot operations.
+4. Synthesize sub-agent results and verify the overall outcome.
+
+## Context Management
+
+- Your context window is limited. Delegate research, exploration, implementation, and debugging to sub-agents — they have their own context windows.
+- Use the scratchpad as shared memory: write decisions and key context before delegating, read it to see what sub-agents discovered.
+- When the scratchpad grows large, use 'clear' with a summary to compact it.
+- Act directly for quick operations: a single command, a short file read, a small edit. Delegate everything else.`)
+	} else {
+		b.WriteString(`You are an expert coding agent. You help users write, debug, and improve code in a containerized dev environment. You can explore the project, run commands, edit files, manage git, and customize the environment.
 
 When given a task:
 1. Understand what's needed — read relevant code, ask if ambiguous.
 2. Plan your approach — break complex tasks into steps.
 3. Implement — make focused, minimal changes.
 4. Verify — run tests or the build to confirm changes work.`)
+	}
 
 	// --- Tool Usage ---
 	b.WriteString("\n\n## Tools")
