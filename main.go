@@ -1386,14 +1386,12 @@ func (a *App) Run() error {
 	// SIGWINCH handler with debounce
 	sigWinch := make(chan os.Signal, 1)
 	signal.Notify(sigWinch, syscall.SIGWINCH)
-	resizeDb := newDebouncer(100*time.Millisecond, func() {
+	resizeDb := newDebouncer(150*time.Millisecond, func() {
 		a.resultCh <- resizeMsg{}
 	})
 	go func() {
 		for range sigWinch {
 			a.width = getWidth()
-			// Show brief indicator immediately
-			os.Stdout.WriteString("\033[H\033[2J" + styledInfo("  resizing..."))
 			resizeDb.Trigger()
 		}
 	}()
