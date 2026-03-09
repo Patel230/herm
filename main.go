@@ -814,6 +814,7 @@ type App struct {
 	streamingText    string
 	pendingToolCall  string
 	needsTextSep     bool
+	sessionCostUSD   float64
 
 	// Menu state (for inline menus below input - Phase 3)
 	menuLines        []string
@@ -998,10 +999,17 @@ func (a *App) buildInputRows() []string {
 
 	// Status indicators (only when no action is active)
 	if !hasAction {
-		// Line 1: /b branch + progress bar on right
+		// Line 1: /b branch + cost + progress bar on right
 		branchLabel := ""
 		if a.status.Branch != "" {
 			branchLabel = "\033[2m/b " + a.status.Branch + "\033[0m"
+		}
+		costLabel := ""
+		costTextWidth := 0
+		if a.sessionCostUSD > 0 {
+			costStr := formatCost(a.sessionCostUSD)
+			costLabel = "  \033[2m" + costStr + "\033[0m"
+			costTextWidth = 2 + len(costStr) // 2 for leading spaces
 		}
 		totalChars := 0
 		for _, msg := range a.messages {
@@ -1014,11 +1022,11 @@ func (a *App) buildInputRows() []string {
 		if a.status.Branch != "" {
 			branchTextWidth = 3 + len(a.status.Branch) // "/b " + branch name
 		}
-		padding := a.width - branchTextWidth - barWidth - 1 // -1 for trailing space after bar
+		padding := a.width - branchTextWidth - costTextWidth - barWidth - 1
 		if padding < 0 {
 			padding = 0
 		}
-		rows = append(rows, branchLabel+strings.Repeat(" ", padding)+bar+" ")
+		rows = append(rows, branchLabel+costLabel+strings.Repeat(" ", padding)+bar+" ")
 
 		// Line 2: /w worktree
 		if a.status.WorktreeName != "" {
@@ -2668,6 +2676,12 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 		a.needsTextSep = true
 		a.messages = append(a.messages, chatMessage{kind: msgToolResult, content: result, isError: event.IsError})
 		a.render()
+
+	case EventUsage:
+		if event.Usage != nil {
+			a.sessionCostUSD += computeCost(a.models, event.Model, *event.Usage)
+			a.renderInput()
+		}
 
 	case EventToolCallDone:
 		// Already handled by EventToolResult

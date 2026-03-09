@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"langdag.com/langdag"
+	"langdag.com/langdag/types"
 )
 
 //go:embed models.json
@@ -272,6 +273,35 @@ func enrichModelsFromCatalog(models []ModelDef, catalog *langdag.ModelCatalog) {
 			models[i].ContextWindow = pricing.ContextWindow
 		}
 	}
+}
+
+// computeCost calculates the USD cost for a single LLM call based on token
+// usage and model pricing. Prices are per million tokens. For Anthropic models,
+// cache read tokens are charged at 10% of the input price.
+// Returns 0 if the model is not found.
+func computeCost(models []ModelDef, modelID string, usage types.Usage) float64 {
+	m := findModelByID(models, modelID)
+	if m == nil || (m.PromptPrice == 0 && m.CompletionPrice == 0) {
+		return 0
+	}
+	inputCost := float64(usage.InputTokens) * m.PromptPrice / 1_000_000
+	outputCost := float64(usage.OutputTokens) * m.CompletionPrice / 1_000_000
+
+	// Anthropic cache read tokens are 10% of input price
+	if usage.CacheReadInputTokens > 0 && m.Provider == ProviderAnthropic {
+		inputCost += float64(usage.CacheReadInputTokens) * m.PromptPrice * 0.1 / 1_000_000
+	}
+
+	return inputCost + outputCost
+}
+
+// formatCost formats a USD cost for display.
+// Small amounts show 4 decimal places, larger amounts show 2.
+func formatCost(cost float64) string {
+	if cost < 0.01 {
+		return fmt.Sprintf("$%.4f", cost)
+	}
+	return fmt.Sprintf("$%.2f", cost)
 }
 
 // SWE-bench leaderboard types
