@@ -60,7 +60,7 @@ Improve the coding agent with:
 
 - [x] 3a: Rewrite `buildSystemPrompt` — restructure into clear sections: Role & Capabilities, Tool Usage (per-tool), Coding Practices, Communication Style. Add guidance on: breaking down complex tasks, verifying changes work, asking clarifying questions when ambiguous, not over-engineering. Keep it concise — aim for ~1000 tokens total (excluding skills).
 - [x] 3b: Improve per-tool descriptions in tool `Definition()` methods — make descriptions more actionable and specific about when/how to use each tool. These are what the LLM sees in the tool schema.
-- [ ] 3c: Tests — verify system prompt includes expected sections for different tool combinations, verify skills are included.
+- [x] 3c: Tests — verify system prompt includes expected sections for different tool combinations, verify skills are included.
 
 ## Phase 4: Web Search Tool (Grok-only initial)
 
