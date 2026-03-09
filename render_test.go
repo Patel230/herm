@@ -15,9 +15,12 @@ func TestWrapString(t *testing.T) {
 	}{
 		{"empty", "", 0, 80, []string{""}},
 		{"short", "hello", 0, 80, []string{"hello"}},
-		{"exact width wraps", "abcde", 0, 5, []string{"abcde", ""}},
+		{"exact width fits", "abcde", 0, 5, []string{"abcde"}},
 		{"wraps at width", "abcdef", 0, 5, []string{"abcde", "f"}},
 		{"with startCol", "abc", 3, 5, []string{"ab", "c"}},
+		{"emoji width", "Hi 👋 there", 0, 8, []string{"Hi 👋 th", "ere"}},
+		{"ansi not counted", "\033[34;3mhello\033[0m", 0, 5, []string{"\033[34;3mhello\033[0m"}},
+		{"ansi re-emitted on wrap", "\033[34;3mabcdefgh\033[0m", 0, 5, []string{"\033[34;3mabcde", "\033[34;3mfgh\033[0m"}},
 	}
 
 	for _, tt := range tests {

@@ -42,6 +42,7 @@ const (
 	msgToolCall
 	msgToolResult
 	msgInfo
+	msgSystemPrompt
 	msgSuccess
 	msgError
 )
@@ -163,25 +164,77 @@ func cursorVisualPos(input []rune, cursor int, width int) (int, int) {
 	return last, vl.startCol + vl.length
 }
 
-// wrapString splits a string into visual rows of at most `w` runes.
+// ansiEscRe matches ANSI escape sequences (CSI and OSC).
+var ansiEscRe = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]|\x1b\].*?\x1b\\`)
+
+// wrapString splits a string into visual rows of at most `w` columns.
+// It is ANSI-aware: escape sequences don't count toward visual width, and
+// active styling is re-emitted on continuation lines. Character widths are
+// measured with uniseg.StringWidth (so wide chars like emoji count as 2).
 func wrapString(s string, startCol int, w int) []string {
-	runes := []rune(s)
-	if len(runes) == 0 {
-		return []string{""}
+	if w <= 0 {
+		return []string{s}
 	}
+
+	// Split into tokens: ANSI sequences and printable segments.
+	type token struct {
+		text  string
+		isSeq bool
+	}
+	var tokens []token
+	rest := s
+	for rest != "" {
+		loc := ansiEscRe.FindStringIndex(rest)
+		if loc == nil {
+			tokens = append(tokens, token{rest, false})
+			break
+		}
+		if loc[0] > 0 {
+			tokens = append(tokens, token{rest[:loc[0]], false})
+		}
+		tokens = append(tokens, token{rest[loc[0]:loc[1]], true})
+		rest = rest[loc[1]:]
+	}
+
 	var rows []string
+	var curLine strings.Builder
 	col := startCol
-	lineStart := 0
-	for i := range runes {
-		col++
-		if col >= w {
-			rows = append(rows, string(runes[lineStart:i+1]))
-			lineStart = i + 1
-			col = 0
+	var activeSeqs []string // stack of active ANSI sequences for re-emit
+
+	flush := func() {
+		rows = append(rows, curLine.String())
+		curLine.Reset()
+		col = 0
+		// Re-emit active styling on new line
+		for _, seq := range activeSeqs {
+			curLine.WriteString(seq)
 		}
 	}
-	if lineStart <= len(runes) {
-		rows = append(rows, string(runes[lineStart:]))
+
+	for _, tok := range tokens {
+		if tok.isSeq {
+			curLine.WriteString(tok.text)
+			if tok.text == "\033[0m" || tok.text == "\033[m" {
+				activeSeqs = nil
+			} else {
+				activeSeqs = append(activeSeqs, tok.text)
+			}
+			continue
+		}
+		// Printable text — walk rune by rune
+		for _, r := range tok.text {
+			rw := uniseg.StringWidth(string(r))
+			if col+rw > w {
+				flush()
+			}
+			curLine.WriteRune(r)
+			col += rw
+		}
+	}
+	rows = append(rows, curLine.String())
+
+	if len(rows) == 0 {
+		return []string{""}
 	}
 	return rows
 }
@@ -282,6 +335,11 @@ func styledInfo(msg string) string {
 	return "\033[34;3m" + msg + "\033[0m"
 }
 
+func styledSystemPrompt(msg string) string {
+	// dim italic + dark gray (90) — visually distinct from normal text
+	return "\033[2;3;90m" + msg + "\033[0m"
+}
+
 func renderMessage(msg chatMessage) string {
 	var parts []string
 	if msg.leadBlank {
@@ -299,6 +357,8 @@ func renderMessage(msg chatMessage) string {
 		rendered = styledToolResult(msg.content, msg.isError)
 	case msgInfo:
 		rendered = styledInfo(msg.content)
+	case msgSystemPrompt:
+		rendered = styledSystemPrompt(msg.content)
 	case msgSuccess:
 		rendered = styledSuccess(msg.content)
 	case msgError:
@@ -2061,8 +2121,9 @@ var cfgTabNames = []string{"API Keys", "Settings"}
 type cfgField struct {
 	label   string
 	get     func(Config) string
-	display func(Config) string // masked display; nil means use get
+	display func(Config) string    // masked display; nil means use get
 	set     func(*Config, string)
+	toggle  func(*Config)          // if non-nil, Enter toggles instead of opening editor
 }
 
 var cfgTabFields = [][]cfgField{
@@ -2075,6 +2136,7 @@ var cfgTabFields = [][]cfgField{
 	{ // Tab 1: Settings
 		{label: "Paste Collapse", get: func(c Config) string { return strconv.Itoa(c.PasteCollapseMinChars) }, set: func(c *Config, v string) { if n, err := strconv.Atoi(v); err == nil { c.PasteCollapseMinChars = n } }},
 		{label: "Container Image", get: func(c Config) string { if c.ContainerImage == "" { return defaultContainerImage }; return c.ContainerImage }, set: func(c *Config, v string) { c.ContainerImage = v }},
+		{label: "Show System Prompt", get: func(c Config) string { if c.DisplaySystemPrompts { return "on" }; return "off" }, toggle: func(c *Config) { c.DisplaySystemPrompts = !c.DisplaySystemPrompts }},
 	},
 }
 
@@ -2092,6 +2154,7 @@ func (a *App) enterConfigMode() {
 func (a *App) exitConfigMode(save bool) {
 	if save {
 		a.config = a.cfgDraft
+		a.displaySystemPrompts = a.config.DisplaySystemPrompts
 		if err := saveConfig(a.config); err != nil {
 			a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error saving config: %v", err)})
 		} else {
@@ -2234,14 +2297,18 @@ func (a *App) handleConfigByte(ch byte, stdinCh chan byte, readByte func() (byte
 			}
 		}
 
-	case ch == '\r': // Enter - start editing current field
+	case ch == '\r': // Enter - toggle or start editing current field
 		fields := a.cfgCurrentFields()
 		if len(fields) > 0 && a.cfgCursor < len(fields) {
 			f := fields[a.cfgCursor]
-			a.cfgEditing = true
-			val := f.get(a.cfgDraft)
-			a.cfgEditBuf = []rune(val)
-			a.cfgEditCursor = len(a.cfgEditBuf)
+			if f.toggle != nil {
+				f.toggle(&a.cfgDraft)
+			} else {
+				a.cfgEditing = true
+				val := f.get(a.cfgDraft)
+				a.cfgEditBuf = []rune(val)
+				a.cfgEditCursor = len(a.cfgEditBuf)
+			}
 		}
 		a.renderInput()
 
@@ -2495,7 +2562,7 @@ func (a *App) startAgent(userMessage string) {
 	systemPrompt := buildSystemPrompt(tools, serverTools, skills, workDir)
 
 	if a.displaySystemPrompts {
-		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "── System Prompt ──\n" + systemPrompt})
+		a.messages = append(a.messages, chatMessage{kind: msgSystemPrompt, content: "── System Prompt ──\n" + systemPrompt})
 	}
 
 	agent := NewAgent(a.langdagClient, tools, serverTools, systemPrompt, modelID)
@@ -2759,6 +2826,7 @@ func main() {
 
 	app := newApp()
 
+	app.displaySystemPrompts = app.config.DisplaySystemPrompts
 	for _, arg := range os.Args[1:] {
 		if arg == "--display-system-prompts" {
 			app.displaySystemPrompts = true
