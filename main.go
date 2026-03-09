@@ -917,6 +917,33 @@ func (a *App) subAgentDisplayLines() []string {
 	return out
 }
 
+// subAgentSummaryLine builds a one-line summary from sub-agent output for the committed messages.
+func subAgentSummaryLine(lines []string, buf string) string {
+	// Find the first non-empty line of text output.
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		// Skip tool status lines.
+		if strings.HasPrefix(line, "tool:") {
+			continue
+		}
+		if line != "" {
+			const maxLen = 80
+			if len(line) > maxLen {
+				line = line[:maxLen] + "…"
+			}
+			return "[sub-agent] completed: " + line
+		}
+	}
+	if s := strings.TrimSpace(buf); s != "" {
+		const maxLen = 80
+		if len(s) > maxLen {
+			s = s[:maxLen] + "…"
+		}
+		return "[sub-agent] completed: " + s
+	}
+	return "[sub-agent] completed"
+}
+
 // refreshModelMenu re-sorts and re-formats the model menu after a sort change.
 // Preserves the cursor on the same model.
 func (a *App) refreshModelMenu() {
@@ -2771,6 +2798,11 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 
 	case EventSubAgentStatus:
 		if event.Text == "done" {
+			// Collapse live display into a single summary line.
+			summary := subAgentSummaryLine(a.subAgentLines, a.subAgentBuf)
+			if summary != "" {
+				a.messages = append(a.messages, chatMessage{kind: msgInfo, content: summary})
+			}
 			a.subAgentBuf = ""
 			a.subAgentLines = nil
 		} else {
