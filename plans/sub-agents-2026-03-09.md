@@ -52,10 +52,12 @@
 - [x] 4c: Add `SubAgentMaxTurns int` to `Config` struct (default: 15). Add it to the `/config` Settings tab as "Sub-Agent Max Turns" with numeric input. Wire it through to `SubAgentTool` construction.
 - [x] 4d: Register `SubAgentTool` in `startAgent()` alongside other tools, passing the shared `langdag.Client`, available tools list, and config. Add it to the system prompt tool guidelines in `systemprompt.go` with a section explaining when to use sub-agents.
 
-## Phase 5: Orchestrator system prompt
+## Phase 5: Shared scratchpad + orchestrator prompt
 
-- [ ] 5a: Restructure `buildSystemPrompt` to frame the main agent as an **orchestrator**. Add a top-level section before the current "Role & Capabilities" that explains: you are an orchestrator agent, you should delegate complex subtasks to sub-agents using the `agent` tool, keep your own context lean by delegating research/implementation/debugging to sub-agents, synthesize their results. Keep direct tool use for simple one-shot operations.
-- [ ] 5b: Add guidelines for context window management: "When a task involves multiple steps (exploration, implementation, testing), delegate each step to a sub-agent rather than doing everything in your context. Sub-agents have their own context windows and won't consume yours. Use sub-agents proactively to stay within budget."
+- [x] 5a: Add a `Scratchpad` struct with mutex-protected `[]string` entries. Operations: `Read() []string`, `Write(entry string)`, `Clear()`, `Replace(entries []string)`. Create it once on App and pass to all agent tools.
+- [x] 5b: Add a `ScratchpadTool` implementing `Tool`. Actions: `read` returns all entries (numbered), `write` appends one entry, `clear` replaces all entries with a single provided summary. Input schema: `action` (string, required), `content` (string, required for write/clear).
+- [ ] 5c: Register `ScratchpadTool` in `startAgent()` alongside other tools. Pass the same `Scratchpad` instance to both main agent and sub-agents (via `SubAgentTool`). Add system prompt section for the scratchpad tool.
+- [ ] 5d: Restructure `buildSystemPrompt` to frame the main agent as an **orchestrator**. Add a section explaining: delegate complex subtasks to sub-agents, keep your own context lean, use the scratchpad as shared memory between agents, synthesize results. Sub-agents get a note to write key findings to the scratchpad. Add context window management guidelines.
 
 ## Phase 6: Live sub-agent display (3-line cap)
 
