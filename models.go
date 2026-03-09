@@ -27,14 +27,16 @@ const (
 
 // ModelDef describes a model available for selection.
 // IDs are native API model identifiers (not OpenRouter format).
+// models.json provides provider, id, and display_name; pricing and context
+// window are populated at runtime from the langdag model catalog.
 type ModelDef struct {
 	Provider        string  `json:"provider"`
 	ID              string  `json:"id"`
 	DisplayName     string  `json:"display_name"`
-	PromptPrice     float64 `json:"prompt_price"`      // USD per million input tokens
-	CompletionPrice float64 `json:"completion_price"`   // USD per million output tokens
-	ContextWindow   int     `json:"context_window"`     // tokens
-	SWEScore        float64 `json:"-"`                  // SWE-bench Verified score (0 = no data), populated at runtime
+	PromptPrice     float64 `json:"-"` // USD per million input tokens (from catalog)
+	CompletionPrice float64 `json:"-"` // USD per million output tokens (from catalog)
+	ContextWindow   int     `json:"-"` // tokens (from catalog)
+	SWEScore        float64 `json:"-"` // SWE-bench Verified score (0 = no data)
 }
 
 // builtinModels returns the list of supported models loaded from the embedded models.json.

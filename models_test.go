@@ -2,6 +2,8 @@ package main
 
 import (
 	"testing"
+
+	"langdag.com/langdag"
 )
 
 // testModels returns a known model list for testing (native API IDs).
@@ -216,15 +218,6 @@ func TestBuiltinModelsHaveRequiredFields(t *testing.T) {
 		if m.DisplayName == "" {
 			t.Errorf("model %q has empty display name", m.ID)
 		}
-		if m.PromptPrice <= 0 {
-			t.Errorf("model %q has non-positive prompt price", m.ID)
-		}
-		if m.CompletionPrice <= 0 {
-			t.Errorf("model %q has non-positive completion price", m.ID)
-		}
-		if m.ContextWindow <= 0 {
-			t.Errorf("model %q has non-positive context window", m.ID)
-		}
 	}
 }
 
@@ -250,14 +243,6 @@ func TestModelsJSONLoadsAllEntries(t *testing.T) {
 	for _, p := range []string{ProviderAnthropic, ProviderGrok, ProviderOpenAI, ProviderGemini} {
 		if providers[p] == 0 {
 			t.Errorf("expected at least one model for provider %q", p)
-		}
-	}
-}
-
-func TestModelsJSONContextWindows(t *testing.T) {
-	for _, m := range builtinModels() {
-		if m.ContextWindow < 100000 {
-			t.Errorf("model %q has unexpectedly small context window: %d", m.ID, m.ContextWindow)
 		}
 	}
 }
@@ -538,5 +523,57 @@ func TestSortColFromName(t *testing.T) {
 		if got := sortColFromName(tt.name); got != tt.want {
 			t.Errorf("sortColFromName(%q) = %d, want %d", tt.name, got, tt.want)
 		}
+	}
+}
+
+// --- enrichModelsFromCatalog tests ---
+
+func TestEnrichModelsFromCatalog(t *testing.T) {
+	models := []ModelDef{
+		{Provider: "anthropic", ID: "claude-sonnet-4-0-20250514", DisplayName: "Claude Sonnet 4"},
+		{Provider: "openai", ID: "gpt-4o", DisplayName: "GPT-4o"},
+		{Provider: "grok", ID: "unknown-model", DisplayName: "Unknown"},
+	}
+
+	catalog := &langdag.ModelCatalog{
+		Providers: map[string][]langdag.ModelPricing{
+			"anthropic": {
+				{ID: "claude-sonnet-4-0-20250514", InputPricePer1M: 3.0, OutputPricePer1M: 15.0, ContextWindow: 200000},
+			},
+			"openai": {
+				{ID: "gpt-4o", InputPricePer1M: 2.5, OutputPricePer1M: 10.0, ContextWindow: 128000},
+			},
+		},
+	}
+
+	enrichModelsFromCatalog(models, catalog)
+
+	// Matched models get catalog pricing
+	if models[0].PromptPrice != 3.0 {
+		t.Errorf("claude sonnet input price: got %f, want 3.0", models[0].PromptPrice)
+	}
+	if models[0].CompletionPrice != 15.0 {
+		t.Errorf("claude sonnet output price: got %f, want 15.0", models[0].CompletionPrice)
+	}
+	if models[0].ContextWindow != 200000 {
+		t.Errorf("claude sonnet context: got %d, want 200000", models[0].ContextWindow)
+	}
+	if models[1].PromptPrice != 2.5 {
+		t.Errorf("gpt-4o input price: got %f, want 2.5", models[1].PromptPrice)
+	}
+
+	// Unmatched model keeps zero values
+	if models[2].PromptPrice != 0 {
+		t.Errorf("unknown model should have zero price, got %f", models[2].PromptPrice)
+	}
+}
+
+func TestEnrichModelsNilCatalog(t *testing.T) {
+	models := []ModelDef{
+		{Provider: "anthropic", ID: "test", DisplayName: "Test", PromptPrice: 5.0},
+	}
+	enrichModelsFromCatalog(models, nil)
+	if models[0].PromptPrice != 5.0 {
+		t.Errorf("nil catalog should not modify prices, got %f", models[0].PromptPrice)
 	}
 }
