@@ -171,6 +171,8 @@ var ansiEscRe = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]|\x1b\].*?\x1b\\`)
 // It is ANSI-aware: escape sequences don't count toward visual width, and
 // active styling is re-emitted on continuation lines. Character widths are
 // measured with uniseg.StringWidth (so wide chars like emoji count as 2).
+// Wrapping prefers word boundaries (spaces); words longer than `w` columns
+// fall back to character-level breaking.
 func wrapString(s string, startCol int, w int) []string {
 	if w <= 0 {
 		return []string{s}
@@ -205,32 +207,106 @@ func wrapString(s string, startCol int, w int) []string {
 		rows = append(rows, curLine.String())
 		curLine.Reset()
 		col = 0
-		// Re-emit active styling on new line
 		for _, seq := range activeSeqs {
 			curLine.WriteString(seq)
 		}
 	}
 
-	for _, tok := range tokens {
-		if tok.isSeq {
-			curLine.WriteString(tok.text)
-			if tok.text == "\033[0m" || tok.text == "\033[m" {
-				activeSeqs = nil
-			} else {
-				activeSeqs = append(activeSeqs, tok.text)
-			}
-			continue
-		}
-		// Printable text — walk rune by rune
-		for _, r := range tok.text {
-			rw := uniseg.StringWidth(string(r))
-			if col+rw > w {
-				flush()
-			}
-			curLine.WriteRune(r)
-			col += rw
+	applyANSI := func(seq string) {
+		curLine.WriteString(seq)
+		if seq == "\033[0m" || seq == "\033[m" {
+			activeSeqs = nil
+		} else {
+			activeSeqs = append(activeSeqs, seq)
 		}
 	}
+
+	// Word buffer: accumulates parts (text chunks and ANSI sequences) that
+	// form a single visual word spanning across tokens.
+	type wordPart struct {
+		text  string
+		isSeq bool
+	}
+	var wordParts []wordPart
+	var wordBuf strings.Builder // accumulates current run of non-space chars
+	wordWidth := 0
+
+	flushWordBuf := func() {
+		if wordBuf.Len() > 0 {
+			wordParts = append(wordParts, wordPart{wordBuf.String(), false})
+			wordBuf.Reset()
+		}
+	}
+
+	commitWord := func() {
+		flushWordBuf()
+		if wordWidth == 0 {
+			// Only ANSI sequences — apply them directly
+			for _, p := range wordParts {
+				if p.isSeq {
+					applyANSI(p.text)
+				}
+			}
+			wordParts = wordParts[:0]
+			return
+		}
+		if wordWidth <= w {
+			// Word fits on a full line — move to next line if needed
+			if col+wordWidth > w {
+				flush()
+			}
+			for _, p := range wordParts {
+				if p.isSeq {
+					applyANSI(p.text)
+				} else {
+					curLine.WriteString(p.text)
+				}
+			}
+			col += wordWidth
+		} else {
+			// Word wider than line — character-break
+			for _, p := range wordParts {
+				if p.isSeq {
+					applyANSI(p.text)
+				} else {
+					for _, r := range p.text {
+						rw := uniseg.StringWidth(string(r))
+						if col+rw > w {
+							flush()
+						}
+						curLine.WriteRune(r)
+						col += rw
+					}
+				}
+			}
+		}
+		wordParts = wordParts[:0]
+		wordWidth = 0
+	}
+
+	for _, tok := range tokens {
+		if tok.isSeq {
+			flushWordBuf()
+			wordParts = append(wordParts, wordPart{tok.text, true})
+			continue
+		}
+		for _, r := range tok.text {
+			if unicode.IsSpace(r) {
+				commitWord()
+				rw := uniseg.StringWidth(string(r))
+				if col+rw > w {
+					flush()
+				} else {
+					curLine.WriteRune(r)
+					col += rw
+				}
+			} else {
+				wordBuf.WriteRune(r)
+				wordWidth += uniseg.StringWidth(string(r))
+			}
+		}
+	}
+	commitWord()
 	rows = append(rows, curLine.String())
 
 	if len(rows) == 0 {

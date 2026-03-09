@@ -17,8 +17,8 @@ func TestWrapString(t *testing.T) {
 		{"short", "hello", 0, 80, []string{"hello"}},
 		{"exact width fits", "abcde", 0, 5, []string{"abcde"}},
 		{"wraps at width", "abcdef", 0, 5, []string{"abcde", "f"}},
-		{"with startCol", "abc", 3, 5, []string{"ab", "c"}},
-		{"emoji width", "Hi 👋 there", 0, 8, []string{"Hi 👋 th", "ere"}},
+		{"with startCol", "abc", 3, 5, []string{"", "abc"}},
+		{"emoji width", "Hi 👋 there", 0, 8, []string{"Hi 👋 ", "there"}},
 		{"ansi not counted", "\033[34;3mhello\033[0m", 0, 5, []string{"\033[34;3mhello\033[0m"}},
 		{"ansi re-emitted on wrap", "\033[34;3mabcdefgh\033[0m", 0, 5, []string{"\033[34;3mabcde", "\033[34;3mfgh\033[0m"}},
 	}
