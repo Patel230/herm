@@ -68,8 +68,8 @@
 
 ## Phase 7: Sub-agent cost tracking
 
-- [ ] 7a: Sub-agent events should include usage data (same as Phase 3b). In `handleAgentEvent`, accumulate sub-agent usage into the same `sessionCostUSD`. The live cost display automatically reflects sub-agent costs.
-- [ ] 7b: Add a test that creates a SubAgentTool with a mock langdag client, runs a task, and verifies the tool result contains the sub-agent's output text. Verify events are emitted with correct AgentID.
+- [x] 7a: Sub-agent events should include usage data (same as Phase 3b). In `handleAgentEvent`, accumulate sub-agent usage into the same `sessionCostUSD`. The live cost display automatically reflects sub-agent costs.
+- [x] 7b: Add a test that creates a SubAgentTool with a mock langdag client, runs a task, and verifies the tool result contains the sub-agent's output text. Verify events are emitted with correct AgentID.
 
 ---
 
