@@ -120,8 +120,8 @@ func TestBuildInputRows(t *testing.T) {
 
 func TestToolCallSummary(t *testing.T) {
 	got := toolCallSummary("bash", []byte(`{"command":"ls -la"}`))
-	if !strings.Contains(got, "bash") || !strings.Contains(got, "ls -la") {
-		t.Errorf("toolCallSummary(bash) = %q, want to contain bash and ls -la", got)
+	if !strings.Contains(got, "~ $") || !strings.Contains(got, "ls -la") {
+		t.Errorf("toolCallSummary(bash) = %q, want to contain '~ $' and 'ls -la'", got)
 	}
 
 	got = toolCallSummary("unknown_tool", nil)

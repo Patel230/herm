@@ -17,7 +17,7 @@ type Block struct {
 }
 
 const (
-	promptPrefix     = "❯ "
+	promptPrefix     = "▸ "
 	promptPrefixCols = 2
 )
 

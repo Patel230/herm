@@ -27,7 +27,7 @@ import (
 // ─── Constants ───
 
 const (
-	promptPrefix     = "❯ "
+	promptPrefix     = "▸ "
 	promptPrefixCols = 2
 	charsPerToken    = 4 // rough estimate for context bar
 )
@@ -390,7 +390,7 @@ func buildLogo(colorIndex int) []string {
 // ─── Styling helpers ───
 
 func styledUserMsg(content string) string {
-	return "\033[1m❯ " + renderInlineMarkdown(content) + "\033[0m"
+	return "\033[1m▸ " + renderInlineMarkdown(content) + "\033[0m"
 }
 
 func styledAssistantText(content string) string {
@@ -504,7 +504,7 @@ func toolCallSummary(toolName string, input json.RawMessage) string {
 			if len(cmd) > 120 {
 				cmd = cmd[:120] + "..."
 			}
-			return fmt.Sprintf("▶ bash: %s", cmd)
+			return fmt.Sprintf("~ $ %s", cmd)
 		}
 	case "git":
 		var in struct {
@@ -517,10 +517,10 @@ func toolCallSummary(toolName string, input json.RawMessage) string {
 			if len(cmd) > 120 {
 				cmd = cmd[:120] + "..."
 			}
-			return fmt.Sprintf("▶ %s", cmd)
+			return fmt.Sprintf("~ %s", cmd)
 		}
 	}
-	return fmt.Sprintf("▶ %s", toolName)
+	return fmt.Sprintf("~ %s", toolName)
 }
 
 func collapseToolResult(result string) string {
