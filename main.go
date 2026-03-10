@@ -368,20 +368,29 @@ func writeRows(buf *strings.Builder, rows []string, from int) {
 	}
 }
 
-// ─── Logo (from simple-chat) ───
+// ─── Logo ───
 
-var logo = []string{
-	"",
-	"    \033[38;5;75m▄███▄\033[0m ░▄▀▀▒█▀▄░▄▀▀░█▒░",
-	"  \033[38;5;75m▄██\033[38;5;255m• •\033[38;5;75m█\033[0m ░▀▄▄░█▀▒▒▄██▒█▄▄",
-	" \033[38;5;75m▀███▄█▄█\033[0m Contained Coding Agent",
-	"",
+// buildLogo returns the logo lines colored with an ANSI indexed color (0-15)
+// from the user's terminal theme.
+func buildLogo(colorIndex int) []string {
+	if colorIndex <= 0 || colorIndex > 15 {
+		colorIndex = 4 // default: terminal blue
+	}
+	c := fmt.Sprintf("\033[38;5;%dm", colorIndex)
+	rst := "\033[0m"
+	return []string{
+		"",
+		fmt.Sprintf("    %s▄███▄%s ░▄▀▀▒█▀▄░▄▀▀░█▒░", c, rst),
+		fmt.Sprintf("  %s▄██• •█%s ░▀▄▄░█▀▒▒▄██▒█▄▄", c, rst),
+		fmt.Sprintf(" %s▀███▄█▄█%s Contained Coding Agent", c, rst),
+		"",
+	}
 }
 
 // ─── Styling helpers ───
 
 func styledUserMsg(content string) string {
-	return "\033[1m❯ " + content + "\033[0m"
+	return "\033[1m❯ " + renderInlineMarkdown(content) + "\033[0m"
 }
 
 func styledAssistantText(content string) string {
@@ -862,10 +871,18 @@ func newApp() *App {
 
 func (a *App) buildBlockRows() []string {
 	var rows []string
-	rows = append(rows, logo...)
+	rows = append(rows, buildLogo(a.config.ThemeColor)...)
+	inCodeBlock := false
 	for i, msg := range a.messages {
 		rendered := renderMessage(msg)
 		for _, logLine := range strings.Split(rendered, "\n") {
+			if msg.kind == msgAssistant {
+				var skip bool
+				logLine, inCodeBlock, skip = processMarkdownLine(logLine, inCodeBlock)
+				if skip {
+					continue
+				}
+			}
 			rows = append(rows, wrapString(logLine, 0, a.width)...)
 		}
 		// Add blank line after block, unless:
@@ -881,8 +898,12 @@ func (a *App) buildBlockRows() []string {
 	}
 	// Show streaming text or thinking indicator above the input area
 	if a.streamingText != "" {
-		for _, logLine := range strings.Split(styledAssistantText(a.streamingText), "\n") {
-			rows = append(rows, wrapString(logLine, 0, a.width)...)
+		for _, logLine := range strings.Split(a.streamingText, "\n") {
+			var skip bool
+			logLine, inCodeBlock, skip = processMarkdownLine(logLine, inCodeBlock)
+			if !skip {
+				rows = append(rows, wrapString(logLine, 0, a.width)...)
+			}
 		}
 		rows = append(rows, "")
 	} else if a.agentRunning {
