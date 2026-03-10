@@ -75,9 +75,9 @@ Workspace and status bar rework:
 
 **Context**: Status bar currently shows `/b <branch>` and `/w <worktree>`. Change format and add container info.
 
-- [ ] 4a: Replace `/b <branch>` with `branch: <branch>` in the status bar rendering (`main.go:1081-1108`). Keep cost + progress bar on the same line, right-aligned.
-- [ ] 4b: Add `container: <short-id>` line below the branch line. Show first 12 chars of `a.container.ContainerID()`. Only render when `a.containerReady && a.container != nil`.
-- [ ] 4c: Change worktree line from `/w <name>` to `worktree: <name>`. Only show when the workspace is actually a worktree (i.e. `a.worktreePath` is under `~/.cpsl/worktrees/`, not the repo root). Add a helper or field to track whether current workspace is a worktree.
+- [x] 4a: Replace `/b <branch>` with `branch: <branch>` in the status bar rendering (`main.go:1081-1108`). Keep cost + progress bar on the same line, right-aligned.
+- [x] 4b: Add `container: <short-id>` line below the branch line. Show first 12 chars of `a.container.ContainerID()`. Only render when `a.containerReady && a.container != nil`.
+- [x] 4c: Change worktree line from `/w <name>` to `worktree: <name>`. Only show when the workspace is actually a worktree (i.e. `a.worktreePath` is under `~/.cpsl/worktrees/`, not the repo root). Add a helper or field to track whether current workspace is a worktree.
 
 ## Phase 5: Tests and System Prompt
 

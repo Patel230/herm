@@ -1068,38 +1068,47 @@ func (a *App) buildInputRows() []string {
 
 	// Status indicators (only when no action is active)
 	if !hasAction {
-		// Line 1: /b branch + cost + progress bar on right
+		// Line 1: branch: <name> + cost + progress bar on right
 		branchLabel := ""
+		branchTextWidth := 0
 		if a.status.Branch != "" {
-			branchLabel = "\033[2m/b " + a.status.Branch + "\033[0m"
+			branchLabel = "\033[2mbranch: " + a.status.Branch + "\033[0m"
+			branchTextWidth = 8 + len(a.status.Branch) // "branch: " + name
 		}
 		costLabel := ""
 		costTextWidth := 0
 		if a.sessionCostUSD > 0 {
 			costStr := formatCost(a.sessionCostUSD)
 			costLabel = "  \033[2m" + costStr + "\033[0m"
-			costTextWidth = 2 + len(costStr) // 2 for leading spaces
+			costTextWidth = 2 + len(costStr)
 		}
 		contextTokens := a.lastInputTokens + len(a.input)/charsPerToken
-		contextWindow := 200000 // fallback
+		contextWindow := 200000
 		if m := findModelByID(a.models, a.config.resolveActiveModel(a.models)); m != nil {
 			contextWindow = m.ContextWindow
 		}
 		bar := progressBar(contextTokens, contextWindow)
 		barWidth := 3
-		branchTextWidth := 0
-		if a.status.Branch != "" {
-			branchTextWidth = 3 + len(a.status.Branch) // "/b " + branch name
-		}
 		padding := a.width - branchTextWidth - costTextWidth - barWidth - 1
 		if padding < 0 {
 			padding = 0
 		}
 		rows = append(rows, branchLabel+costLabel+strings.Repeat(" ", padding)+bar+" ")
 
-		// Line 2: /w worktree
-		if a.status.WorktreeName != "" {
-			rows = append(rows, "\033[2m/w "+a.status.WorktreeName+"\033[0m\033[K")
+		// Line 2: container: <short-id> (only when container is ready)
+		if a.containerReady && a.container != nil {
+			if cid := a.container.ContainerID(); cid != "" {
+				shortID := cid
+				if len(shortID) > 12 {
+					shortID = shortID[:12]
+				}
+				rows = append(rows, "\033[2mcontainer: "+shortID+"\033[0m\033[K")
+			}
+		}
+
+		// Line 3: worktree: <name> (only when actually in a worktree)
+		if a.status.WorktreeName != "" && a.isInWorktree() {
+			rows = append(rows, "\033[2mworktree: "+a.status.WorktreeName+"\033[0m\033[K")
 		}
 	}
 
@@ -2267,6 +2276,14 @@ func (a *App) switchToWorktree(wtPath, name, branch string) {
 		}()
 	}
 	a.render()
+}
+
+func (a *App) isInWorktree() bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(a.worktreePath, filepath.Join(home, ".cpsl", "worktrees"))
 }
 
 func maskKey(key string) string {
