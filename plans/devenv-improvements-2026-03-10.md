@@ -81,8 +81,8 @@ Workspace and status bar rework:
 
 ## Phase 5: Tests and System Prompt
 
-- [ ] 5a: Update all tests in `devenv_test.go` — new `NewDevEnvTool` signature (add projectID + onRebuild), named Dockerfile paths (`<name>.Dockerfile`), verify onRebuild callback is called after build, test name validation, test legacy Dockerfile detection.
-- [ ] 5b: Update system prompt in `systemprompt.go` — mention the `name` parameter and that Dockerfiles are stored as `.cpsl/<name>.Dockerfile`.
+- [x] 5a: Update all tests in `devenv_test.go` — new `NewDevEnvTool` signature (add projectID + onRebuild), named Dockerfile paths (`<name>.Dockerfile`), verify onRebuild callback is called after build, test name validation, test legacy Dockerfile detection.
+- [x] 5b: Update system prompt in `systemprompt.go` — mention the `name` parameter and that Dockerfiles are stored as `.cpsl/<name>.Dockerfile`.
 
 ## Success Criteria
 

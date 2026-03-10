@@ -77,7 +77,8 @@ Runs git commands on the host in the project worktree (not inside the container)
 		b.WriteString(`
 
 ### devenv
-Manages the dev container's Dockerfile at .cpsl/Dockerfile.
+Manages dev container Dockerfiles at .cpsl/<name>.Dockerfile (e.g. .cpsl/go.Dockerfile).
+- Use the 'name' parameter to pick a descriptive name (e.g. "go", "python"). Defaults to "custom".
 - Read first to check existing state. Adapt the project root Dockerfile if one exists.
 - Write to create/update, then build to apply. Prefer Dockerfile over ad-hoc installs for persistent tooling.`)
 	}
