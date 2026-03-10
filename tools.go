@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,7 +74,11 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 		timeout = in.Timeout
 	}
 
-	result, err := t.container.Exec(in.Command, timeout)
+	// LLMs (notably Gemini) sometimes HTML-encode characters in tool args
+	// (e.g. && → &amp;&amp;). Unescape before execution.
+	command := html.UnescapeString(in.Command)
+
+	result, err := t.container.Exec(command, timeout)
 	if err != nil {
 		return "", err
 	}
