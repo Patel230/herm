@@ -204,6 +204,34 @@ func isWorktreeLocked(wtPath string) (bool, int) {
 	return true, pid
 }
 
+// ensureGitignoreLock ensures .cpsl-lock is listed in the repo's .gitignore.
+// If .gitignore exists, it appends .cpsl-lock if missing.
+// If .gitignore doesn't exist, it creates one with .cpsl-lock.
+func ensureGitignoreLock(repoRoot string) {
+	gitignorePath := filepath.Join(repoRoot, ".gitignore")
+	entry := ".cpsl-lock"
+
+	data, err := os.ReadFile(gitignorePath)
+	if err == nil {
+		// .gitignore exists — check if entry is already present.
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.TrimSpace(line) == entry {
+				return
+			}
+		}
+		// Append entry, ensuring a newline before it.
+		suffix := "\n" + entry + "\n"
+		if len(data) > 0 && data[len(data)-1] != '\n' {
+			suffix = "\n" + suffix
+		}
+		_ = os.WriteFile(gitignorePath, append(data, []byte(suffix)...), 0o644)
+		return
+	}
+
+	// No .gitignore — create one.
+	_ = os.WriteFile(gitignorePath, []byte(entry+"\n"), 0o644)
+}
+
 // isProcessAlive checks if a process with the given PID is running.
 func isProcessAlive(pid int) bool {
 	proc, err := os.FindProcess(pid)

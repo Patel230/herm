@@ -315,6 +315,92 @@ func TestWorktreeBaseDir(t *testing.T) {
 	}
 }
 
+func TestEnsureGitignoreLock_CreatesFile(t *testing.T) {
+	dir := t.TempDir()
+
+	ensureGitignoreLock(dir)
+
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != ".cpsl-lock\n" {
+		t.Errorf("expected '.cpsl-lock\\n', got %q", string(data))
+	}
+}
+
+func TestEnsureGitignoreLock_AppendsToExisting(t *testing.T) {
+	dir := t.TempDir()
+	existing := "node_modules/\n.env\n"
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ensureGitignoreLock(dir)
+
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if content != "node_modules/\n.env\n\n.cpsl-lock\n" {
+		t.Errorf("unexpected content: %q", content)
+	}
+}
+
+func TestEnsureGitignoreLock_AppendsToExistingNoTrailingNewline(t *testing.T) {
+	dir := t.TempDir()
+	existing := "node_modules/\n.env"
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ensureGitignoreLock(dir)
+
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if content != "node_modules/\n.env\n\n.cpsl-lock\n" {
+		t.Errorf("unexpected content: %q", content)
+	}
+}
+
+func TestEnsureGitignoreLock_AlreadyPresent(t *testing.T) {
+	dir := t.TempDir()
+	existing := "node_modules/\n.cpsl-lock\n.env\n"
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ensureGitignoreLock(dir)
+
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != existing {
+		t.Errorf("file should be unchanged, got %q", string(data))
+	}
+}
+
+func TestEnsureGitignoreLock_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+
+	ensureGitignoreLock(dir)
+	ensureGitignoreLock(dir)
+	ensureGitignoreLock(dir)
+
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != ".cpsl-lock\n" {
+		t.Errorf("expected single entry, got %q", string(data))
+	}
+}
+
 func TestNewUUID(t *testing.T) {
 	id, err := newUUID()
 	if err != nil {

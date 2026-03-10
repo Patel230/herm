@@ -29,7 +29,7 @@ import (
 const (
 	promptPrefix     = "❯ "
 	promptPrefixCols = 2
-	charLimit        = 250
+	charsPerToken    = 4 // rough estimate for context bar
 )
 
 // ─── Block and message types ───
@@ -677,6 +677,7 @@ func resolveWorkspaceCmd(cfg Config) workspaceMsg {
 
 	if repoRoot != "" && workspace != "" {
 		_ = lockWorktree(workspace, os.Getpid())
+		ensureGitignoreLock(repoRoot)
 	}
 
 	return workspaceMsg{worktreePath: workspace}
@@ -813,6 +814,7 @@ type App struct {
 	pendingToolCall  string
 	needsTextSep     bool
 	sessionCostUSD   float64
+	lastInputTokens  int // input tokens from most recent API call (context usage)
 	scratchpad       Scratchpad
 	lastModelID      string   // last model used, for detecting changes
 	subAgentBuf      string   // accumulates sub-agent streaming text
@@ -1088,12 +1090,12 @@ func (a *App) buildInputRows() []string {
 			costLabel = "  \033[2m" + costStr + "\033[0m"
 			costTextWidth = 2 + len(costStr) // 2 for leading spaces
 		}
-		totalChars := 0
-		for _, msg := range a.messages {
-			totalChars += len([]rune(msg.content))
+		contextTokens := a.lastInputTokens + len(a.input)/charsPerToken
+		contextWindow := 200000 // fallback
+		if m := findModelByID(a.models, a.config.resolveActiveModel(a.models)); m != nil {
+			contextWindow = m.ContextWindow
 		}
-		totalChars += len(a.input)
-		bar := progressBar(totalChars, charLimit)
+		bar := progressBar(contextTokens, contextWindow)
 		barWidth := 3
 		branchTextWidth := 0
 		if a.status.Branch != "" {
@@ -2780,6 +2782,7 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 	case EventUsage:
 		if event.Usage != nil {
 			a.sessionCostUSD += computeCost(a.models, event.Model, *event.Usage)
+			a.lastInputTokens = event.Usage.InputTokens + event.Usage.CacheReadInputTokens + event.Usage.CacheCreationInputTokens
 			a.renderInput()
 		}
 
