@@ -15,6 +15,7 @@ func TestRenderInlineMarkdown(t *testing.T) {
 		{"strikethrough", "this is ~~gone~~ text", "this is \033[9mgone\033[29m text"},
 		{"bold italic", "**bold and *italic* too**", "\033[1mbold and \033[3mitalic\033[23m too\033[22m"},
 		{"link", "[click](https://example.com)", "\033]8;;https://example.com\033\\\033[4mclick\033[24m\033]8;;\033\\"},
+		{"bracketed link", "[[1]](https://example.com)", "\033]8;;https://example.com\033\\\033[4m[1]\033[24m\033]8;;\033\\"},
 		{"no match single backtick", "it's fine", "it's fine"},
 		{"no match single star", "a * b", "a * b"},
 		{"preserves ansi", "\033[2mhello\033[0m", "\033[2mhello\033[0m"},

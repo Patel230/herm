@@ -133,10 +133,10 @@ func renderInlineMarkdown(s string) string {
 			}
 		}
 
-		// Link: [text](url)
+		// Link: [text](url) — search for ]( to support brackets in text like [[1]](url)
 		if b[i] == '[' {
-			closeBracket := indexByte(b, ']', i+1)
-			if closeBracket > i+1 && closeBracket+1 < n && b[closeBracket+1] == '(' {
+			closeBracket := indexPair(b, ']', '(', i+1)
+			if closeBracket > i+1 {
 				closeParen := indexByte(b, ')', closeBracket+2)
 				if closeParen > closeBracket+2 {
 					text := string(b[i+1 : closeBracket])
@@ -173,6 +173,16 @@ func isCSIFinal(c byte) bool {
 func indexByte(b []byte, target byte, start int) int {
 	for i := start; i < len(b); i++ {
 		if b[i] == target {
+			return i
+		}
+	}
+	return -1
+}
+
+// indexPair finds position of a followed by b (e.g. ']' '(' for link delimiter).
+func indexPair(buf []byte, a, b byte, start int) int {
+	for i := start; i+1 < len(buf); i++ {
+		if buf[i] == a && buf[i+1] == b {
 			return i
 		}
 	}
