@@ -2263,6 +2263,37 @@ func clipboardHasImage() bool {
 		strings.Contains(s, "GIFf") || strings.Contains(s, "JPEG")
 }
 
+// clipboardSaveImage writes macOS clipboard image data to a temp PNG file
+// under .cpsl/tmp/ and returns the file path.
+func (a *App) clipboardSaveImage() (string, error) {
+	tmpDir := filepath.Join(a.worktreePath, ".cpsl", "tmp")
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		return "", err
+	}
+	name := fmt.Sprintf("clipboard-%d.png", time.Now().UnixMilli())
+	path := filepath.Join(tmpDir, name)
+
+	script := fmt.Sprintf(`
+		set f to POSIX file %q
+		try
+			set img to the clipboard as «class PNGf»
+			set fh to open for access f with write permission
+			write img to fh
+			close access fh
+		on error
+			try
+				close access f
+			end try
+			error "no image on clipboard"
+		end try
+	`, path)
+	if err := exec.Command("osascript", "-e", script).Run(); err != nil {
+		os.Remove(path)
+		return "", err
+	}
+	return path, nil
+}
+
 func (a *App) handleApprovalByte(ch byte) {
 	switch ch {
 	case 'y', 'Y':
