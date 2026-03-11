@@ -62,7 +62,7 @@ When sending, `expandAttachments()` converts the message text + attachment place
 - [x] 3c: Detect clipboard image paste — when `handlePaste()` receives empty or non-path content AND `clipboardHasImage()` is true, call `clipboardSaveImage()`, then process the temp file as an attachment. This handles Cmd+V with a screenshot in the clipboard
 
 ## Phase 4: Multi-file and edge cases
-- [ ] 4a: Handle multiple file paths in a single paste (newline-separated paths from dragging multiple files)
+- [x] 4a: Handle multiple file paths in a single paste (newline-separated paths from dragging multiple files)
 - [ ] 4b: Add file size limit check — reject files over a reasonable limit (e.g. 20MB) with an error message in the input, since they'll be base64-encoded in the API payload
 - [ ] 4c: Add `.cpsl/tmp/` cleanup — delete temp clipboard images older than 24h on app startup
 

@@ -2198,7 +2198,8 @@ func (a *App) handlePaste(content string) {
 	// causing the cursor to jump to column 0 and overwrite visible text.
 	content = strings.ReplaceAll(content, "\r", "")
 
-	// Check if the pasted content is a file path (e.g. drag-and-drop from Finder).
+	// Check if the pasted content is file path(s) (e.g. drag-and-drop from Finder).
+	// Handles both single paths and multiple newline-separated paths.
 	trimmed := strings.TrimSpace(content)
 	if trimmed != "" {
 		if placeholder, ok := a.tryAttachFile(trimmed); ok {
@@ -2206,6 +2207,25 @@ func (a *App) handlePaste(content string) {
 			a.autocompleteIdx = 0
 			a.renderInput()
 			return
+		}
+		// Try as multiple newline-separated file paths.
+		if lines := strings.Split(trimmed, "\n"); len(lines) > 1 {
+			var placeholders []string
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				if p, ok := a.tryAttachFile(line); ok {
+					placeholders = append(placeholders, p)
+				}
+			}
+			if len(placeholders) > 0 {
+				a.insertText(strings.Join(placeholders, " "))
+				a.autocompleteIdx = 0
+				a.renderInput()
+				return
+			}
 		}
 	}
 
