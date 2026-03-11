@@ -49,7 +49,7 @@ When sending, `expandAttachments()` converts the message text + attachment place
 - [x] 1b: Add `isFilePath()` helper that checks if a pasted string looks like an absolute file path (starts with `/` or `~`, exists on disk)
 - [x] 1c: Add `isImageExt()` helper for image extensions (png, jpg, jpeg, gif, webp, bmp, tiff, svg)
 - [x] 1d: Add `mimeForExt()` helper that returns MIME type from file extension (image/png, image/jpeg, application/pdf, etc.)
-- [ ] 1e: Modify `handlePaste()` — before the existing collapse logic, check if the entire content (trimmed, unquoted if shell-escaped) is a valid file path. If so, read + base64-encode the file, store in `attachments`, and insert `[Image #N]` or `[File #N]` placeholder instead of the raw path. Handle shell-escaped paths (e.g. backslash-spaces from terminal drag-drop)
+- [x] 1e: Modify `handlePaste()` — before the existing collapse logic, check if the entire content (trimmed, unquoted if shell-escaped) is a valid file path. If so, read + base64-encode the file, store in `attachments`, and insert `[Image #N]` or `[File #N]` placeholder instead of the raw path. Handle shell-escaped paths (e.g. backslash-spaces from terminal drag-drop)
 
 ## Phase 2: Message expansion to content blocks
 - [ ] 2a: Add `expandAttachments()` function — takes message string + attachment store, splits on `[Image #N]` / `[File #N]` placeholders, returns either plain text (no attachments) or JSON content block array string. Text segments become `{"type":"text"}` blocks, attachments become `{"type":"image"}` or `{"type":"document"}` blocks

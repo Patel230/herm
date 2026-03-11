@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -2127,6 +2128,18 @@ func (a *App) handlePaste(content string) {
 	// Without this, \r in the input buffer is rendered literally by the terminal,
 	// causing the cursor to jump to column 0 and overwrite visible text.
 	content = strings.ReplaceAll(content, "\r", "")
+
+	// Check if the pasted content is a file path (e.g. drag-and-drop from Finder).
+	trimmed := strings.TrimSpace(content)
+	if trimmed != "" {
+		if placeholder, ok := a.tryAttachFile(trimmed); ok {
+			a.insertText(placeholder)
+			a.autocompleteIdx = 0
+			a.renderInput()
+			return
+		}
+	}
+
 	if len(content) >= a.config.PasteCollapseMinChars {
 		a.pasteCount++
 		if a.pasteStore == nil {
@@ -2138,6 +2151,34 @@ func (a *App) handlePaste(content string) {
 	a.insertText(content)
 	a.autocompleteIdx = 0
 	a.renderInput()
+}
+
+// tryAttachFile checks if s is a valid file path, reads and base64-encodes it,
+// stores it in the attachment map, and returns the placeholder string.
+func (a *App) tryAttachFile(s string) (string, bool) {
+	resolved, ok := isFilePath(s)
+	if !ok {
+		return "", false
+	}
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		return "", false
+	}
+	if a.attachments == nil {
+		a.attachments = make(map[int]Attachment)
+	}
+	a.attachmentCount++
+	isImg := isImageExt(resolved)
+	a.attachments[a.attachmentCount] = Attachment{
+		Path:      resolved,
+		MediaType: mimeForExt(resolved),
+		Data:      base64.StdEncoding.EncodeToString(data),
+		IsImage:   isImg,
+	}
+	if isImg {
+		return fmt.Sprintf("[Image #%d]", a.attachmentCount), true
+	}
+	return fmt.Sprintf("[File #%d]", a.attachmentCount), true
 }
 
 func (a *App) handleApprovalByte(ch byte) {
