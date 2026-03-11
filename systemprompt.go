@@ -89,13 +89,21 @@ Runs git commands on the host in the project worktree (not inside the container)
 		b.WriteString(fmt.Sprintf(`
 
 ### devenv
-Your primary tool for environment setup. Manages dev container Dockerfiles at .cpsl/<name>.Dockerfile. The built image replaces the running container and persists across sessions — this is how you install languages, tools, compilers, and system deps permanently.
-- This is the ONLY way to install tools persistently. Ad-hoc installs via bash are ephemeral. Always use devenv.
-- Workflow: read (check existing state) → write (create/update Dockerfile) → build (build image and hot-swap the container).
-- Use the 'name' parameter to pick a descriptive name (e.g. "go", "python", "node"). You can maintain multiple devenvs for different purposes.
-- If the project has a root Dockerfile, use it as a base. Check for dependency files (go.mod, package.json, requirements.txt) and include their install in the Dockerfile.
-- Build a devenv BEFORE trying to run code that needs tools not in the base image (%s). Detect what the project needs and build proactively — don't wait for errors.
-- Write correct Dockerfiles: use the right base image and package manager (apt-get for debian/ubuntu, apk for alpine). Combine RUN steps with &&.`, containerImage))
+Your primary tool for environment setup. Manages a single Dockerfile at .cpsl/Dockerfile. The built image replaces the running container and persists across sessions — this is how you install languages, tools, compilers, and system deps permanently.
+- ONE environment per project. There is exactly one Dockerfile. When adding new tools, extend it — never create a parallel one.
+- This is the ONLY way to install tools persistently. Ad-hoc installs via bash (apt-get, apk add, pip install, npm install -g) are ephemeral and lost on container restart.
+- Mandatory workflow: read → write → build. Never skip read.
+  - read: always do this first. See what base image and tools are already present.
+  - write: provide the COMPLETE Dockerfile. Keep everything already there, add what's new.
+  - build: apply the new image. The running container is hot-swapped.
+- Build proactively. Before running code that requires tools not in the current image (%s), use devenv first. Don't wait for errors.
+- Dockerfile rules that prevent build failures:
+  - Use a clean base image: debian:bookworm-slim or alpine:3. Install languages and tools explicitly via the distro package manager (apt-get or apk). This gives full control over versions and avoids conflicts when combining multiple runtimes.
+  - Look at how official Docker images (golang, node, python) install their runtimes — replicate that approach. Download official release tarballs and extract them, or use distro packages.
+  - Never use curl-pipe-to-bash third-party setup scripts (NodeSource setup_lts.x, rustup.sh, etc). They are fragile and break in non-interactive build environments.
+  - Combine related RUN steps: apt-get update && apt-get install -y ... && rm -rf /var/lib/apt/lists/*. Never split update and install across layers.
+  - Pin specific versions for reproducibility. Set WORKDIR /workspace.
+- If a build fails: read the error carefully, identify the specific failing RUN step, fix only that, then build again.`, containerImage))
 	}
 
 	if toolNames["scratchpad"] {
