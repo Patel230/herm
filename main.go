@@ -2209,6 +2209,20 @@ func (a *App) handlePaste(content string) {
 		}
 	}
 
+	// If the paste is empty and the clipboard has image data (e.g. screenshot),
+	// save the image to a temp file and attach it.
+	if trimmed == "" && clipboardHasImage() {
+		path, err := a.clipboardSaveImage()
+		if err == nil {
+			if placeholder, ok := a.tryAttachFile(path); ok {
+				a.insertText(placeholder)
+				a.autocompleteIdx = 0
+				a.renderInput()
+				return
+			}
+		}
+	}
+
 	if len(content) >= a.config.PasteCollapseMinChars {
 		a.pasteCount++
 		if a.pasteStore == nil {
