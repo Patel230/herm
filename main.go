@@ -564,6 +564,36 @@ func isImageExt(path string) bool {
 	return false
 }
 
+// mimeForExt returns the MIME type for a file based on its extension.
+func mimeForExt(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".bmp":
+		return "image/bmp"
+	case ".tiff":
+		return "image/tiff"
+	case ".svg":
+		return "image/svg+xml"
+	case ".pdf":
+		return "application/pdf"
+	case ".txt":
+		return "text/plain"
+	case ".json":
+		return "application/json"
+	case ".csv":
+		return "text/csv"
+	default:
+		return "application/octet-stream"
+	}
+}
+
 // ─── Tool result helpers ───
 
 func toolCallSummary(toolName string, input json.RawMessage) string {
