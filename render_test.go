@@ -63,7 +63,10 @@ func TestGetVisualLines(t *testing.T) {
 		{"empty", "", 80, 1},
 		{"short", "hi", 80, 1},
 		{"newline", "a\nb", 80, 2},
-		{"wrap", "abcdefgh", 5, 3}, // promptPrefixCols=2, first line fits 3, then 5, then remainder
+		{"char_wrap", "abcdefgh", 5, 3},            // no spaces → char wrap: "abc" | "defgh" | ""
+		{"word_wrap", "hello world", 10, 2},         // "hello " | "world"
+		{"word_wrap_multi", "a bc de", 5, 3},        // "a " | "bc " | "de"
+		{"long_word_fallback", "abcdefghij klm", 7, 3}, // "abcde" | "fghij " | "klm" (char then word)
 	}
 
 	for _, tt := range tests {
@@ -71,10 +74,55 @@ func TestGetVisualLines(t *testing.T) {
 			runes := []rune(tt.input)
 			got := getVisualLines(runes, len(runes), tt.width)
 			if len(got) != tt.want {
-				t.Errorf("getVisualLines(%q, w=%d) = %d lines, want %d",
-					tt.input, tt.width, len(got), tt.want)
+				t.Errorf("getVisualLines(%q, w=%d) = %d lines, want %d; lines=%+v",
+					tt.input, tt.width, len(got), tt.want, got)
 			}
 		})
+	}
+}
+
+func TestGetVisualLinesContent(t *testing.T) {
+	// Verify exact line breaks for word wrapping
+	input := []rune("hello world foo")
+	lines := getVisualLines(input, len(input), 12) // avail first=10, then 12
+	// "hello " (6) + prefix 2 = 8 < 12; "world " would push to 14 → wrap at space
+	// Expected: "hello " | "world foo"
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d: %+v", len(lines), lines)
+	}
+	line0 := string(input[lines[0].start : lines[0].start+lines[0].length])
+	line1 := string(input[lines[1].start : lines[1].start+lines[1].length])
+	if line0 != "hello " {
+		t.Errorf("line 0 = %q, want %q", line0, "hello ")
+	}
+	if line1 != "world foo" {
+		t.Errorf("line 1 = %q, want %q", line1, "world foo")
+	}
+}
+
+func TestCursorVisualPosWordWrap(t *testing.T) {
+	input := []rune("abc defg")
+	// width=7, prefix=2, avail first=5
+	// Word wrap: "abc " (4 chars, col 2+4=6 < 7), then 'd' makes 2+5=7 → wrap at space
+	// Line 0: {0, 4, 2} = "abc ", Line 1: {4, 4, 0} = "defg"
+
+	// Cursor on space (pos 3) → line 0, col 5
+	line, col := cursorVisualPos(input, 3, 7)
+	if line != 0 || col != 5 {
+		t.Errorf("cursor at space: got (%d,%d), want (0,5)", line, col)
+	}
+
+	// Cursor on 'd' (pos 4) → line 1, col 0
+	line, col = cursorVisualPos(input, 4, 7)
+	if line != 1 || col != 0 {
+		t.Errorf("cursor at 'd': got (%d,%d), want (1,0)", line, col)
+	}
+
+	// Cursor at newline boundary still works
+	input2 := []rune("ab\ncd")
+	line, col = cursorVisualPos(input2, 2, 80) // at '\n'
+	if line != 0 || col != 4 { // prefix 2 + 2 = 4
+		t.Errorf("cursor at newline: got (%d,%d), want (0,4)", line, col)
 	}
 }
 

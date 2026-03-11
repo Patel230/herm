@@ -122,11 +122,14 @@ type vline struct {
 
 // getVisualLines splits the input runes into visual lines, accounting for
 // the prompt prefix on the first line and terminal-width wrapping.
+// It prefers word boundaries (spaces) for wrapping, falling back to
+// character-level breaks for words longer than the available width.
 func getVisualLines(input []rune, cursor int, width int) []vline {
 	var lines []vline
 	start := 0
 	startCol := promptPrefixCols
 	length := 0
+	lastSpaceIdx := -1
 
 	for i, r := range input {
 		if r == '\n' {
@@ -134,14 +137,30 @@ func getVisualLines(input []rune, cursor int, width int) []vline {
 			start = i + 1
 			startCol = 0
 			length = 0
+			lastSpaceIdx = -1
 			continue
 		}
 		length++
+		if r == ' ' {
+			lastSpaceIdx = i
+		}
 		if startCol+length >= width {
-			lines = append(lines, vline{start, length, startCol})
-			start = i + 1
-			startCol = 0
-			length = 0
+			if lastSpaceIdx >= start {
+				// Word wrap: break after the last space
+				wrapLen := lastSpaceIdx - start + 1
+				lines = append(lines, vline{start, wrapLen, startCol})
+				start = lastSpaceIdx + 1
+				length = length - wrapLen
+				startCol = 0
+				lastSpaceIdx = -1
+			} else {
+				// No space found, fall back to character-level wrap
+				lines = append(lines, vline{start, length, startCol})
+				start = i + 1
+				startCol = 0
+				length = 0
+				lastSpaceIdx = -1
+			}
 		}
 	}
 	lines = append(lines, vline{start, length, startCol})
@@ -153,7 +172,9 @@ func cursorVisualPos(input []rune, cursor int, width int) (int, int) {
 	for i, vl := range vlines {
 		end := vl.start + vl.length
 		if cursor >= vl.start && cursor <= end {
-			if cursor == end && i < len(vlines)-1 && vl.startCol+vl.length >= width {
+			// At a line boundary: if this was a soft wrap (not a newline),
+			// the cursor belongs on the next line.
+			if cursor == end && i < len(vlines)-1 && (end >= len(input) || input[end] != '\n') {
 				continue
 			}
 			return i, vl.startCol + (cursor - vl.start)
@@ -435,24 +456,26 @@ func renderMessage(msg chatMessage) string {
 	if msg.leadBlank {
 		parts = append(parts, "")
 	}
+	// Strip carriage returns to prevent terminal cursor jumps that garble output.
+	content := strings.ReplaceAll(msg.content, "\r", "")
 	var rendered string
 	switch msg.kind {
 	case msgUser:
-		rendered = styledUserMsg(msg.content)
+		rendered = styledUserMsg(content)
 	case msgAssistant:
-		rendered = styledAssistantText(msg.content)
+		rendered = styledAssistantText(content)
 	case msgToolCall:
-		rendered = styledToolCall(msg.content)
+		rendered = styledToolCall(content)
 	case msgToolResult:
-		rendered = styledToolResult(msg.content, msg.isError)
+		rendered = styledToolResult(content, msg.isError)
 	case msgInfo:
-		rendered = styledInfo(msg.content)
+		rendered = styledInfo(content)
 	case msgSystemPrompt:
-		rendered = styledSystemPrompt(msg.content)
+		rendered = styledSystemPrompt(content)
 	case msgSuccess:
-		rendered = styledSuccess(msg.content)
+		rendered = styledSuccess(content)
 	case msgError:
-		rendered = styledError(msg.content)
+		rendered = styledError(content)
 	}
 	parts = append(parts, rendered)
 	return strings.Join(parts, "\n")
@@ -460,13 +483,24 @@ func renderMessage(msg chatMessage) string {
 
 // ─── Commands and autocomplete ───
 
-var commands = []string{"/branches", "/clear", "/config", "/model", "/shell", "/tree", "/worktrees"}
+var commands = []string{"/branches", "/clear", "/config", "/model", "/session", "/shell", "/worktrees"}
+var sessionSubcommands = []string{"/session list", "/session load", "/session show"}
 
 func filterCommands(prefix string) []string {
 	var matches []string
 	for _, cmd := range commands {
 		if strings.HasPrefix(cmd, prefix) {
 			matches = append(matches, cmd)
+		}
+	}
+	// Only show session subcommands when /session is the sole base match.
+	if len(matches) == 1 && matches[0] == "/session" {
+		matches = matches[:0]
+		all := append([]string{"/session"}, sessionSubcommands...)
+		for _, cmd := range all {
+			if strings.HasPrefix(cmd, prefix) {
+				matches = append(matches, cmd)
+			}
 		}
 	}
 	return matches
@@ -561,6 +595,10 @@ type containerReadyMsg struct {
 
 type containerErrMsg struct {
 	err error
+}
+
+type containerStatusMsg struct {
+	text string
 }
 
 type statusInfo struct {
@@ -665,14 +703,20 @@ func resolveWorkspaceCmd(cfg Config) workspaceMsg {
 	return workspaceMsg{worktreePath: cwd}
 }
 
-func bootContainerCmd(cfg Config, workspace string) any {
+func bootContainerCmd(cfg Config, workspace string, ch chan<- any) {
 	ccfg := cfg.containerConfig()
 	client := NewContainerClient(ccfg)
 
+	ch <- containerStatusMsg{text: "checking docker…"}
+
 	if !client.IsAvailable() {
-		return containerErrMsg{err: fmt.Errorf(
+		ch <- containerStatusMsg{text: "docker not running"}
+		ch <- containerErrMsg{err: fmt.Errorf(
 			"Docker is not running. Please start Docker Desktop and try again.")}
+		return
 	}
+
+	ch <- containerStatusMsg{text: "starting…"}
 
 	mounts := []MountSpec{{
 		Source:      workspace,
@@ -681,10 +725,12 @@ func bootContainerCmd(cfg Config, workspace string) any {
 	}}
 
 	if err := client.Start(workspace, mounts); err != nil {
-		return containerErrMsg{err: fmt.Errorf("starting container: %w", err)}
+		ch <- containerStatusMsg{text: "start failed"}
+		ch <- containerErrMsg{err: fmt.Errorf("starting container: %w", err)}
+		return
 	}
 
-	return containerReadyMsg{client: client, worktreePath: workspace}
+	ch <- containerReadyMsg{client: client, worktreePath: workspace}
 }
 
 func fetchStatusCmd(worktreePath string) statusInfoMsg {
@@ -780,8 +826,9 @@ type App struct {
 	sweLoaded        bool
 	container        *ContainerClient
 	worktreePath     string
-	containerReady   bool
-	containerErr     error
+	containerReady      bool
+	containerErr        error
+	containerStatusText string
 	status           statusInfo
 	modelCatalog     *langdag.ModelCatalog
 	langdagClient    *langdag.Client
@@ -1095,15 +1142,13 @@ func (a *App) buildInputRows() []string {
 		}
 		rows = append(rows, branchLabel+costLabel+strings.Repeat(" ", padding)+bar+" ")
 
-		// Line 2: container: <short-id> (only when container is ready)
-		if a.containerReady && a.container != nil {
-			if cid := a.container.ContainerID(); cid != "" {
-				shortID := cid
-				if len(shortID) > 12 {
-					shortID = shortID[:12]
-				}
-				rows = append(rows, "\033[2mcontainer: "+shortID+"\033[0m\033[K")
+		// Line 2: container status (always shown when we have status text)
+		if a.containerStatusText != "" {
+			style := "\033[2m" // dim
+			if a.containerErr != nil {
+				style = "\033[31m" // red
 			}
+			rows = append(rows, style+"container: "+a.containerStatusText+"\033[0m\033[K")
 		}
 
 		// Line 3: worktree: <name> (only when actually in a worktree)
@@ -2021,7 +2066,7 @@ func (a *App) handleEnter() {
 		return
 	}
 
-	val := strings.TrimSpace(a.inputValue())
+	val := strings.TrimSpace(strings.ReplaceAll(a.inputValue(), "\r", ""))
 	if val == "" {
 		return
 	}
@@ -2232,14 +2277,8 @@ func (a *App) handleCommand(input string) {
 	case "/shell":
 		a.enterShellMode()
 
-	case "/tree":
-		tree, err := a.buildConversationTree(context.Background())
-		if err != nil {
-			a.messages = append(a.messages, chatMessage{kind: msgError, content: err.Error()})
-		} else {
-			a.messages = append(a.messages, chatMessage{kind: msgInfo, content: tree})
-		}
-		a.render()
+	case "/session":
+		a.handleSessionCommand(input)
 
 	default:
 		a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Unknown command: %s", cmd)})
@@ -2274,10 +2313,14 @@ func (a *App) switchToWorktree(wtPath, name, branch string) {
 	// Reboot container with new workspace if container is ready.
 	if a.containerReady && a.container != nil {
 		a.containerReady = false
+		a.containerStatusText = "restarting…"
 		go func() {
+			a.resultCh <- containerStatusMsg{text: "stopping…"}
 			_ = a.container.Stop()
+			a.resultCh <- containerStatusMsg{text: "starting…"}
 			mounts := []MountSpec{{Source: wtPath, Destination: "/workspace"}}
 			if err := a.container.Start(wtPath, mounts); err != nil {
+				a.resultCh <- containerStatusMsg{text: "start failed"}
 				a.resultCh <- containerErrMsg{err: err}
 				return
 			}
@@ -2728,7 +2771,10 @@ func (a *App) startAgent(userMessage string) {
 				a.config.ContainerImage = imageName
 				_ = saveConfig(a.config)
 			}
-			tools = append(tools, NewDevEnvTool(a.container, cpslDir, a.worktreePath, mounts, projectID, onRebuild))
+			onStatus := func(text string) {
+				a.resultCh <- containerStatusMsg{text: text}
+			}
+			tools = append(tools, NewDevEnvTool(a.container, cpslDir, a.worktreePath, mounts, projectID, onRebuild, onStatus))
 		}
 	}
 	if a.worktreePath != "" {
@@ -3008,15 +3054,29 @@ func (a *App) handleResult(result any) {
 		cfg := a.config
 		wtPath := msg.worktreePath
 		go func() { a.resultCh <- fetchStatusCmd(wtPath) }()
-		go func() { a.resultCh <- bootContainerCmd(cfg, wtPath) }()
+		go func() { bootContainerCmd(cfg, wtPath, a.resultCh) }()
 
 	case containerReadyMsg:
 		a.container = msg.client
-		a.worktreePath = msg.worktreePath
+		if msg.worktreePath != "" {
+			a.worktreePath = msg.worktreePath
+		}
 		a.containerReady = true
+		a.containerErr = nil
+		if cid := msg.client.ContainerID(); cid != "" {
+			shortID := cid
+			if len(shortID) > 12 {
+				shortID = shortID[:12]
+			}
+			a.containerStatusText = shortID
+		}
+
+	case containerStatusMsg:
+		a.containerStatusText = msg.text
 
 	case containerErrMsg:
 		a.containerErr = msg.err
+		a.messages = append(a.messages, chatMessage{kind: msgError, content: msg.err.Error()})
 
 	case worktreeListMsg:
 		if msg.err != nil {
