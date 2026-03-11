@@ -2337,6 +2337,28 @@ func (a *App) clipboardSaveImage() (string, error) {
 	return path, nil
 }
 
+// cleanupTmpDir removes files in .cpsl/tmp/ older than 24 hours.
+func cleanupTmpDir(worktreePath string) {
+	tmpDir := filepath.Join(worktreePath, ".cpsl", "tmp")
+	entries, err := os.ReadDir(tmpDir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-24 * time.Hour)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			os.Remove(filepath.Join(tmpDir, e.Name()))
+		}
+	}
+}
+
 func (a *App) handleApprovalByte(ch byte) {
 	switch ch {
 	case 'y', 'Y':
@@ -3388,6 +3410,7 @@ func (a *App) handleResult(result any) {
 		wtPath := msg.worktreePath
 		go func() { a.resultCh <- fetchStatusCmd(wtPath) }()
 		go func() { bootContainerCmd(cfg, wtPath, a.resultCh) }()
+		go cleanupTmpDir(wtPath)
 
 	case containerReadyMsg:
 		a.container = msg.client
