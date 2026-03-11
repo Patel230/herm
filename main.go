@@ -595,6 +595,75 @@ func mimeForExt(path string) string {
 	}
 }
 
+// attachmentPlaceholderRe matches [Image #N] and [File #N] placeholders.
+var attachmentPlaceholderRe = regexp.MustCompile(`\[(Image|File) #(\d+)\]`)
+
+// expandAttachments takes a message string (already paste-expanded) and the
+// attachment store. If there are no attachment placeholders it returns the
+// string as-is. Otherwise it splits the text on placeholders and builds a JSON
+// content-block array: text segments become {"type":"text"} blocks, image
+// attachments become {"type":"image"} blocks, and file attachments become
+// {"type":"document"} blocks. The returned JSON string is understood by
+// langdag's contentToRawMessage() which passes arrays through as-is.
+func expandAttachments(s string, store map[int]Attachment) string {
+	if len(store) == 0 {
+		return s
+	}
+	locs := attachmentPlaceholderRe.FindAllStringSubmatchIndex(s, -1)
+	if len(locs) == 0 {
+		return s
+	}
+
+	type block map[string]string
+	var blocks []block
+
+	addText := func(t string) {
+		if t != "" {
+			blocks = append(blocks, block{"type": "text", "text": t})
+		}
+	}
+
+	prev := 0
+	for _, loc := range locs {
+		// loc[0..1] = full match, loc[2..3] = kind (Image/File), loc[4..5] = ID
+		addText(s[prev:loc[0]])
+		idStr := s[loc[4]:loc[5]]
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			addText(s[loc[0]:loc[1]])
+			prev = loc[1]
+			continue
+		}
+		att, ok := store[id]
+		if !ok {
+			addText(s[loc[0]:loc[1]])
+			prev = loc[1]
+			continue
+		}
+		if att.IsImage {
+			blocks = append(blocks, block{
+				"type":       "image",
+				"media_type": att.MediaType,
+				"data":       att.Data,
+			})
+		} else {
+			blocks = append(blocks, block{
+				"type":       "document",
+				"media_type": att.MediaType,
+				"data":       att.Data,
+			})
+		}
+		prev = loc[1]
+	}
+	addText(s[prev:])
+
+	out, err := json.Marshal(blocks)
+	if err != nil {
+		return s
+	}
+	return string(out)
+}
+
 // ─── Tool result helpers ───
 
 func toolCallSummary(toolName string, input json.RawMessage) string {
@@ -2247,17 +2316,22 @@ func (a *App) handleEnter() {
 		return
 	}
 
-	content := expandPastes(val, a.pasteStore)
+	display := expandPastes(val, a.pasteStore)
+	content := expandAttachments(display, a.attachments)
 	a.resetInput()
+	a.pasteStore = nil
+	a.pasteCount = 0
+	a.attachments = nil
+	a.attachmentCount = 0
 
 	if a.langdagClient == nil {
-		a.messages = append(a.messages, chatMessage{kind: msgUser, content: content, leadBlank: true})
+		a.messages = append(a.messages, chatMessage{kind: msgUser, content: display, leadBlank: true})
 		a.messages = append(a.messages, chatMessage{kind: msgError, content: "No API keys configured. Use /config to add a key first."})
 		a.render()
 		return
 	}
 
-	a.messages = append(a.messages, chatMessage{kind: msgUser, content: content, leadBlank: true})
+	a.messages = append(a.messages, chatMessage{kind: msgUser, content: display, leadBlank: true})
 	if !a.containerReady {
 		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Container is still starting — the agent won't have bash or file tools until it's ready."})
 	}

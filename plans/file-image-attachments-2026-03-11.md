@@ -52,9 +52,9 @@ When sending, `expandAttachments()` converts the message text + attachment place
 - [x] 1e: Modify `handlePaste()` — before the existing collapse logic, check if the entire content (trimmed, unquoted if shell-escaped) is a valid file path. If so, read + base64-encode the file, store in `attachments`, and insert `[Image #N]` or `[File #N]` placeholder instead of the raw path. Handle shell-escaped paths (e.g. backslash-spaces from terminal drag-drop)
 
 ## Phase 2: Message expansion to content blocks
-- [ ] 2a: Add `expandAttachments()` function — takes message string + attachment store, splits on `[Image #N]` / `[File #N]` placeholders, returns either plain text (no attachments) or JSON content block array string. Text segments become `{"type":"text"}` blocks, attachments become `{"type":"image"}` or `{"type":"document"}` blocks
-- [ ] 2b: Wire `expandAttachments()` into `handleEnter()` — after `expandPastes()`, call `expandAttachments()`. Pass the result to `startAgent()`. The display message (`chatMessage`) should still show the human-readable version with placeholders
-- [ ] 2c: Clear `attachments` and `attachmentCount` on `resetInput()` or after message send (similar to `pasteStore`)
+- [x] 2a: Add `expandAttachments()` function — takes message string + attachment store, splits on `[Image #N]` / `[File #N]` placeholders, returns either plain text (no attachments) or JSON content block array string. Text segments become `{"type":"text"}` blocks, attachments become `{"type":"image"}` or `{"type":"document"}` blocks
+- [x] 2b: Wire `expandAttachments()` into `handleEnter()` — after `expandPastes()`, call `expandAttachments()`. Pass the result to `startAgent()`. The display message (`chatMessage`) should still show the human-readable version with placeholders
+- [x] 2c: Clear `attachments` and `attachmentCount` on `resetInput()` or after message send (similar to `pasteStore`)
 
 ## Phase 3: Clipboard image paste (macOS)
 - [ ] 3a: Add `clipboardHasImage()` function — uses `osascript` to check if the clipboard contains image data (class `«class PNGf»` or similar)
