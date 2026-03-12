@@ -7,7 +7,7 @@ description: Use when the user wants to plan a task, feature, or change. Creates
 
 ## Plan Format
 
-1. Plans live at `plans/<plan-name>-<date>.md`
+1. Active plans live at `plans/<plan-name>-<date>.md`. Completed plans are archived to `plans/archive/`.
 2. Structure:
 
 	- Clear phases (numbered: 1, 2, 3...)

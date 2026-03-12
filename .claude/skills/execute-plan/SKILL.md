@@ -80,3 +80,7 @@ When pausing or completing, report:
 - **Next up**: What comes next
 - **Blockers**: Any issues encountered
 - **Plan location**: Path to the plan file
+
+## Plan Completion
+
+When all tasks in a plan are marked `- [x]`, the plan is complete. Run `/manage-plans` to archive it to `plans/archive/`.
