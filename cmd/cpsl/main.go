@@ -722,16 +722,25 @@ func toolCallSummary(toolName string, input json.RawMessage) string {
 func collapseToolResult(result string) string {
 	lines := strings.Split(result, "\n")
 	if len(lines) <= 4 {
-		return result
+		return compactLineNumbers(result)
 	}
 	if len(lines) == 5 {
 		// Show first 2 + last 3 (all 5, no ellipsis needed)
-		return strings.Join(lines[:2], "\n") + "\n" + strings.Join(lines[2:], "\n")
+		return compactLineNumbers(strings.Join(lines[:2], "\n") + "\n" + strings.Join(lines[2:], "\n"))
 	}
 	// >5: first 2 + ... + last 2
 	head := strings.Join(lines[:2], "\n")
 	tail := strings.Join(lines[len(lines)-2:], "\n")
-	return fmt.Sprintf("%s\n...\n%s", head, tail)
+	return compactLineNumbers(fmt.Sprintf("%s\n...\n%s", head, tail))
+}
+
+// catNPadRe matches cat-n style line numbers with leading whitespace (e.g. "     1\t").
+var catNPadRe = regexp.MustCompile(`(?m)^ +(\d+\t)`)
+
+// compactLineNumbers strips excess leading whitespace from cat-n style
+// line-numbered output (e.g. "     1\tcode" → "1\tcode") for display.
+func compactLineNumbers(s string) string {
+	return catNPadRe.ReplaceAllString(s, "$1")
 }
 
 // renderToolBox renders a tool call and its result as a bordered box:
