@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -378,6 +379,27 @@ func TestRenderToolBox(t *testing.T) {
 		}
 	})
 
+	t.Run("narrow terminal truncates long title", func(t *testing.T) {
+		// Title "~ bash -c 'very long command here'" is 35 chars, terminal is 20.
+		got := strip(renderToolBox("~ bash -c 'very long command here'", "ok", 20, false))
+		lines := strings.Split(got, "\n")
+		// All lines must fit within maxWidth.
+		for i, line := range lines {
+			if w := visibleWidth(line); w > 20 {
+				t.Errorf("line %d exceeds maxWidth 20: width=%d %q", i, w, line)
+			}
+		}
+		// Title should be truncated (contain ellipsis).
+		if !strings.Contains(lines[0], "…") {
+			t.Errorf("expected truncated title with ellipsis: %q", lines[0])
+		}
+		// Border widths should still match.
+		if visibleWidth(lines[0]) != visibleWidth(lines[len(lines)-1]) {
+			t.Errorf("border widths differ: top=%d, bottom=%d",
+				visibleWidth(lines[0]), visibleWidth(lines[len(lines)-1]))
+		}
+	})
+
 	t.Run("error variant uses red", func(t *testing.T) {
 		got := renderToolBox("~ bash", "error!", 80, true)
 		if !strings.Contains(got, "\033[31m") {
@@ -464,6 +486,100 @@ func TestBuildBlockRows_ToolBox(t *testing.T) {
 		}
 		if !hasRed {
 			t.Errorf("error tool result should have red styling")
+		}
+	})
+
+	t.Run("bash with long command", func(t *testing.T) {
+		app := &App{width: 60}
+		app.messages = []chatMessage{
+			{kind: msgToolCall, content: "~ $ find . -name '*.go' -exec grep -l 'func main' {} +", leadBlank: true},
+			{kind: msgToolResult, content: "./cmd/cpsl/main.go\n./cmd/debug/main.go\n./cmd/simple-chat/main.go"},
+		}
+		rows := app.buildBlockRows()
+		for _, r := range rows {
+			if w := visibleWidth(r); w > 60 {
+				t.Errorf("row exceeds terminal width 60: width=%d %q", w, strip(r))
+			}
+		}
+		// Should have top and bottom borders.
+		var hasTop, hasBottom bool
+		for _, r := range rows {
+			s := strip(r)
+			if strings.HasPrefix(s, "┌") {
+				hasTop = true
+			}
+			if strings.HasPrefix(s, "└") {
+				hasBottom = true
+			}
+		}
+		if !hasTop || !hasBottom {
+			t.Errorf("expected both borders: hasTop=%v hasBottom=%v", hasTop, hasBottom)
+		}
+	})
+
+	t.Run("glob with many files truncated", func(t *testing.T) {
+		// Simulate glob output with 20 files — should be collapsed to 5 lines.
+		var files []string
+		for i := 0; i < 20; i++ {
+			files = append(files, fmt.Sprintf("src/pkg/file_%02d.go", i))
+		}
+		collapsed := collapseToolResult(strings.Join(files, "\n"))
+		app := &App{width: 80}
+		app.messages = []chatMessage{
+			{kind: msgToolCall, content: "~ glob", leadBlank: true},
+			{kind: msgToolResult, content: collapsed},
+		}
+		rows := app.buildBlockRows()
+		// Count content rows (between borders).
+		var contentRows int
+		var inBox bool
+		for _, r := range rows {
+			s := strip(r)
+			if strings.HasPrefix(s, "┌") {
+				inBox = true
+				continue
+			}
+			if strings.HasPrefix(s, "└") {
+				inBox = false
+				continue
+			}
+			if inBox && s != "" {
+				contentRows++
+			}
+		}
+		if contentRows > 5 {
+			t.Errorf("expected at most 5 content lines, got %d", contentRows)
+		}
+	})
+
+	t.Run("error bash result with multiline output", func(t *testing.T) {
+		app := &App{width: 80}
+		app.messages = []chatMessage{
+			{kind: msgToolCall, content: "~ $ go build ./...", leadBlank: true},
+			{kind: msgToolResult, content: "# cpsl/cmd/cpsl\n./main.go:42:5: undefined: foo\n./main.go:43:5: undefined: bar", isError: true},
+		}
+		rows := app.buildBlockRows()
+		var hasRed, hasTop, hasContent bool
+		for _, r := range rows {
+			s := strip(r)
+			if strings.Contains(r, "\033[31m") {
+				hasRed = true
+			}
+			if strings.HasPrefix(s, "┌") {
+				hasTop = true
+			}
+			if strings.Contains(s, "undefined:") {
+				hasContent = true
+			}
+		}
+		if !hasRed {
+			t.Errorf("error result should have red styling")
+		}
+		if !hasTop {
+			t.Errorf("expected box top border")
+		}
+		if !hasContent {
+			t.Errorf("expected error content in output")
 		}
 	})
 }

@@ -101,9 +101,9 @@ Wire the box rendering into the existing message flow.
 
 ## Phase 4: Polish and edge cases
 
-- [ ] 4a: Ensure box borders wrap correctly when terminal is narrower than box width
-- [ ] 4b: Verify tool call display in `/usage` tree view is unaffected (it uses different rendering)
-- [ ] 4c: Test with real tool outputs: bash with long command, glob with many files, error results
+- [x] 4a: Ensure box borders wrap correctly when terminal is narrower than box width
+- [x] 4b: Verify tool call display in `/usage` tree view is unaffected (it uses different rendering)
+- [x] 4c: Test with real tool outputs: bash with long command, glob with many files, error results
 
 ## Success criteria
 

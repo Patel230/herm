@@ -758,8 +758,11 @@ func renderToolBox(title, content string, maxWidth int, isError bool) string {
 	if maxWidth > 0 && innerWidth > maxWidth-2 {
 		innerWidth = maxWidth - 2
 	}
-	if innerWidth < titleVW+2 {
-		innerWidth = titleVW + 2
+	// Truncate title if it doesn't fit within the capped inner width.
+	// The top border is "┌ title ─┐", so title needs innerWidth - 2 visible chars.
+	if maxTitleVW := innerWidth - 2; titleVW > maxTitleVW && maxTitleVW >= 0 {
+		title = truncateWithEllipsis(title, maxTitleVW)
+		titleVW = visibleWidth(title)
 	}
 
 	// Pick ANSI style for borders vs content.
