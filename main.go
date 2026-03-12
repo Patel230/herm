@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -967,6 +968,7 @@ type App struct {
 	readByte func() (byte, bool)
 
 	// Chat state
+	sessionID        string
 	messages         []chatMessage
 	config           Config
 	pasteCount       int
@@ -1037,10 +1039,15 @@ func newApp() *App {
 		log.Printf("warning: loading config: %v (using defaults)", err)
 	}
 
+	var sid [4]byte
+	_, _ = rand.Read(sid[:])
+	sessID := fmt.Sprintf("%08x", sid)
+
 	return &App{
-		config:   cfg,
-		resultCh: make(chan any, 16),
-		stopCh:   make(chan struct{}),
+		sessionID: sessID,
+		config:    cfg,
+		resultCh:  make(chan any, 16),
+		stopCh:    make(chan struct{}),
 	}
 }
 
@@ -2287,10 +2294,29 @@ func (a *App) tryAttachFile(s string) (string, bool) {
 		Data:      base64.StdEncoding.EncodeToString(data),
 		IsImage:   isImg,
 	}
+
+	// Copy file to host attachment dir for container mount.
+	if a.worktreePath != "" {
+		dir := a.attachmentDir()
+		if err := os.MkdirAll(dir, 0o755); err == nil {
+			dst := filepath.Join(dir, filepath.Base(resolved))
+			if _, err := os.Stat(dst); err == nil {
+				// Collision — prepend attachment ID.
+				dst = filepath.Join(dir, fmt.Sprintf("%d-%s", a.attachmentCount, filepath.Base(resolved)))
+			}
+			_ = os.WriteFile(dst, data, 0o644)
+		}
+	}
+
 	if isImg {
 		return fmt.Sprintf("[Image #%d]", a.attachmentCount), true
 	}
 	return fmt.Sprintf("[File #%d]", a.attachmentCount), true
+}
+
+// attachmentDir returns the host path for this session's attachment files.
+func (a *App) attachmentDir() string {
+	return filepath.Join(a.worktreePath, ".cpsl", "attachments", a.sessionID)
 }
 
 // clipboardHasImage checks if the macOS clipboard contains image data.

@@ -40,9 +40,9 @@ Copy attached files to `.cpsl/attachments/<sessionID>/` on the host, mount at `/
 - Only include this line when the bash tool is available (container is running)
 
 ## Phase 1: Session ID and attachment directory
-- [ ] 1a: Add `sessionID` field to `App` struct, generate 8 random hex chars in `newApp()` using `crypto/rand`
-- [ ] 1b: In `tryAttachFile()`, after storing the attachment in memory, copy the original file to `.cpsl/attachments/<sessionID>/` (create dir if needed, preserve original filename). Handle filename collisions by prepending the attachment ID
-- [ ] 1c: Add `attachmentDir()` helper on `App` that returns `filepath.Join(worktreePath, ".cpsl", "attachments", sessionID)` — used by mount construction and cleanup
+- [x] 1a: Add `sessionID` field to `App` struct, generate 8 random hex chars in `newApp()` using `crypto/rand`
+- [x] 1b: In `tryAttachFile()`, after storing the attachment in memory, copy the original file to `.cpsl/attachments/<sessionID>/` (create dir if needed, preserve original filename). Handle filename collisions by prepending the attachment ID
+- [x] 1c: Add `attachmentDir()` helper on `App` that returns `filepath.Join(worktreePath, ".cpsl", "attachments", sessionID)` — used by mount construction and cleanup
 
 ## Phase 2: Container mount wiring
 - [ ] 2a: In `bootContainerCmd()`, add the attachment mount to the mounts slice. The function receives `workspace` — derive the attachment dir from it using the session ID (pass session ID as parameter)
