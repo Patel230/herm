@@ -38,7 +38,7 @@ Add native tools (alongside bash) that the agent can use for common file operati
 - [x] 1d: **Update system prompt** — add tool-specific guidance: prefer Glob/Grep/Read over bash for file operations. Keep bash for running builds, tests, and commands that aren't file reads. Mirror Claude Code's approach: "Do NOT use Bash to run cat, head, tail, grep, find, rg when a dedicated tool exists."
 - [x] 1e: **Ensure container has required tools** — verify `rg` is in the base Dockerfile. If glob/grep/read tools depend on specific binaries, document them as devenv requirements. The devenv tool can fix missing tools.
   - Verified: `ripgrep` already in base Dockerfile (`apt-get install -y ... ripgrep`). All three tools use `rg` and `awk` — both present in base image.
-- [ ] 1f: **Test all three tools** — verify correct behavior in the Docker container context (paths relative to `/workspace`), edge cases (missing files, binary files, no matches, very large output), and output conciseness.
+- [x] 1f: **Test all three tools** — verify correct behavior in the Docker container context (paths relative to `/workspace`), edge cases (missing files, binary files, no matches, very large output), and output conciseness.
 
 **Key design decisions:**
 - Tools execute inside the Docker container (same as bash) — they send commands to the running container
