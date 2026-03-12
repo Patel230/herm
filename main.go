@@ -2650,11 +2650,23 @@ func (a *App) handleCommand(input string) {
 		a.menuAction = func(idx int) {
 			if idx >= 0 && idx < len(a.menuModels) {
 				selected := a.menuModels[idx]
-				a.config.ActiveModel = selected.ID
-				if err := saveConfig(a.config); err != nil {
-					a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error saving model: %v", err)})
+				a.projectConfig.ActiveModel = selected.ID
+				a.config = mergeConfigs(a.globalConfig, a.projectConfig)
+				if a.repoRoot != "" {
+					if err := saveProjectConfig(a.repoRoot, a.projectConfig); err != nil {
+						a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error saving model: %v", err)})
+					} else {
+						a.messages = append(a.messages, chatMessage{kind: msgSuccess, content: fmt.Sprintf("Model set to %s.", selected.ID)})
+					}
 				} else {
-					a.messages = append(a.messages, chatMessage{kind: msgSuccess, content: fmt.Sprintf("Model set to %s.", selected.ID)})
+					// No project context — save to global config
+					a.globalConfig.ActiveModel = selected.ID
+					a.config = mergeConfigs(a.globalConfig, a.projectConfig)
+					if err := saveConfig(a.globalConfig); err != nil {
+						a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error saving model: %v", err)})
+					} else {
+						a.messages = append(a.messages, chatMessage{kind: msgSuccess, content: fmt.Sprintf("Model set to %s.", selected.ID)})
+					}
 				}
 			}
 			a.menuLines = nil
