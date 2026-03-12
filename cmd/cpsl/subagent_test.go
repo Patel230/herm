@@ -277,3 +277,27 @@ func TestSubAgentToolForwardsEventsWithAgentID(t *testing.T) {
 		}
 	}
 }
+
+func TestTruncateSubAgentOutput(t *testing.T) {
+	// Short output — no truncation.
+	short := "hello world"
+	if got := truncateSubAgentOutput(short); got != short {
+		t.Errorf("short output should not be truncated, got %q", got)
+	}
+
+	// Output exactly at limit — no truncation.
+	exact := strings.Repeat("a", subAgentMaxOutputBytes)
+	if got := truncateSubAgentOutput(exact); got != exact {
+		t.Errorf("exact-limit output should not be truncated")
+	}
+
+	// Output over limit — should be truncated.
+	over := strings.Repeat("line\n", subAgentMaxOutputBytes/5+1)
+	got := truncateSubAgentOutput(over)
+	if len(got) > subAgentMaxOutputBytes+50 { // allow some margin for truncation note
+		t.Errorf("truncated output too large: %d bytes", len(got))
+	}
+	if !strings.HasSuffix(got, "[output truncated at 30KB]") {
+		t.Errorf("truncated output should end with truncation note, got suffix: %q", got[len(got)-40:])
+	}
+}

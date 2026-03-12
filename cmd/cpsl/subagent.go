@@ -120,7 +120,7 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 			if result == "" {
 				return "(sub-agent produced no output)", nil
 			}
-			return result, nil
+			return truncateSubAgentOutput(result), nil
 		case EventError:
 			if event.Error != nil && event.Error.Error() != "context canceled" {
 				// Continue — errors are informational in the event stream.
@@ -134,7 +134,25 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 	if result == "" {
 		return "(sub-agent produced no output)", nil
 	}
-	return result, nil
+	return truncateSubAgentOutput(result), nil
+}
+
+// subAgentMaxOutputBytes caps sub-agent output to prevent bloated tool results.
+// 30KB is enough for detailed summaries while keeping context manageable.
+const subAgentMaxOutputBytes = 30 * 1024
+
+// truncateSubAgentOutput trims output to subAgentMaxOutputBytes, cutting at
+// a line boundary and appending a truncation note.
+func truncateSubAgentOutput(s string) string {
+	if len(s) <= subAgentMaxOutputBytes {
+		return s
+	}
+	// Cut at the last newline before the limit.
+	cut := s[:subAgentMaxOutputBytes]
+	if i := strings.LastIndex(cut, "\n"); i > 0 {
+		cut = cut[:i]
+	}
+	return cut + "\n[output truncated at 30KB]"
 }
 
 const subAgentPreamble = `You are a sub-agent working on a specific task delegated by a parent orchestrator. Focus entirely on completing the assigned task. Be thorough but concise — your output will be returned to the parent agent as a tool result.

@@ -162,7 +162,8 @@ type grepInput struct {
 }
 
 // grepMaxLines is the maximum number of output lines returned by GrepTool.
-const grepMaxLines = 500
+// Kept low to encourage focused searches and reduce context usage.
+const grepMaxLines = 200
 
 func (t *GrepTool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
 	var in grepInput
@@ -285,7 +286,9 @@ type readFileInput struct {
 }
 
 // readFileDefaultLimit is the default maximum number of lines returned.
-const readFileDefaultLimit = 2000
+// Set to 500 to encourage targeted reads with offset/limit. Most code
+// files are readable at this length; larger files should be read in sections.
+const readFileDefaultLimit = 500
 
 // readFileMaxLineWidth truncates individual lines longer than this.
 const readFileMaxLineWidth = 2000
