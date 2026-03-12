@@ -90,6 +90,14 @@ func (c Config) resolveActiveModel(models []ModelDef) string {
 	return available[0].ID
 }
 
+// ProjectConfig holds per-project overrides loaded from <repo>/.cpsl/config.json.
+// Fields use omitempty so zero values mean "not overridden" (fall back to global).
+type ProjectConfig struct {
+	ActiveModel      string `json:"active_model,omitempty"`
+	Personality      string `json:"personality,omitempty"`
+	SubAgentMaxTurns int    `json:"sub_agent_max_turns,omitempty"`
+}
+
 const defaultContainerImage = "debian:bookworm-slim"
 
 func defaultConfig() Config {
@@ -203,5 +211,35 @@ func saveConfigTo(dir string, cfg Config) error {
 		return fmt.Errorf("marshaling config: %w", err)
 	}
 
+	return os.WriteFile(filepath.Join(cfgDir, configFile), data, 0o644)
+}
+
+// loadProjectConfig reads project-level overrides from <repoRoot>/.cpsl/config.json.
+// Returns an empty ProjectConfig if the file doesn't exist or is malformed.
+func loadProjectConfig(repoRoot string) ProjectConfig {
+	if repoRoot == "" {
+		return ProjectConfig{}
+	}
+	data, err := os.ReadFile(filepath.Join(repoRoot, configDir, configFile))
+	if err != nil {
+		return ProjectConfig{}
+	}
+	var pc ProjectConfig
+	if err := json.Unmarshal(data, &pc); err != nil {
+		return ProjectConfig{}
+	}
+	return pc
+}
+
+// saveProjectConfig writes project-level overrides to <repoRoot>/.cpsl/config.json.
+func saveProjectConfig(repoRoot string, pc ProjectConfig) error {
+	cfgDir := filepath.Join(repoRoot, configDir)
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		return fmt.Errorf("creating project config dir: %w", err)
+	}
+	data, err := json.MarshalIndent(pc, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling project config: %w", err)
+	}
 	return os.WriteFile(filepath.Join(cfgDir, configFile), data, 0o644)
 }
