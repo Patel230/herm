@@ -1064,6 +1064,7 @@ type App struct {
 	lastModelID      string   // last model used, for detecting changes
 	subAgentBuf      string   // accumulates sub-agent streaming text
 	subAgentLines    []string // completed lines from sub-agent output
+	containerImage   string   // runtime container image name (not persisted)
 
 	// Menu state (for inline menus below input - Phase 3)
 	menuLines        []string
@@ -3319,7 +3320,7 @@ func (a *App) startAgent(userMessage string) {
 	// Shared scratchpad for inter-agent communication.
 	tools = append(tools, NewScratchpadTool(&a.scratchpad))
 
-	containerImage := a.config.ContainerImage
+	containerImage := a.containerImage
 	if containerImage == "" {
 		containerImage = defaultContainerImage
 	}

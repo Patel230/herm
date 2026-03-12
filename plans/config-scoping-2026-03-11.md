@@ -114,7 +114,7 @@ Currently saves to global config. Change to: save to project config by default (
 
 ## Phase 2: Deterministic container image naming
 
-- [ ] 2a: Add `containerImage` field to App struct (runtime, not persisted). Update system prompt and sub-agent code to read from `a.containerImage` instead of `a.config.ContainerImage`
+- [x] 2a: Add `containerImage` field to App struct (runtime, not persisted). Update system prompt and sub-agent code to read from `a.containerImage` instead of `a.config.ContainerImage`
 - [ ] 2b: Update `buildContainerImage`: read Dockerfile content, compute SHA-256 hash, construct tag as `cpsl-<projectID[:8]>:<hash[:12]>`. Check image existence with `docker image inspect` before building. Remove `cfg Config` parameter (no longer needed)
 - [ ] 2c: Update `DevEnvTool.buildAndReplace` to use same hash-based naming
 - [ ] 2d: Update `bootContainerCmd`: no longer needs `cfg.containerConfig()` for initial image. Use `defaultContainerImage` as fallback only when build fails. Update `onRebuild` callback to set `a.containerImage` instead of saving to config
