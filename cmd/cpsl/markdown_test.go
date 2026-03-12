@@ -9,7 +9,7 @@ func TestRenderInlineMarkdown(t *testing.T) {
 		want string
 	}{
 		{"plain text", "hello world", "hello world"},
-		{"inline code", "run `echo hi`", "run \033[7m echo hi \033[27m"},
+		{"inline code", "run `echo hi`", "run \033[7mecho hi\033[27m"},
 		{"bold", "this is **bold** text", "this is \033[1mbold\033[22m text"},
 		{"italic", "this is *italic* text", "this is \033[3mitalic\033[23m text"},
 		{"strikethrough", "this is ~~gone~~ text", "this is \033[9mgone\033[29m text"},
@@ -19,10 +19,10 @@ func TestRenderInlineMarkdown(t *testing.T) {
 		{"no match single backtick", "it's fine", "it's fine"},
 		{"no match single star", "a * b", "a * b"},
 		{"preserves ansi", "\033[2mhello\033[0m", "\033[2mhello\033[0m"},
-		{"code protects content", "`**not bold**`", "\033[7m **not bold** \033[27m"},
+		{"code protects content", "`**not bold**`", "\033[7m**not bold**\033[27m"},
 		{"bullet list no italic", "* list item", "* list item"},
 		{"list with italic", "- check *this* out", "- check \033[3mthis\033[23m out"},
-		{"multiple inline code", "`a` and `b`", "\033[7m a \033[27m and \033[7m b \033[27m"},
+		{"multiple inline code", "`a` and `b`", "\033[7ma\033[27m and \033[7mb\033[27m"},
 		{"empty bold", "****", "****"},
 	}
 
@@ -52,7 +52,7 @@ func TestProcessMarkdownLine(t *testing.T) {
 		{"h1", "# Title", false, "\033[1;4mTitle\033[0m", false, false},
 		{"h2", "## Subtitle", false, "\033[1mSubtitle\033[0m", false, false},
 		{"h3", "### Section", false, "\033[1mSection\033[0m", false, false},
-		{"inline md outside code", "use `foo` here", false, "use \033[7m foo \033[27m here", false, false},
+		{"inline md outside code", "use `foo` here", false, "use \033[7mfoo\033[27m here", false, false},
 		{"no inline md in code block", "use `foo` here", true, "\033[48;5;236m\033[38;5;248muse `foo` here\033[0m", true, false},
 	}
 

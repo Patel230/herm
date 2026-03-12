@@ -587,7 +587,7 @@ func TestBuildBlockRows_ToolBox(t *testing.T) {
 func TestCompactLineNumbers(t *testing.T) {
 	t.Run("strips cat-n padding", func(t *testing.T) {
 		input := "     1\tmodule helloworld\n     2\t\n     3\tgo 1.18"
-		want := "1\tmodule helloworld\n2\t\n3\tgo 1.18"
+		want := "1 module helloworld\n2 \n3 go 1.18"
 		if got := compactLineNumbers(input); got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
@@ -602,7 +602,7 @@ func TestCompactLineNumbers(t *testing.T) {
 
 	t.Run("handles large line numbers", func(t *testing.T) {
 		input := "   998\tline998\n   999\tline999\n  1000\tline1000"
-		want := "998\tline998\n999\tline999\n1000\tline1000"
+		want := "998 line998\n999 line999\n1000 line1000"
 		if got := compactLineNumbers(input); got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
@@ -618,7 +618,7 @@ func TestCompactLineNumbers(t *testing.T) {
 		if strings.Contains(got, "     ") {
 			t.Errorf("collapsed result should not have wide padding: %q", got)
 		}
-		if !strings.Contains(got, "1\tline1") {
+		if !strings.Contains(got, "1 line1") {
 			t.Errorf("expected compacted line 1: %q", got)
 		}
 	})

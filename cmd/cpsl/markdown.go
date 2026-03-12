@@ -86,9 +86,9 @@ func renderInlineMarkdown(s string) string {
 			end := indexByte(b, '`', i+1)
 			if end > i+1 {
 				code := string(b[i+1 : end])
-				buf.WriteString("\033[7m ")
+				buf.WriteString("\033[7m")
 				buf.WriteString(code)
-				buf.WriteString(" \033[27m")
+				buf.WriteString("\033[27m")
 				i = end + 1
 				continue
 			}

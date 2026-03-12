@@ -741,12 +741,12 @@ func collapseToolResult(result string) string {
 }
 
 // catNPadRe matches cat-n style line numbers with leading whitespace (e.g. "     1\t").
-var catNPadRe = regexp.MustCompile(`(?m)^ +(\d+\t)`)
+var catNPadRe = regexp.MustCompile(`(?m)^ +(\d+)\t`)
 
 // compactLineNumbers strips excess leading whitespace from cat-n style
-// line-numbered output (e.g. "     1\tcode" → "1\tcode") for display.
+// line-numbered output (e.g. "     1\tcode" → "1 code") for display.
 func compactLineNumbers(s string) string {
-	return catNPadRe.ReplaceAllString(s, "$1")
+	return catNPadRe.ReplaceAllString(s, "$1 ")
 }
 
 // renderToolBox renders a tool call and its result as a bordered box:
