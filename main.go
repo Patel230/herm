@@ -730,6 +730,8 @@ type sweScoresMsg struct {
 	err    error
 }
 
+type ctrlCExpiredMsg struct{}
+
 type containerReadyMsg struct {
 	client       *ContainerClient
 	worktreePath string
@@ -1092,6 +1094,10 @@ type App struct {
 	promptLabel    string
 	promptCallback func(string) // called with entered text; nil when inactive
 
+	// Ctrl+C double-tap to exit
+	ctrlCTime time.Time // when last Ctrl+C was pressed (for double-tap detection)
+	ctrlCHint bool      // show "Press Ctrl-C again to exit" hint
+
 	// CLI flags
 	displaySystemPrompts bool
 }
@@ -1322,6 +1328,15 @@ func (a *App) buildInputRows() []string {
 	}
 
 	rows = append(rows, sep)
+
+	// Ctrl+C exit hint (below separator, above status)
+	if a.ctrlCHint {
+		ci := a.config.ThemeColor
+		if ci <= 0 || ci > 15 {
+			ci = 4
+		}
+		rows = append(rows, fmt.Sprintf("\033[1;38;5;%dmPress Ctrl-C again to exit\033[0m", ci))
+	}
 
 	// Autocomplete (shown below input)
 	hasAction := false
@@ -1837,9 +1852,36 @@ func (a *App) handleByte(ch byte, stdinCh chan byte, readByte func() (byte, bool
 		return false
 	}
 
-	// Ctrl+C / Ctrl+D
-	if ch == 3 || ch == 4 {
+	// Ctrl+D: immediate quit
+	if ch == 4 {
 		return true
+	}
+
+	// Ctrl+C: double-tap to exit, also clears input text
+	if ch == 3 {
+		// Second Ctrl+C within 2 seconds: quit
+		if a.ctrlCHint && time.Since(a.ctrlCTime) < 2*time.Second {
+			return true
+		}
+		// First Ctrl+C: clear input if any, show exit hint
+		a.input = nil
+		a.cursor = 0
+		a.ctrlCHint = true
+		a.ctrlCTime = time.Now()
+		a.renderInput()
+		// Schedule hint removal after 2 seconds
+		ch := a.resultCh
+		go func() {
+			time.Sleep(2 * time.Second)
+			ch <- ctrlCExpiredMsg{}
+		}()
+		return false
+	}
+
+	// Any other key clears the Ctrl+C hint
+	if a.ctrlCHint {
+		a.ctrlCHint = false
+		a.ctrlCTime = time.Time{}
 	}
 
 	// Handle approval mode
@@ -3486,6 +3528,15 @@ func (a *App) drainResults() {
 
 func (a *App) handleResult(result any) {
 	switch msg := result.(type) {
+	case ctrlCExpiredMsg:
+		_ = msg
+		if a.ctrlCHint {
+			a.ctrlCHint = false
+			a.ctrlCTime = time.Time{}
+			a.renderInput()
+		}
+		return
+
 	case sweScoresMsg:
 		a.sweLoaded = true
 		if msg.err == nil {
