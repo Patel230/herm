@@ -530,6 +530,64 @@ func TestSortColFromName(t *testing.T) {
 }
 
 
+// --- formatTokenCount tests ---
+
+func TestFormatTokenCountSmall(t *testing.T) {
+	if got := formatTokenCount(500); got != "500" {
+		t.Errorf("formatTokenCount(500) = %q, want 500", got)
+	}
+}
+
+func TestFormatTokenCountThousands(t *testing.T) {
+	if got := formatTokenCount(9999); got != "9999" {
+		t.Errorf("formatTokenCount(9999) = %q, want 9999", got)
+	}
+}
+
+func TestFormatTokenCountTenK(t *testing.T) {
+	if got := formatTokenCount(15000); got != "15k" {
+		t.Errorf("formatTokenCount(15000) = %q, want 15k", got)
+	}
+}
+
+func TestFormatTokenCountHundredK(t *testing.T) {
+	if got := formatTokenCount(150000); got != "150k" {
+		t.Errorf("formatTokenCount(150000) = %q, want 150k", got)
+	}
+}
+
+func TestFormatTokenCountMillions(t *testing.T) {
+	if got := formatTokenCount(1500000); got != "1.5m" {
+		t.Errorf("formatTokenCount(1500000) = %q, want 1.5m", got)
+	}
+}
+
+func TestFormatTokenCountExactMillion(t *testing.T) {
+	if got := formatTokenCount(2000000); got != "2m" {
+		t.Errorf("formatTokenCount(2000000) = %q, want 2m", got)
+	}
+}
+
+// --- formatBytes tests ---
+
+func TestFormatBytesSmall(t *testing.T) {
+	if got := formatBytes(500); got != "500B" {
+		t.Errorf("formatBytes(500) = %q, want 500B", got)
+	}
+}
+
+func TestFormatBytesKilobytes(t *testing.T) {
+	if got := formatBytes(15000); got != "15KB" {
+		t.Errorf("formatBytes(15000) = %q, want 15KB", got)
+	}
+}
+
+func TestFormatBytesMegabytes(t *testing.T) {
+	if got := formatBytes(1500000); got != "1.5MB" {
+		t.Errorf("formatBytes(1500000) = %q, want 1.5MB", got)
+	}
+}
+
 // --- computeCost tests ---
 
 func TestComputeCostStandardTokens(t *testing.T) {

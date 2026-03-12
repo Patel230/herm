@@ -512,7 +512,7 @@ func renderMessage(msg chatMessage) string {
 
 // ─── Commands and autocomplete ───
 
-var commands = []string{"/branches", "/clear", "/compact", "/config", "/model", "/session", "/shell", "/worktrees"}
+var commands = []string{"/branches", "/clear", "/compact", "/config", "/model", "/session", "/shell", "/usage", "/worktrees"}
 var sessionSubcommands = []string{"/session list", "/session load", "/session show"}
 
 func filterCommands(prefix string) []string {
@@ -1082,6 +1082,8 @@ type App struct {
 	containerReady      bool
 	containerErr        error
 	containerStatusText string
+	configReady         bool // true after workspace/project config has been merged
+	shownInitialModel   bool // true after the startup model line has been displayed
 	status           statusInfo
 	modelCatalog     *langdag.ModelCatalog
 	langdagClient    *langdag.Client
@@ -1095,8 +1097,14 @@ type App struct {
 	streamingText    string
 	pendingToolCall  string
 	needsTextSep     bool
-	sessionCostUSD   float64
-	lastInputTokens  int // input tokens from most recent API call (context usage)
+	sessionCostUSD      float64
+	lastInputTokens    int // input tokens from most recent API call (context usage)
+	sessionInputTokens  int // cumulative input tokens this session
+	sessionOutputTokens int // cumulative output tokens this session
+	sessionCacheRead    int // cumulative cache read tokens this session
+	sessionLLMCalls     int // number of LLM API calls this session
+	sessionToolResults  int // count of tool results this session
+	sessionToolBytes    int // cumulative tool result bytes this session
 	scratchpad       Scratchpad
 	lastModelID      string   // last model used, for detecting changes
 	subAgentBuf      string   // accumulates sub-agent streaming text
@@ -2783,6 +2791,9 @@ func (a *App) handleCommand(input string) {
 	case "/session":
 		a.handleSessionCommand(input)
 
+	case "/usage":
+		a.handleUsageCommand()
+
 	default:
 		a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Unknown command: %s", cmd)})
 		a.render()
@@ -2830,6 +2841,71 @@ func (a *App) handleCompactCommand(input string) {
 		kind:    msgSuccess,
 		content: fmt.Sprintf("Compacted: %d nodes → summary + %d recent nodes", result.OriginalNodes, result.KeptNodes),
 	})
+	a.render()
+}
+
+// handleUsageCommand shows session and conversation token usage statistics.
+func (a *App) handleUsageCommand() {
+	var b strings.Builder
+
+	b.WriteString("Session Usage\n")
+	b.WriteString(fmt.Sprintf("  LLM calls:     %d\n", a.sessionLLMCalls))
+	b.WriteString(fmt.Sprintf("  Input tokens:  %s\n", formatTokenCount(a.sessionInputTokens)))
+	b.WriteString(fmt.Sprintf("  Output tokens: %s\n", formatTokenCount(a.sessionOutputTokens)))
+	if a.sessionCacheRead > 0 {
+		b.WriteString(fmt.Sprintf("  Cache read:    %s\n", formatTokenCount(a.sessionCacheRead)))
+	}
+	b.WriteString(fmt.Sprintf("  Cost:          %s\n", formatCost(a.sessionCostUSD)))
+	b.WriteString(fmt.Sprintf("  Tool calls:    %d (%s result data)\n", a.sessionToolResults, formatBytes(a.sessionToolBytes)))
+	toolTokenEst := a.sessionToolBytes / charsPerToken
+	if a.sessionInputTokens > 0 && toolTokenEst > 0 {
+		pct := float64(toolTokenEst) * 100 / float64(a.sessionInputTokens)
+		b.WriteString(fmt.Sprintf("  Tool tokens:   ~%s (%.0f%% of input)\n", formatTokenCount(toolTokenEst), pct))
+	}
+
+	// Conversation breakdown from the node tree.
+	if a.langdagClient != nil && a.agentNodeID != "" {
+		ancestors, err := a.langdagClient.GetAncestors(context.Background(), a.agentNodeID)
+		if err == nil && len(ancestors) > 0 {
+			b.WriteString("\nConversation (" + fmt.Sprintf("%d nodes", len(ancestors)) + ")\n")
+			var convIn, convOut, convCacheRead int
+			var convCost float64
+			var toolResultBytes int
+			var toolResultCount int
+			for _, n := range ancestors {
+				convIn += n.TokensIn
+				convOut += n.TokensOut
+				convCacheRead += n.TokensCacheRead
+				convCost += a.nodeCost(n)
+				if n.NodeType == types.NodeTypeUser && isToolResultContent(n.Content) {
+					toolResultBytes += len(n.Content)
+					toolResultCount++
+				}
+			}
+			b.WriteString(fmt.Sprintf("  Input tokens:  %s\n", formatTokenCount(convIn)))
+			b.WriteString(fmt.Sprintf("  Output tokens: %s\n", formatTokenCount(convOut)))
+			if convCacheRead > 0 {
+				b.WriteString(fmt.Sprintf("  Cache read:    %s\n", formatTokenCount(convCacheRead)))
+			}
+			b.WriteString(fmt.Sprintf("  Cost:          %s\n", formatCost(convCost)))
+			if toolResultCount > 0 {
+				b.WriteString(fmt.Sprintf("  Tool results:  %d (%s stored)\n", toolResultCount, formatBytes(toolResultBytes)))
+			}
+		}
+	}
+
+	// Context window status.
+	contextWindow := 0
+	if m := findModelByID(a.models, a.config.resolveActiveModel(a.models)); m != nil {
+		contextWindow = m.ContextWindow
+	}
+	if contextWindow > 0 && a.lastInputTokens > 0 {
+		pct := float64(a.lastInputTokens) * 100 / float64(contextWindow)
+		b.WriteString(fmt.Sprintf("\nContext: %s / %s (%.0f%%)\n",
+			formatTokenCount(a.lastInputTokens), formatContextWindow(contextWindow), pct))
+	}
+
+	a.messages = append(a.messages, chatMessage{kind: msgInfo, content: b.String()})
 	a.render()
 }
 
@@ -3478,8 +3554,23 @@ func (a *App) showModelChange(modelID string) {
 	if modelID == "" || modelID == a.lastModelID {
 		return
 	}
-	a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Using " + modelID})
+	explorationID := a.config.resolveExplorationModel(a.models)
+	line := "Using " + modelID
+	if explorationID != "" && explorationID != modelID {
+		line += "  exploration: " + explorationID
+	}
+	a.messages = append(a.messages, chatMessage{kind: msgInfo, content: line})
 	a.lastModelID = modelID
+}
+
+// maybeShowInitialModels shows the startup model line once both the model
+// catalog and the project config have loaded, preventing a double display.
+func (a *App) maybeShowInitialModels() {
+	if a.shownInitialModel || !a.configReady || a.models == nil {
+		return
+	}
+	a.shownInitialModel = true
+	a.showModelChange(a.config.resolveActiveModel(a.models))
 }
 
 func (a *App) startAgent(userMessage string) {
@@ -3663,6 +3754,8 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 		debugLog("tool_result: err=%v result=%q", event.IsError, truncateForLog(event.ToolResult, 500))
 		result := collapseToolResult(event.ToolResult)
 		a.needsTextSep = true
+		a.sessionToolResults++
+		a.sessionToolBytes += len(event.ToolResult)
 		a.messages = append(a.messages, chatMessage{kind: msgToolResult, content: result, isError: event.IsError})
 		a.render()
 
@@ -3670,6 +3763,10 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 		if event.Usage != nil {
 			a.sessionCostUSD += computeCost(a.models, event.Model, *event.Usage)
 			a.lastInputTokens = event.Usage.InputTokens + event.Usage.CacheReadInputTokens + event.Usage.CacheCreationInputTokens
+			a.sessionInputTokens += event.Usage.InputTokens
+			a.sessionOutputTokens += event.Usage.OutputTokens
+			a.sessionCacheRead += event.Usage.CacheReadInputTokens
+			a.sessionLLMCalls++
 			a.renderInput()
 		}
 
@@ -3810,7 +3907,7 @@ func (a *App) handleResult(result any) {
 			if a.sweLoaded && a.sweScores != nil {
 				matchSWEScores(a.models, a.sweScores)
 			}
-			a.showModelChange(a.config.resolveActiveModel(a.models))
+			a.maybeShowInitialModels()
 		}
 
 	case langdagReadyMsg:
@@ -3829,8 +3926,10 @@ func (a *App) handleResult(result any) {
 		a.repoRoot = msg.worktreePath
 		a.projectConfig = loadProjectConfig(a.repoRoot)
 		a.config = mergeConfigs(a.globalConfig, a.projectConfig)
+		a.configReady = true
 		a.history = newHistory(msg.worktreePath, a.config.effectiveMaxHistory())
 		a.history.Load()
+		a.maybeShowInitialModels()
 		wtPath := msg.worktreePath
 		go func() { a.resultCh <- fetchStatusCmd(wtPath) }()
 		go func() { bootContainerCmd(wtPath, a.sessionID, a.resultCh) }()

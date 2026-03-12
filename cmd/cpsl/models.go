@@ -295,6 +295,36 @@ func formatCost(cost float64) string {
 	}
 }
 
+// formatTokenCount formats a token count for compact display.
+// Examples: 1234 → "1,234", 150000 → "150k", 1500000 → "1.5m".
+func formatTokenCount(tokens int) string {
+	switch {
+	case tokens >= 1_000_000:
+		v := float64(tokens) / 1_000_000
+		if v == float64(int(v)) {
+			return fmt.Sprintf("%dm", int(v))
+		}
+		return fmt.Sprintf("%.1fm", v)
+	case tokens >= 10_000:
+		return fmt.Sprintf("%dk", tokens/1000)
+	default:
+		return fmt.Sprintf("%d", tokens)
+	}
+}
+
+// formatBytes formats a byte count for compact display.
+// Examples: 500 → "500B", 15360 → "15KB", 1572864 → "1.5MB".
+func formatBytes(bytes int) string {
+	switch {
+	case bytes >= 1_000_000:
+		return fmt.Sprintf("%.1fMB", float64(bytes)/1_000_000)
+	case bytes >= 1_000:
+		return fmt.Sprintf("%dKB", bytes/1000)
+	default:
+		return fmt.Sprintf("%dB", bytes)
+	}
+}
+
 // SWE-bench leaderboard types
 
 const sweBenchURL = "https://raw.githubusercontent.com/SWE-bench/swe-bench.github.io/master/data/leaderboards.json"
