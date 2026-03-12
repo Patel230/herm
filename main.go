@@ -395,13 +395,9 @@ func writeRows(buf *strings.Builder, rows []string, from int) {
 
 // ─── Logo ───
 
-// buildLogo returns the logo lines colored with an ANSI indexed color (0-15)
-// from the user's terminal theme.
-func buildLogo(colorIndex int) []string {
-	if colorIndex <= 0 || colorIndex > 15 {
-		colorIndex = 4 // default: terminal blue
-	}
-	c := fmt.Sprintf("\033[38;5;%dm", colorIndex)
+// buildLogo returns the logo lines colored with terminal blue.
+func buildLogo() []string {
+	c := fmt.Sprintf("\033[38;5;%dm", 4) // ANSI blue
 	rst := "\033[0m"
 	return []string{
 		"",
@@ -1124,7 +1120,7 @@ func newApp() *App {
 
 func (a *App) buildBlockRows() []string {
 	var rows []string
-	rows = append(rows, buildLogo(a.config.ThemeColor)...)
+	rows = append(rows, buildLogo()...)
 	inCodeBlock := false
 	for i, msg := range a.messages {
 		rendered := renderMessage(msg)
@@ -1331,11 +1327,7 @@ func (a *App) buildInputRows() []string {
 
 	// Ctrl+C exit hint (below separator, above status)
 	if a.ctrlCHint {
-		ci := a.config.ThemeColor
-		if ci <= 0 || ci > 15 {
-			ci = 4
-		}
-		rows = append(rows, fmt.Sprintf("\033[1;38;5;%dmPress Ctrl-C again to exit\033[0m", ci))
+		rows = append(rows, fmt.Sprintf("\033[1;38;5;%dmPress Ctrl-C again to exit\033[0m", 4))
 	}
 
 	// Autocomplete (shown below input)

@@ -109,8 +109,8 @@ Currently saves to global config. Change to: save to project config by default (
 
 ## Phase 1: Remove ThemeColor
 
-- [ ] 1a: Remove `ThemeColor` field from Config struct. Update `buildLogo` to hardcode default color (4, blue). Remove `theme_color` from JSON serialization
-- [ ] 1b: Update config tests if any reference ThemeColor
+- [x] 1a: Remove `ThemeColor` field from Config struct. Update `buildLogo` to hardcode default color (4, blue). Remove `theme_color` from JSON serialization
+- [x] 1b: Update config tests if any reference ThemeColor
 
 ## Phase 2: Deterministic container image naming
 
