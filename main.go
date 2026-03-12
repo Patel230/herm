@@ -2864,11 +2864,12 @@ func maskKey(key string) string {
 var cfgTabNames = []string{"API Keys", "Global", "Project"}
 
 type cfgField struct {
-	label   string
-	get     func(Config) string
-	display func(Config) string    // masked display; nil means use get
-	set     func(*Config, string)
-	toggle  func(*Config)          // if non-nil, Enter toggles instead of opening editor
+	label      string
+	get        func(Config) string
+	display    func(Config) string    // masked display; nil means use get
+	set        func(*Config, string)
+	toggle     func(*Config)          // if non-nil, Enter toggles instead of opening editor
+	globalHint func(Config) string    // if set, shows "(global: X)" when field value is empty
 }
 
 var cfgTabFields = [][]cfgField{
@@ -2933,14 +2934,16 @@ func (a *App) cfgCurrentFields() []cfgField {
 func (a *App) projectTabFields() []cfgField {
 	return []cfgField{
 		{
-			label: "Active Model",
-			get:   func(_ Config) string { return a.cfgProjectDraft.ActiveModel },
-			set:   func(_ *Config, v string) { a.cfgProjectDraft.ActiveModel = v },
+			label:      "Active Model",
+			get:        func(_ Config) string { return a.cfgProjectDraft.ActiveModel },
+			set:        func(_ *Config, v string) { a.cfgProjectDraft.ActiveModel = v },
+			globalHint: func(c Config) string { return c.ActiveModel },
 		},
 		{
-			label: "Personality",
-			get:   func(_ Config) string { return a.cfgProjectDraft.Personality },
-			set:   func(_ *Config, v string) { a.cfgProjectDraft.Personality = v },
+			label:      "Personality",
+			get:        func(_ Config) string { return a.cfgProjectDraft.Personality },
+			set:        func(_ *Config, v string) { a.cfgProjectDraft.Personality = v },
+			globalHint: func(c Config) string { return c.Personality },
 		},
 		{
 			label: "Sub-Agent Max Turns",
@@ -2956,6 +2959,13 @@ func (a *App) projectTabFields() []cfgField {
 				} else {
 					a.cfgProjectDraft.SubAgentMaxTurns = 0
 				}
+			},
+			globalHint: func(c Config) string {
+				n := c.SubAgentMaxTurns
+				if n <= 0 {
+					n = 15
+				}
+				return strconv.Itoa(n)
 			},
 		},
 	}
@@ -2990,7 +3000,15 @@ func (a *App) buildConfigRows() []string {
 				val = f.get(a.cfgDraft)
 			}
 			if val == "" {
-				val = "(not set)"
+				if f.globalHint != nil {
+					hint := f.globalHint(a.cfgDraft)
+					if hint == "" {
+						hint = "not set"
+					}
+					val = fmt.Sprintf("(global: %s)", hint)
+				} else {
+					val = "(not set)"
+				}
 			}
 			if i == a.cfgCursor {
 				rows = append(rows, fmt.Sprintf("\033[36;1m%s: %s ◆\033[0m", f.label, val))

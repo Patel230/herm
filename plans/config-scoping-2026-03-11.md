@@ -132,7 +132,7 @@ Currently saves to global config. Change to: save to project config by default (
 ## Phase 4: Config UI restructure
 
 - [x] 4a: Add third tab "Project" to cfgTabNames and cfgTabFields. Rename "Settings" to "Global"
-- [ ] 4b: Move overridable fields to Project tab: Active Model (new), Personality, Sub-Agent Max Turns. Show "(global: X)" hint when field is not overridden. Keep global defaults for these in Global tab
+- [x] 4b: Move overridable fields to Project tab: Active Model (new), Personality, Sub-Agent Max Turns. Show "(global: X)" hint when field is not overridden. Keep global defaults for these in Global tab
 - [ ] 4c: Update `exitConfigMode` save logic: write global fields to `~/.cpsl/config.json`, project fields to `<repo>/.cpsl/config.json`. Recompute merged config after save
 - [ ] 4d: Handle no-repo-root case: Project tab shows "no project detected" and fields are non-editable
 - [ ] 4e: Update config UI tests
