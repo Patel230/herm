@@ -92,7 +92,7 @@ func (c Config) resolveActiveModel(models []ModelDef) string {
 	return available[0].ID
 }
 
-const defaultContainerImage = "alpine:latest"
+const defaultContainerImage = "debian:bookworm-slim"
 
 func defaultConfig() Config {
 	return Config{
