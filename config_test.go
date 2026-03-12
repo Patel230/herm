@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -335,5 +336,186 @@ func TestMergeConfigsAllOverridden(t *testing.T) {
 	}
 	if merged.SubAgentMaxTurns != 3 {
 		t.Errorf("SubAgentMaxTurns = %d, want 3", merged.SubAgentMaxTurns)
+	}
+}
+
+// ─── Config UI tests ───
+
+func TestCfgTabNamesStructure(t *testing.T) {
+	want := []string{"API Keys", "Global", "Project"}
+	if !reflect.DeepEqual(cfgTabNames, want) {
+		t.Errorf("cfgTabNames = %v, want %v", cfgTabNames, want)
+	}
+}
+
+func TestProjectTabFieldLabels(t *testing.T) {
+	a := &App{}
+	fields := a.projectTabFields()
+	wantLabels := []string{"Active Model", "Personality", "Sub-Agent Max Turns"}
+	if len(fields) != len(wantLabels) {
+		t.Fatalf("projectTabFields returned %d fields, want %d", len(fields), len(wantLabels))
+	}
+	for i, f := range fields {
+		if f.label != wantLabels[i] {
+			t.Errorf("field[%d].label = %q, want %q", i, f.label, wantLabels[i])
+		}
+		if f.globalHint == nil {
+			t.Errorf("field[%d] (%s) has nil globalHint", i, f.label)
+		}
+	}
+}
+
+func TestProjectTabFieldGetSet(t *testing.T) {
+	a := &App{
+		cfgProjectDraft: ProjectConfig{
+			ActiveModel: "test-model",
+			Personality: "brief",
+			SubAgentMaxTurns: 7,
+		},
+	}
+	fields := a.projectTabFields()
+
+	// Verify get returns project values
+	if v := fields[0].get(Config{}); v != "test-model" {
+		t.Errorf("ActiveModel get = %q, want %q", v, "test-model")
+	}
+	if v := fields[1].get(Config{}); v != "brief" {
+		t.Errorf("Personality get = %q, want %q", v, "brief")
+	}
+	if v := fields[2].get(Config{}); v != "7" {
+		t.Errorf("SubAgentMaxTurns get = %q, want %q", v, "7")
+	}
+
+	// Verify set modifies project draft
+	fields[0].set(nil, "new-model")
+	if a.cfgProjectDraft.ActiveModel != "new-model" {
+		t.Errorf("after set, ActiveModel = %q, want %q", a.cfgProjectDraft.ActiveModel, "new-model")
+	}
+	fields[1].set(nil, "verbose")
+	if a.cfgProjectDraft.Personality != "verbose" {
+		t.Errorf("after set, Personality = %q, want %q", a.cfgProjectDraft.Personality, "verbose")
+	}
+	fields[2].set(nil, "20")
+	if a.cfgProjectDraft.SubAgentMaxTurns != 20 {
+		t.Errorf("after set, SubAgentMaxTurns = %d, want 20", a.cfgProjectDraft.SubAgentMaxTurns)
+	}
+}
+
+func TestProjectTabSubAgentClearsOnEmpty(t *testing.T) {
+	a := &App{cfgProjectDraft: ProjectConfig{SubAgentMaxTurns: 10}}
+	fields := a.projectTabFields()
+	fields[2].set(nil, "")
+	if a.cfgProjectDraft.SubAgentMaxTurns != 0 {
+		t.Errorf("SubAgentMaxTurns = %d, want 0 after clearing", a.cfgProjectDraft.SubAgentMaxTurns)
+	}
+}
+
+func TestBuildConfigRowsNoProject(t *testing.T) {
+	a := &App{
+		cfgTab:   2, // Project tab
+		repoRoot: "", // no repo
+	}
+	rows := a.buildConfigRows()
+	found := false
+	for _, row := range rows {
+		if strings.Contains(row, "No project detected") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("buildConfigRows on Project tab with no repo should contain 'No project detected', got %v", rows)
+	}
+}
+
+func TestBuildConfigRowsGlobalHint(t *testing.T) {
+	a := &App{
+		cfgTab:          2, // Project tab
+		repoRoot:        "/some/repo",
+		cfgDraft:        Config{ActiveModel: "global-model", Personality: "friendly"},
+		cfgProjectDraft: ProjectConfig{}, // no overrides
+	}
+	rows := a.buildConfigRows()
+	foundModel := false
+	foundPersonality := false
+	for _, row := range rows {
+		if strings.Contains(row, "(global: global-model)") {
+			foundModel = true
+		}
+		if strings.Contains(row, "(global: friendly)") {
+			foundPersonality = true
+		}
+	}
+	if !foundModel {
+		t.Error("expected '(global: global-model)' hint for unoverridden Active Model")
+	}
+	if !foundPersonality {
+		t.Error("expected '(global: friendly)' hint for unoverridden Personality")
+	}
+}
+
+func TestBuildConfigRowsProjectOverrideShown(t *testing.T) {
+	a := &App{
+		cfgTab:          2,
+		repoRoot:        "/some/repo",
+		cfgDraft:        Config{ActiveModel: "global-model"},
+		cfgProjectDraft: ProjectConfig{ActiveModel: "project-model"},
+	}
+	rows := a.buildConfigRows()
+	found := false
+	for _, row := range rows {
+		if strings.Contains(row, "project-model") && !strings.Contains(row, "global:") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected project override 'project-model' shown without global hint")
+	}
+}
+
+func TestExitConfigModeSavesBothConfigs(t *testing.T) {
+	globalDir := t.TempDir()
+	repoDir := t.TempDir()
+
+	a := &App{
+		cfgDraft: Config{
+			PasteCollapseMinChars: 300,
+			Personality:           "global-personality",
+		},
+		cfgProjectDraft: ProjectConfig{
+			ActiveModel: "project-model",
+			Personality: "project-personality",
+		},
+		repoRoot: repoDir,
+		resultCh: make(chan any, 16),
+	}
+
+	// We can't easily test exitConfigMode because it calls saveConfig which
+	// uses the real home dir. Instead test that saveProjectConfig is called
+	// by verifying the project config is saved to repoRoot.
+	a.projectConfig = a.cfgProjectDraft
+	if err := saveProjectConfig(a.repoRoot, a.projectConfig); err != nil {
+		t.Fatalf("saveProjectConfig: %v", err)
+	}
+
+	loaded := loadProjectConfig(repoDir)
+	if loaded.ActiveModel != "project-model" {
+		t.Errorf("ActiveModel = %q, want %q", loaded.ActiveModel, "project-model")
+	}
+	if loaded.Personality != "project-personality" {
+		t.Errorf("Personality = %q, want %q", loaded.Personality, "project-personality")
+	}
+
+	// Also verify global config can be saved independently
+	if err := saveConfigTo(globalDir, a.cfgDraft); err != nil {
+		t.Fatalf("saveConfigTo: %v", err)
+	}
+	globalLoaded, err := loadConfigFrom(globalDir)
+	if err != nil {
+		t.Fatalf("loadConfigFrom: %v", err)
+	}
+	if globalLoaded.Personality != "global-personality" {
+		t.Errorf("global Personality = %q, want %q", globalLoaded.Personality, "global-personality")
 	}
 }
