@@ -2020,11 +2020,9 @@ func (a *App) handlePlainEscape() {
 		a.renderInput()
 		return
 	}
-	if strings.HasPrefix(a.inputValue(), "/") {
-		a.resetInput()
-		a.autocompleteIdx = 0
-		a.renderInput()
-	}
+	a.resetInput()
+	a.autocompleteIdx = 0
+	a.renderInput()
 }
 
 func (a *App) handleEscapeSequence(stdinCh chan byte, readByte func() (byte, bool)) {
