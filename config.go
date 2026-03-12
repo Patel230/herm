@@ -98,6 +98,21 @@ type ProjectConfig struct {
 	SubAgentMaxTurns int    `json:"sub_agent_max_turns,omitempty"`
 }
 
+// mergeConfigs overlays non-zero ProjectConfig fields onto a global Config.
+func mergeConfigs(global Config, project ProjectConfig) Config {
+	merged := global
+	if project.ActiveModel != "" {
+		merged.ActiveModel = project.ActiveModel
+	}
+	if project.Personality != "" {
+		merged.Personality = project.Personality
+	}
+	if project.SubAgentMaxTurns != 0 {
+		merged.SubAgentMaxTurns = project.SubAgentMaxTurns
+	}
+	return merged
+}
+
 const defaultContainerImage = "debian:bookworm-slim"
 
 func defaultConfig() Config {
