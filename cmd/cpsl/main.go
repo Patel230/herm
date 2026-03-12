@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -1103,8 +1104,9 @@ type App struct {
 	sessionOutputTokens int // cumulative output tokens this session
 	sessionCacheRead    int // cumulative cache read tokens this session
 	sessionLLMCalls     int // number of LLM API calls this session
-	sessionToolResults  int // count of tool results this session
-	sessionToolBytes    int // cumulative tool result bytes this session
+	sessionToolResults  int            // count of tool results this session
+	sessionToolBytes    int            // cumulative tool result bytes this session
+	sessionToolStats    map[string][2]int // tool name → [count, bytes]
 	scratchpad       Scratchpad
 	lastModelID      string   // last model used, for detecting changes
 	subAgentBuf      string   // accumulates sub-agent streaming text
@@ -2863,6 +2865,25 @@ func (a *App) handleUsageCommand() {
 		b.WriteString(fmt.Sprintf("  Tool tokens:   ~%s (%.0f%% of input)\n", formatTokenCount(toolTokenEst), pct))
 	}
 
+	// Per-tool breakdown (sorted by bytes descending).
+	if len(a.sessionToolStats) > 0 {
+		type toolStat struct {
+			name       string
+			count, bytes int
+		}
+		var stats []toolStat
+		for name, s := range a.sessionToolStats {
+			stats = append(stats, toolStat{name, s[0], s[1]})
+		}
+		sort.Slice(stats, func(i, j int) bool { return stats[i].bytes > stats[j].bytes })
+		b.WriteString("\n  Per tool:\n")
+		for _, s := range stats {
+			est := s.bytes / charsPerToken
+			b.WriteString(fmt.Sprintf("    %-12s %3d calls  %6s  ~%s tokens\n",
+				s.name, s.count, formatBytes(s.bytes), formatTokenCount(est)))
+		}
+	}
+
 	// Conversation breakdown from the node tree.
 	if a.langdagClient != nil && a.agentNodeID != "" {
 		ancestors, err := a.langdagClient.GetAncestors(context.Background(), a.agentNodeID)
@@ -3756,6 +3777,15 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 		a.needsTextSep = true
 		a.sessionToolResults++
 		a.sessionToolBytes += len(event.ToolResult)
+		if a.sessionToolStats == nil {
+			a.sessionToolStats = make(map[string][2]int)
+		}
+		if event.ToolName != "" {
+			s := a.sessionToolStats[event.ToolName]
+			s[0]++
+			s[1] += len(event.ToolResult)
+			a.sessionToolStats[event.ToolName] = s
+		}
 		a.messages = append(a.messages, chatMessage{kind: msgToolResult, content: result, isError: event.IsError})
 		a.render()
 

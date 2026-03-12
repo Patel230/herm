@@ -141,6 +141,29 @@ func TestRenderTree_ToolResultAsUserNode(t *testing.T) {
 	}
 }
 
+func TestRenderTree_ToolResultTokenEstimate(t *testing.T) {
+	a := &App{}
+
+	// Create a tool result with known content size.
+	// 400 chars / 4 chars-per-token = ~100 tokens.
+	resultContent := strings.Repeat("x", 400)
+	nodes := []*types.Node{
+		{ID: "1", NodeType: types.NodeTypeUser, Content: "Do something"},
+		{ID: "2", ParentID: "1", NodeType: types.NodeTypeAssistant,
+			Content: `[{"type":"tool_use","id":"call_1","name":"bash","input":{}}]`},
+		{ID: "3", ParentID: "2", NodeType: types.NodeTypeUser,
+			Content: `[{"type":"tool_result","tool_use_id":"call_1","content":"` + resultContent + `"}]`},
+		{ID: "4", ParentID: "3", NodeType: types.NodeTypeAssistant, Content: "Done."},
+	}
+
+	result := a.renderTree(nodes)
+
+	// Should include a token estimate annotation.
+	if !strings.Contains(result, "tokens") {
+		t.Errorf("expected token estimate in tree, got:\n%s", result)
+	}
+}
+
 func TestRenderTree_ToolResultError(t *testing.T) {
 	a := &App{}
 

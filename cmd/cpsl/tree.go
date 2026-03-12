@@ -281,6 +281,7 @@ func (a *App) renderTree(nodes []*types.Node) string {
 		case n.NodeType == types.NodeTypeUser && isToolResultContent(n.Content):
 			// Merge tool results with pending tool names from the assistant.
 			results := parseToolResults(n.Content)
+			estTokens := len(n.Content) / charsPerToken
 			for _, r := range results {
 				name := "tool"
 				for _, pt := range pendingTools {
@@ -293,7 +294,12 @@ func (a *App) renderTree(nodes []*types.Node) string {
 				if r.isError {
 					status = "\033[31m✗\033[0m"
 				}
-				b.WriteString("  " + status + " " + name + "\n")
+				tokenInfo := ""
+				if estTokens > 0 {
+					tokenInfo = fmt.Sprintf(" \033[2m~%s tokens\033[0m", formatTokenCount(estTokens))
+					estTokens = 0 // only show once for multi-result nodes
+				}
+				b.WriteString("  " + status + " " + name + tokenInfo + "\n")
 			}
 			pendingTools = nil
 

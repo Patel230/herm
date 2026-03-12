@@ -86,7 +86,7 @@ Manage how much context tool results consume over a long conversation.
 ## Phase 4: Measurement & Tuning
 
 - [x] 4a: **Token usage benchmark** — define a standard task ("find and explain how X works") and measure total tokens before and after changes.
-- [ ] 4b: **Per-tool-result token tracking** — log token count per tool result. Surface in UI or logs to identify expensive operations.
+- [x] 4b: **Per-tool-result token tracking** — log token count per tool result. Surface in UI or logs to identify expensive operations.
 - [ ] 4c: **Tune thresholds** — adjust Read's default line limit, Grep's output cap, compaction trigger, sub-agent output limits based on real usage.
 
 ---
