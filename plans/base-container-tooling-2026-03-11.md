@@ -1,44 +1,24 @@
 # Base Container Tooling for File Exploration
 
-Ensure every container starts with essential file exploration tools (git, grep, find, tree) so the agent can navigate codebases effectively without needing a devenv build first. Provide base Dockerfile templates for alpine and debian, and update the system prompt with a layered file exploration strategy inspired by Claude Code.
+Ship a debian base Dockerfile with essential exploration tools (git, grep, find, tree). Build it automatically on first startup so the agent can navigate codebases immediately — no devenv round-trip needed. Update the system prompt with a layered file exploration strategy.
 
 ## Codebase Context
 
-- **Default image**: `alpine:latest` (config.go:95). Busybox-only — limited `grep` (no `-r` reliably, no `--include`), limited `find`, no `git`, no `tree`.
-- **Debian bookworm-slim**: Has GNU grep and GNU find, but no `git`, no `tree`.
-- **Container startup**: `bootContainerCmd()` in main.go starts the container with `sleep infinity`. The image is either the default or whatever `config.ContainerImage` points to.
-- **DevEnvTool**: Reads/writes `.cpsl/Dockerfile`, builds and hot-swaps. When no Dockerfile exists, agent starts with the raw base image.
-- **System prompt** (systemprompt.go): Bash tool section currently says: `"Explore files with grep, find, cat. Run tests after changes."` — no guidance on search strategy.
-- **Devenv skill** (.cpsl/skills/devenv.md): Recommends `debian:bookworm-slim` or `alpine:3` as base images. Shows how to install runtimes but doesn't mention exploration tools.
-- **No embedded files**: The binary doesn't use `//go:embed` for Dockerfiles currently.
-
-## What's missing
-
-1. **No git in either base image** — the agent can't explore commit history, blame, or diff within the container (the host `git` tool exists but the container can't use it for file-level exploration like `git log -p -- path`).
-2. **Alpine's busybox grep is weak** — no `--include`, no `--exclude-dir`, limited regex. GNU grep is needed for effective code search.
-3. **No tree** — the agent has no quick way to see directory structure.
-4. **No search strategy guidance** — the system prompt doesn't teach the layered approach (structure → content → file read) that makes Claude Code effective.
-5. **Every new project starts from scratch** — the agent must go through devenv read/write/build just to get basic exploration tools, wasting a tool round-trip before it can even look at code.
+- **Default image**: `alpine:latest` (config.go:95). Busybox-only — limited `grep`, no `git`, no `tree`.
+- **Container startup**: `bootContainerCmd()` (main.go:847) runs in a goroutine, sends status messages via channel, then sends `containerReadyMsg`. Currently does: check docker → start container with raw image.
+- **DevEnvTool**: Reads/writes `.cpsl/Dockerfile`, builds and hot-swaps via `container.Rebuild()`. The `readDockerfile()` method already checks for named `.cpsl/*.Dockerfile` and root `Dockerfile`.
+- **System prompt** (systemprompt.go:74): Bash tool section says `"Explore files with grep, find, cat. Run tests after changes."` — no search strategy guidance.
+- **Devenv skill** (.cpsl/skills/devenv.md): Recommends `debian:bookworm-slim` or `alpine:3`. Shows runtime installation patterns.
+- **No `//go:embed` used** for Dockerfiles currently.
+- **`containerConfig()`** (config.go:104): Returns `ContainerConfig{Image}` where Image defaults to `alpine:latest` when not set.
 
 ## Design
 
-### Embedded base Dockerfile templates
+### Embedded base Dockerfile
 
-Embed two Dockerfile templates in the binary using `//go:embed`:
-- `dockerfiles/alpine.Dockerfile` — alpine:3 + essential tools
-- `dockerfiles/debian.Dockerfile` — debian:bookworm-slim + essential tools
+Embed one Dockerfile in the binary using `//go:embed`:
+- `dockerfiles/base.Dockerfile` — debian:bookworm-slim + essential tools
 
-Both templates install: `git`, GNU `grep`, GNU `find` (findutils), `tree`, and set `WORKDIR /workspace`.
-
-**Alpine template:**
-```dockerfile
-FROM alpine:3
-RUN apk add --no-cache git grep findutils tree
-WORKDIR /workspace
-```
-(`grep` package = GNU grep, `findutils` = GNU find, replacing busybox versions)
-
-**Debian template:**
 ```dockerfile
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -46,49 +26,61 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /workspace
 ```
-(GNU grep and findutils already included in slim; git and tree are the only additions. ca-certificates needed for HTTPS git clones and later wget/curl use.)
 
-### DevEnvTool reads templates when no Dockerfile exists
+GNU grep and findutils are already in debian:bookworm-slim. Only git, tree, and ca-certificates need installing.
 
-When `devenv read` is called and no `.cpsl/Dockerfile` exists, include the embedded base templates in the response so the agent can pick one as a starting point. This replaces the current bare "No .cpsl/Dockerfile exists yet" message.
+No Alpine template — Debian covers the common case and is more versatile. Users who want Alpine can create their own `.cpsl/Dockerfile`.
+
+### Auto-build on startup
+
+In `bootContainerCmd()`, before starting the container:
+1. Check if `.cpsl/Dockerfile` exists in the workspace
+2. If not, write the embedded base template to `.cpsl/Dockerfile`
+3. Build the image from it (same `docker build` logic as `DevEnvTool.buildAndReplace()`)
+4. Start the container with the built image
+
+If `.cpsl/Dockerfile` already exists (user has customized their env), build from that instead of the raw default. This means every container always starts from a built Dockerfile, never from a raw base image.
+
+The status messages update accordingly: "checking docker…" → "building image…" → "starting…" → ready.
+
+### Change default image constant
+
+Change `defaultContainerImage` from `"alpine:latest"` to `"debian:bookworm-slim"` as the fallback. This only matters if the build step is skipped for some reason (e.g., Docker build fails, fall back to raw image).
 
 ### System prompt: file exploration strategy
 
-Replace the single line `"Explore files with grep, find, cat"` with a layered strategy section that guides the agent to:
-1. **Discover structure first** — `tree` or `find` (cheap, filenames only)
-2. **Search content** — `grep -rn` with `--include` filters (medium, matching lines only)
-3. **Read selectively** — `cat`/`head`/`tail` only for files identified above (expensive, full content)
-4. **Use git for history** — `git log`, `git blame` when understanding changes matters
+Replace the bash tool's `"Explore files with grep, find, cat"` line with a layered strategy:
+1. Structure first — `tree` or `find` (filenames only, cheap)
+2. Content search — `grep -rn --include='*.ext'` (matching lines, medium)
+3. Read selectively — `cat`/`head`/`tail` on specific files (expensive)
+4. History — `git log`/`git blame` when understanding changes matters
 
-### Devenv skill: mention base templates
+### DevEnvTool: template awareness
 
-Update the skill doc to reference the embedded templates so the agent knows they exist and uses them as starting points.
+When `devenv read` finds no `.cpsl/Dockerfile`, the response already says "No .cpsl/Dockerfile exists yet." But now the auto-build writes one on startup, so this case only occurs if the user deletes it mid-session. Keep the existing behavior — no change needed here.
+
+Update the devenv skill doc to note that the base image includes exploration tools and that Debian is the default.
 
 ## Failure Modes
 
-- **Alpine `grep` package conflicts with busybox**: Not an issue — `apk add grep` replaces the busybox symlink cleanly.
-- **Embedded files increase binary size**: Negligible — two small Dockerfiles add <1KB.
-- **Agent ignores templates**: Mitigated by showing them in `devenv read` output and referencing them in the system prompt.
-- **Stale pinned versions**: Templates pin to `alpine:3` and `debian:bookworm-slim` which are rolling tags — acceptable for base exploration tools. Runtime versions are the user's responsibility via devenv.
+- **First launch is slower** due to `docker build`: The build installs ~3 packages on debian slim, typically <15s. Status message "building image…" keeps the user informed. Subsequent launches reuse the cached image.
+- **Docker build fails on startup**: Fall back to starting with the raw `debian:bookworm-slim` image (degraded — no git/tree, but still functional). Log the error via status message.
+- **User has existing `.cpsl/Dockerfile`**: Respected — we build from theirs, not the template. No overwrite.
+- **`.cpsl/Dockerfile` gets committed to git**: This is fine and expected — it's the project's dev environment definition.
 
-## Open Questions
+## Phase 1: Embed base Dockerfile and auto-build on startup
+- [ ] 1a: Create `dockerfiles/base.Dockerfile` (debian:bookworm-slim + git, tree, ca-certificates, WORKDIR /workspace)
+- [ ] 1b: Add `dockerfiles.go` with `//go:embed dockerfiles/base.Dockerfile` exposing `var BaseDockerfile string`
+- [ ] 1c: Change `defaultContainerImage` in config.go from `"alpine:latest"` to `"debian:bookworm-slim"`
+- [ ] 1d: In `bootContainerCmd()`, after docker-available check: if no `.cpsl/Dockerfile` exists, write the embedded template there. Then build the image from `.cpsl/Dockerfile` (status: "building image…"). Start the container with the built image. On build failure, fall back to starting with the raw default image
 
-- Should we pre-build these base images on first run so the initial container already has the tools? This would mean running `docker build` during startup instead of using `alpine:latest` directly. Faster agent experience but slower first launch. **Decision deferred** — start with templates that the agent uses on first devenv interaction; consider pre-building later if the extra round-trip is annoying.
-
-## Phase 1: Embed base Dockerfile templates
-- [ ] 1a: Create `dockerfiles/alpine.Dockerfile` and `dockerfiles/debian.Dockerfile` with essential exploration tools (git, GNU grep, findutils, tree)
-- [ ] 1b: Add `//go:embed` in a new `dockerfiles.go` file to expose the templates as `var AlpineDockerfile, DebianDockerfile string`
-
-## Phase 2: Surface templates in DevEnvTool
-- [ ] 2a: When `devenv read` finds no `.cpsl/Dockerfile`, include both embedded templates in the response with labels, so the agent can choose one as a starting point
-- [ ] 2b: Update the devenv skill doc (`.cpsl/skills/devenv.md`) to mention the base templates and that they include exploration essentials (git, grep, find, tree)
-
-## Phase 3: System prompt file exploration guidance
-- [ ] 3a: Replace the bash tool's `"Explore files with grep, find, cat"` line with a layered exploration strategy: structure (tree/find) → content (grep -rn --include) → read (cat/head/tail) → history (git log/blame). Keep it concise — 4-5 lines max
-- [ ] 3b: Add a test in `systemprompt_test.go` verifying the exploration guidance appears in the generated prompt when bash tool is present
+## Phase 2: System prompt and devenv skill updates
+- [ ] 2a: Replace the bash tool's `"Explore files with grep, find, cat"` line with layered exploration guidance (structure → content → read → history), ~4-5 lines
+- [ ] 2b: Update devenv skill doc to note Debian is the default base, exploration tools are pre-installed, and Alpine is available for advanced users who create their own Dockerfile
+- [ ] 2c: Add a test verifying the exploration guidance appears in the system prompt when bash tool is present
 
 ## Success Criteria
-- `devenv read` on a fresh project shows both base templates with exploration tools listed
-- An agent using the alpine template can immediately run `git log`, `grep -rn`, `find -name`, and `tree` after a single devenv build
-- The system prompt guides a layered search strategy (structure → content → read → history)
-- Both templates build successfully on linux/amd64
+- Fresh project with no `.cpsl/Dockerfile`: startup writes the template, builds it, container has `git`, `grep -rn`, `find`, `tree` working immediately
+- Project with existing `.cpsl/Dockerfile`: startup builds from the user's file, template is not written
+- System prompt includes layered exploration strategy
+- `docker build` failure falls back gracefully to raw image start
