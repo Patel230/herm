@@ -178,6 +178,36 @@ func TestToolCallSummary(t *testing.T) {
 	}
 }
 
+func TestCollapseBlankRows(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"no blanks", []string{"a", "b", "c"}, []string{"a", "b", "c"}},
+		{"single blank preserved", []string{"a", "", "b"}, []string{"a", "", "b"}},
+		{"double blank collapsed", []string{"a", "", "", "b"}, []string{"a", "", "b"}},
+		{"triple blank collapsed", []string{"a", "", "", "", "b"}, []string{"a", "", "b"}},
+		{"ansi-only blank collapsed", []string{"a", "", "\033[0m", "", "b"}, []string{"a", "", "b"}},
+		{"leading blanks collapsed", []string{"", "", "a"}, []string{"", "a"}},
+		{"trailing blanks collapsed", []string{"a", "", ""}, []string{"a", ""}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := collapseBlankRows(tt.in)
+			if len(got) != len(tt.want) {
+				t.Fatalf("collapseBlankRows(%v) = %v (len %d), want %v (len %d)",
+					tt.in, got, len(got), tt.want, len(tt.want))
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("row %d: got %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestCollapseToolResult(t *testing.T) {
 	short := "line1\nline2\nline3"
 	if collapseToolResult(short) != short {

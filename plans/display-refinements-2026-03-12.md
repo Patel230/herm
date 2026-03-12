@@ -19,8 +19,8 @@ The TUI renders messages via `buildBlockRows()` (main.go:1144) which calls `rend
 
 **Approach:** After all rows are assembled (messages + streaming + sub-agent), collapse any run of 2+ consecutive empty rows into a single empty row. An "empty row" is one that's either `""` or contains only ANSI reset sequences. This is a display-time enforcement — doesn't touch message content.
 
-- [ ] 1a: Add blank-line collapsing pass at end of `buildBlockRows()`, after all rows are built
-- [ ] 1b: Add test for the collapsing behavior (e.g. input with 3 consecutive blanks → 1)
+- [x] 1a: Add blank-line collapsing pass at end of `buildBlockRows()`, after all rows are built
+- [x] 1b: Add test for the collapsing behavior (e.g. input with 3 consecutive blanks → 1)
 
 ## Phase 2: Fix inline code background bleed
 

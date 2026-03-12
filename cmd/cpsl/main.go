@@ -427,14 +427,18 @@ func styledAssistantText(content string) string {
 }
 
 func styledToolCall(summary string) string {
-	return "\033[2;3m" + summary + "\033[0m"
+	return "\033[3;38;5;242m" + summary + "\033[0m"
 }
 
 func styledToolResult(result string, isError bool) string {
 	if isError {
 		return styledError(result)
 	}
-	return "\033[2m" + result + "\033[0m"
+	lines := strings.Split(result, "\n")
+	for i, line := range lines {
+		lines[i] = "\033[38;5;242m" + line + "\033[0m"
+	}
+	return strings.Join(lines, "\n")
 }
 
 func styledError(msg string) string {
@@ -1185,7 +1189,28 @@ func (a *App) buildBlockRows() []string {
 		}
 		rows = append(rows, "")
 	}
-	return rows
+	return collapseBlankRows(rows)
+}
+
+// collapseBlankRows reduces consecutive blank rows to at most one.
+// A row is "blank" if it is empty or contains only ANSI reset sequences.
+func collapseBlankRows(rows []string) []string {
+	out := make([]string, 0, len(rows))
+	prevBlank := false
+	for _, r := range rows {
+		blank := isBlankRow(r)
+		if blank && prevBlank {
+			continue
+		}
+		out = append(out, r)
+		prevBlank = blank
+	}
+	return out
+}
+
+// isBlankRow reports whether a row is visually empty (empty string or only ANSI escapes).
+func isBlankRow(s string) bool {
+	return strings.TrimSpace(ansiEscRe.ReplaceAllString(s, "")) == ""
 }
 
 // subAgentDisplayLines returns up to 3 dim/italic lines showing live sub-agent activity.
