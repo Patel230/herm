@@ -242,3 +242,123 @@ func (t *GrepTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 func (t *GrepTool) RequiresApproval(_ json.RawMessage) bool {
 	return false
 }
+
+// ReadFileTool reads file contents (with optional line range) inside the Docker container.
+type ReadFileTool struct {
+	container *ContainerClient
+}
+
+// NewReadFileTool creates a ReadFileTool with the given container client.
+func NewReadFileTool(container *ContainerClient) *ReadFileTool {
+	return &ReadFileTool{container: container}
+}
+
+func (t *ReadFileTool) Definition() types.ToolDefinition {
+	return types.ToolDefinition{
+		Name:        "read_file",
+		Description: "Read file contents with line numbers. Supports reading specific line ranges to avoid loading entire large files. Use after glob/grep to examine specific files or sections.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"file_path": {
+					"type": "string",
+					"description": "Path to the file, relative to /workspace (e.g. 'src/main.go')"
+				},
+				"offset": {
+					"type": "integer",
+					"description": "Start line number (1-based, default: 1)"
+				},
+				"limit": {
+					"type": "integer",
+					"description": "Maximum lines to read (default: 2000)"
+				}
+			},
+			"required": ["file_path"]
+		}`),
+	}
+}
+
+type readFileInput struct {
+	FilePath string `json:"file_path"`
+	Offset   int    `json:"offset,omitempty"`
+	Limit    int    `json:"limit,omitempty"`
+}
+
+// readFileDefaultLimit is the default maximum number of lines returned.
+const readFileDefaultLimit = 2000
+
+// readFileMaxLineWidth truncates individual lines longer than this.
+const readFileMaxLineWidth = 2000
+
+func (t *ReadFileTool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+	var in readFileInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return "", fmt.Errorf("invalid read_file input: %w", err)
+	}
+	if in.FilePath == "" {
+		return "", fmt.Errorf("file_path is required")
+	}
+
+	// Resolve path relative to /workspace.
+	filePath := in.FilePath
+	if !strings.HasPrefix(filePath, "/") {
+		filePath = "/workspace/" + filePath
+	}
+
+	offset := in.Offset
+	if offset < 1 {
+		offset = 1
+	}
+	limit := in.Limit
+	if limit <= 0 {
+		limit = readFileDefaultLimit
+	}
+
+	// Use awk for line range extraction with line numbers.
+	// awk is universally available and handles the offset+limit+numbering in one pass.
+	endLine := offset + limit - 1
+	cmd := fmt.Sprintf("awk 'NR>=%d && NR<=%d { printf \"%%6d\\t%%s\\n\", NR, (length>%d ? substr($0,1,%d)\"…\" : $0) } NR>%d { exit }' %s 2>&1",
+		offset, endLine, readFileMaxLineWidth, readFileMaxLineWidth, endLine, shellQuote(filePath))
+
+	result, err := t.container.Exec(cmd, 30)
+	if err != nil {
+		return "", err
+	}
+
+	output := result.Stdout + result.Stderr
+	if result.ExitCode != 0 {
+		return fmt.Sprintf("error: %s", strings.TrimRight(output, "\n")), nil
+	}
+
+	output = strings.TrimRight(output, "\n")
+	if output == "" {
+		// Check if file exists but range is past end, or file is empty.
+		checkCmd := fmt.Sprintf("wc -l < %s 2>&1", shellQuote(filePath))
+		checkResult, checkErr := t.container.Exec(checkCmd, 5)
+		if checkErr != nil || checkResult.ExitCode != 0 {
+			return fmt.Sprintf("error: cannot read %s", in.FilePath), nil
+		}
+		totalLines := strings.TrimSpace(checkResult.Stdout)
+		if totalLines == "0" {
+			return "(empty file)", nil
+		}
+		return fmt.Sprintf("(no content in range — file has %s lines)", totalLines), nil
+	}
+
+	// Count total lines to indicate if there's more.
+	outputLines := strings.Count(output, "\n") + 1
+	if outputLines >= limit {
+		wcCmd := fmt.Sprintf("wc -l < %s 2>&1", shellQuote(filePath))
+		wcResult, wcErr := t.container.Exec(wcCmd, 5)
+		if wcErr == nil && wcResult.ExitCode == 0 {
+			total := strings.TrimSpace(wcResult.Stdout)
+			output += fmt.Sprintf("\n[showing lines %d-%d of %s]", offset, offset+outputLines-1, total)
+		}
+	}
+
+	return output, nil
+}
+
+func (t *ReadFileTool) RequiresApproval(_ json.RawMessage) bool {
+	return false
+}
