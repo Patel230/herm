@@ -19,7 +19,6 @@ type Config struct {
 	ActiveModel           string          `json:"active_model,omitempty"`
 	ModelSortCol          string          `json:"model_sort_col,omitempty"`   // "name","provider","price","context"
 	ModelSortDirs         map[string]bool `json:"model_sort_dirs,omitempty"` // column name → ascending (per-column)
-	ContainerImage        string          `json:"container_image,omitempty"`
 	DisplaySystemPrompts  bool            `json:"display_system_prompts,omitempty"`
 	SubAgentMaxTurns      int             `json:"sub_agent_max_turns,omitempty"`
 	Personality           string          `json:"personality,omitempty"` // optional agent personality/tone
@@ -97,15 +96,6 @@ func defaultConfig() Config {
 	return Config{
 		PasteCollapseMinChars: 200,
 	}
-}
-
-// containerConfig returns a ContainerConfig with the image resolved.
-func (c Config) containerConfig() ContainerConfig {
-	img := c.ContainerImage
-	if img == "" {
-		img = defaultContainerImage
-	}
-	return ContainerConfig{Image: img}
 }
 
 func configPath() string {
