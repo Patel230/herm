@@ -734,6 +734,88 @@ func collapseToolResult(result string) string {
 	return fmt.Sprintf("%s\n...\n%s", head, tail)
 }
 
+// renderToolBox renders a tool call and its result as a bordered box:
+//
+//	┌ ~ glob ───────┐
+//	file1.go
+//	file2.go
+//	└───────────────┘
+//
+// The box has top/bottom borders but no side borders. The entire output is
+// styled dim (or red for errors). Title uses dim+italic.
+func renderToolBox(title, content string, maxWidth int, isError bool) string {
+	// Compute inner width from title and content lines.
+	titleVW := visibleWidth(title)
+	innerWidth := titleVW + 2 // "┌ " + title + " " + pad + "┐" → need at least title + 2 spaces
+	if content != "" {
+		for _, line := range strings.Split(content, "\n") {
+			if lw := visibleWidth(line); lw > innerWidth {
+				innerWidth = lw
+			}
+		}
+	}
+	// Cap at maxWidth minus 2 for corner characters (┌/┐ are each 1 wide).
+	if maxWidth > 0 && innerWidth > maxWidth-2 {
+		innerWidth = maxWidth - 2
+	}
+	if innerWidth < titleVW+2 {
+		innerWidth = titleVW + 2
+	}
+
+	// Pick ANSI style for borders vs content.
+	var borderStyle, titleStyle, contentStyle, reset string
+	if isError {
+		borderStyle = "\033[31m"   // red
+		titleStyle = "\033[31;3m"  // red italic
+		contentStyle = "\033[31m"  // red
+		reset = "\033[0m"
+	} else {
+		borderStyle = "\033[2m"    // dim
+		titleStyle = "\033[2;3m"   // dim italic
+		contentStyle = "\033[2m"   // dim
+		reset = "\033[0m"
+	}
+
+	var b strings.Builder
+
+	// Top border: ┌ title ─...─┐
+	pad := innerWidth - titleVW - 2 // spaces taken by " title "
+	if pad < 0 {
+		pad = 0
+	}
+	b.WriteString(borderStyle)
+	b.WriteString("┌ ")
+	b.WriteString(reset)
+	b.WriteString(titleStyle)
+	b.WriteString(title)
+	b.WriteString(reset)
+	b.WriteString(borderStyle)
+	b.WriteByte(' ')
+	b.WriteString(strings.Repeat("─", pad))
+	b.WriteString("┐")
+	b.WriteString(reset)
+
+	// Content lines (no side borders).
+	if content != "" {
+		for _, line := range strings.Split(content, "\n") {
+			b.WriteByte('\n')
+			b.WriteString(contentStyle)
+			b.WriteString(line)
+			b.WriteString(reset)
+		}
+	}
+
+	// Bottom border: └─...─┘
+	b.WriteByte('\n')
+	b.WriteString(borderStyle)
+	b.WriteString("└")
+	b.WriteString(strings.Repeat("─", innerWidth))
+	b.WriteString("┘")
+	b.WriteString(reset)
+
+	return b.String()
+}
+
 func truncateWithEllipsis(s string, maxLen int) string {
 	runes := []rune(s)
 	if len(runes) <= maxLen {

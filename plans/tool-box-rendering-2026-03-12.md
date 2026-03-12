@@ -83,8 +83,8 @@ Signature: `func renderToolBox(title, content string, maxWidth int, isError bool
 - Dim styling on borders; error variant uses red
 - Empty content → just top + bottom border (no content lines between)
 
-- [ ] 2a: Implement `renderToolBox()` — builds top border, content lines, bottom border
-- [ ] 2b: Add tests for `renderToolBox()`: short title, long title, empty content, error variant, width capping
+- [x] 2a: Implement `renderToolBox()` — builds top border, content lines, bottom border
+- [x] 2b: Add tests for `renderToolBox()`: short title, long title, empty content, error variant, width capping
 
 ## Phase 3: Integrate into rendering pipeline
 

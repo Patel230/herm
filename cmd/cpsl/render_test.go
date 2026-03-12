@@ -315,3 +315,80 @@ func TestCollapseToolResult(t *testing.T) {
 		})
 	}
 }
+
+func TestRenderToolBox(t *testing.T) {
+	// Helper to strip ANSI sequences for easier assertion.
+	strip := func(s string) string {
+		return ansiEscRe.ReplaceAllString(s, "")
+	}
+
+	t.Run("short title with content", func(t *testing.T) {
+		got := strip(renderToolBox("~ glob", "file1\nfile2", 80, false))
+		lines := strings.Split(got, "\n")
+		if len(lines) != 4 {
+			t.Fatalf("expected 4 lines, got %d: %q", len(lines), got)
+		}
+		if !strings.HasPrefix(lines[0], "┌ ~ glob ") || !strings.HasSuffix(lines[0], "┐") {
+			t.Errorf("top border wrong: %q", lines[0])
+		}
+		if lines[1] != "file1" {
+			t.Errorf("content line 1: got %q", lines[1])
+		}
+		if lines[2] != "file2" {
+			t.Errorf("content line 2: got %q", lines[2])
+		}
+		if !strings.HasPrefix(lines[3], "└") || !strings.HasSuffix(lines[3], "┘") {
+			t.Errorf("bottom border wrong: %q", lines[3])
+		}
+		// Top and bottom borders should be same visible width.
+		if visibleWidth(lines[0]) != visibleWidth(lines[3]) {
+			t.Errorf("border widths differ: top=%d, bottom=%d", visibleWidth(lines[0]), visibleWidth(lines[3]))
+		}
+	})
+
+	t.Run("empty content", func(t *testing.T) {
+		got := strip(renderToolBox("~ bash", "", 80, false))
+		lines := strings.Split(got, "\n")
+		if len(lines) != 2 {
+			t.Fatalf("expected 2 lines (top+bottom), got %d: %q", len(lines), got)
+		}
+		if !strings.HasPrefix(lines[0], "┌ ~ bash ") {
+			t.Errorf("top border: %q", lines[0])
+		}
+		if !strings.HasPrefix(lines[1], "└") {
+			t.Errorf("bottom border: %q", lines[1])
+		}
+	})
+
+	t.Run("long content widens box", func(t *testing.T) {
+		got := strip(renderToolBox("~ x", "short\nthis-is-a-much-longer-line-than-the-title", 80, false))
+		lines := strings.Split(got, "\n")
+		// Box should be wide enough for the long content line.
+		if visibleWidth(lines[0]) < visibleWidth("this-is-a-much-longer-line-than-the-title")+2 {
+			t.Errorf("box too narrow for content: %q", lines[0])
+		}
+	})
+
+	t.Run("width capping", func(t *testing.T) {
+		got := strip(renderToolBox("~ glob", strings.Repeat("x", 200), 40, false))
+		lines := strings.Split(got, "\n")
+		// Top border should not exceed maxWidth.
+		if visibleWidth(lines[0]) > 40 {
+			t.Errorf("top border exceeds maxWidth: %d", visibleWidth(lines[0]))
+		}
+	})
+
+	t.Run("error variant uses red", func(t *testing.T) {
+		got := renderToolBox("~ bash", "error!", 80, true)
+		if !strings.Contains(got, "\033[31m") {
+			t.Errorf("expected red ANSI code in error box")
+		}
+	})
+
+	t.Run("non-error uses dim", func(t *testing.T) {
+		got := renderToolBox("~ bash", "ok", 80, false)
+		if !strings.Contains(got, "\033[2m") {
+			t.Errorf("expected dim ANSI code in normal box")
+		}
+	})
+}
