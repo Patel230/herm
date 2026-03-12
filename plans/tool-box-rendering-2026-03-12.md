@@ -95,9 +95,9 @@ Wire the box rendering into the existing message flow.
 - If a `msgToolResult` appears without a preceding `msgToolCall` (shouldn't happen normally), render it with a generic box.
 - Remove or bypass `styledToolCall()` and `styledToolResult()` since the box renderer handles styling.
 
-- [ ] 3a: Modify `buildBlockRows()` to detect tool call + result pairs and render as boxes
-- [ ] 3b: Handle edge case: tool call without result (in-progress) — render open box (top border only)
-- [ ] 3c: Verify existing render tests still pass; add integration test with mock messages
+- [x] 3a: Modify `buildBlockRows()` to detect tool call + result pairs and render as boxes
+- [x] 3b: Handle edge case: tool call without result (in-progress) — render open box (top border only)
+- [x] 3c: Verify existing render tests still pass; add integration test with mock messages
 
 ## Phase 4: Polish and edge cases
 

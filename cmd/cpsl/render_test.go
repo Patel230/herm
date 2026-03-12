@@ -392,3 +392,78 @@ func TestRenderToolBox(t *testing.T) {
 		}
 	})
 }
+
+func TestBuildBlockRows_ToolBox(t *testing.T) {
+	strip := func(s string) string {
+		return ansiEscRe.ReplaceAllString(s, "")
+	}
+
+	t.Run("tool call + result renders as box", func(t *testing.T) {
+		app := &App{width: 80}
+		app.messages = []chatMessage{
+			{kind: msgToolCall, content: "~ glob", leadBlank: true},
+			{kind: msgToolResult, content: "file1\nfile2"},
+		}
+		rows := app.buildBlockRows()
+		// Find the top border row.
+		var found bool
+		for _, r := range rows {
+			s := strip(r)
+			if strings.HasPrefix(s, "┌ ~ glob ") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected box top border with tool call title in rows: %v", rows)
+		}
+		// Should NOT have the old-style dim italic rendering without borders.
+		for _, r := range rows {
+			s := strip(r)
+			if s == "~ glob" {
+				t.Errorf("tool call should be in box border, not standalone: %v", rows)
+			}
+		}
+	})
+
+	t.Run("in-progress tool call renders open box", func(t *testing.T) {
+		app := &App{width: 80}
+		app.messages = []chatMessage{
+			{kind: msgToolCall, content: "~ bash", leadBlank: true},
+		}
+		rows := app.buildBlockRows()
+		var hasTop, hasBottom bool
+		for _, r := range rows {
+			s := strip(r)
+			if strings.HasPrefix(s, "┌ ~ bash ") {
+				hasTop = true
+			}
+			if strings.HasPrefix(s, "└") {
+				hasBottom = true
+			}
+		}
+		if !hasTop {
+			t.Errorf("expected top border for in-progress tool call")
+		}
+		if hasBottom {
+			t.Errorf("in-progress tool call should not have bottom border")
+		}
+	})
+
+	t.Run("error tool result gets red box", func(t *testing.T) {
+		app := &App{width: 80}
+		app.messages = []chatMessage{
+			{kind: msgToolCall, content: "~ bash", leadBlank: true},
+			{kind: msgToolResult, content: "command failed", isError: true},
+		}
+		rows := app.buildBlockRows()
+		var hasRed bool
+		for _, r := range rows {
+			if strings.Contains(r, "\033[31m") {
+				hasRed = true
+			}
+		}
+		if !hasRed {
+			t.Errorf("error tool result should have red styling")
+		}
+	})
+}

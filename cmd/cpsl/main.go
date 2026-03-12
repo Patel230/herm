@@ -1259,33 +1259,95 @@ func (a *App) buildBlockRows() []string {
 	var rows []string
 	rows = append(rows, buildLogo()...)
 	inCodeBlock := false
+	skipNext := false
 	for i, msg := range a.messages {
-		rendered := renderMessage(msg)
-		for _, logLine := range strings.Split(rendered, "\n") {
-			wasInCodeBlock := inCodeBlock
-			if msg.kind == msgAssistant {
-				var skip bool
-				logLine, inCodeBlock, skip = processMarkdownLine(logLine, inCodeBlock)
-				if skip {
-					continue
-				}
-			}
-			wrapped := wrapString(logLine, 0, a.width)
-			if wasInCodeBlock && msg.kind == msgAssistant {
-				for j := range wrapped {
-					wrapped[j] = padCodeBlockRow(wrapped[j], a.width)
-				}
-			}
-			rows = append(rows, wrapped...)
+		if skipNext {
+			skipNext = false
+			// Still emit trailing blank line logic below.
+			goto blankLine
 		}
+
+		// Tool call + result pair → render as a single box.
+		if msg.kind == msgToolCall {
+			title := strings.ReplaceAll(msg.content, "\r", "")
+			nextIdx := i + 1
+			if nextIdx < len(a.messages) && a.messages[nextIdx].kind == msgToolResult {
+				// Paired: render full box.
+				result := a.messages[nextIdx]
+				content := strings.ReplaceAll(result.content, "\r", "")
+				box := renderToolBox(title, content, a.width, result.isError)
+				if msg.leadBlank {
+					rows = append(rows, "")
+				}
+				for _, logLine := range strings.Split(box, "\n") {
+					rows = append(rows, wrapString(logLine, 0, a.width)...)
+				}
+				skipNext = true
+				goto blankLine
+			}
+			// Unpaired (in-progress): render just the top border (open box).
+			if msg.leadBlank {
+				rows = append(rows, "")
+			}
+			box := renderToolBox(title, "", a.width, false)
+			// Strip bottom border — only show top border for in-progress.
+			boxLines := strings.Split(box, "\n")
+			if len(boxLines) > 1 {
+				boxLines = boxLines[:len(boxLines)-1] // remove └...┘
+			}
+			for _, logLine := range boxLines {
+				rows = append(rows, wrapString(logLine, 0, a.width)...)
+			}
+			goto blankLine
+		}
+
+		// Tool result without preceding tool call — render as a standalone box.
+		if msg.kind == msgToolResult {
+			content := strings.ReplaceAll(msg.content, "\r", "")
+			box := renderToolBox("~ result", content, a.width, msg.isError)
+			if msg.leadBlank {
+				rows = append(rows, "")
+			}
+			for _, logLine := range strings.Split(box, "\n") {
+				rows = append(rows, wrapString(logLine, 0, a.width)...)
+			}
+			goto blankLine
+		}
+
+		{
+			rendered := renderMessage(msg)
+			for _, logLine := range strings.Split(rendered, "\n") {
+				wasInCodeBlock := inCodeBlock
+				if msg.kind == msgAssistant {
+					var skip bool
+					logLine, inCodeBlock, skip = processMarkdownLine(logLine, inCodeBlock)
+					if skip {
+						continue
+					}
+				}
+				wrapped := wrapString(logLine, 0, a.width)
+				if wasInCodeBlock && msg.kind == msgAssistant {
+					for j := range wrapped {
+						wrapped[j] = padCodeBlockRow(wrapped[j], a.width)
+					}
+				}
+				rows = append(rows, wrapped...)
+			}
+		}
+
+	blankLine:
 		// Add blank line after block, unless:
 		// - next message already has leadBlank, or
 		// - this is an assistant message followed by another assistant message
 		//   (consecutive assistant chunks already contain their own newlines)
-		nextIdx := i + 1
-		nextHasBlank := nextIdx < len(a.messages) && a.messages[nextIdx].leadBlank
-		nextIsAssistant := nextIdx < len(a.messages) && a.messages[nextIdx].kind == msgAssistant
-		if !nextHasBlank && !(msg.kind == msgAssistant && nextIsAssistant) {
+		// When we consumed a pair (skipNext was just set), look past the result.
+		peekIdx := i + 1
+		if skipNext {
+			peekIdx = i + 2
+		}
+		peekHasBlank := peekIdx < len(a.messages) && a.messages[peekIdx].leadBlank
+		peekIsAssistant := peekIdx < len(a.messages) && a.messages[peekIdx].kind == msgAssistant
+		if !peekHasBlank && !(msg.kind == msgAssistant && peekIsAssistant) {
 			rows = append(rows, "")
 		}
 	}
