@@ -35,6 +35,9 @@ func TestBuildSystemPromptAllTools(t *testing.T) {
 		stubTool{"bash"},
 		stubTool{"git"},
 		stubTool{"devenv"},
+		stubTool{"glob"},
+		stubTool{"grep"},
+		stubTool{"read_file"},
 	}
 	serverTools := []types.ToolDefinition{WebSearchToolDef()}
 	prompt := buildSystemPrompt(tools, serverTools, nil, "/workspace", "", "alpine:latest")
@@ -42,6 +45,7 @@ func TestBuildSystemPromptAllTools(t *testing.T) {
 	sections := []string{
 		"expert coding agent",
 		"## Tools",
+		"### glob, grep, read_file",
 		"### bash",
 		"### git",
 		"### devenv",
@@ -57,6 +61,11 @@ func TestBuildSystemPromptAllTools(t *testing.T) {
 		if !strings.Contains(prompt, s) {
 			t.Errorf("prompt missing expected section/content: %q", s)
 		}
+	}
+
+	// When file tools are present, bash should NOT contain old exploration guidance.
+	if strings.Contains(prompt, "tree or find") {
+		t.Error("bash section should not contain old exploration guidance when glob/grep/read_file are present")
 	}
 }
 
@@ -93,6 +102,30 @@ func TestBuildSystemPromptBashExplorationGuidance(t *testing.T) {
 	for _, s := range expectations {
 		if !strings.Contains(prompt, s) {
 			t.Errorf("bash exploration guidance missing %q", s)
+		}
+	}
+}
+
+func TestBuildSystemPromptFileToolsGuidance(t *testing.T) {
+	tools := []Tool{
+		stubTool{"bash"},
+		stubTool{"glob"},
+		stubTool{"grep"},
+		stubTool{"read_file"},
+	}
+	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "debian:bookworm-slim")
+
+	// File tools section should be present with key guidance.
+	expectations := []string{
+		"### glob, grep, read_file",
+		"Do NOT use bash for file operations",
+		"glob (structure)",
+		"grep (search)",
+		"read_file (examine)",
+	}
+	for _, s := range expectations {
+		if !strings.Contains(prompt, s) {
+			t.Errorf("file tools guidance missing %q", s)
 		}
 	}
 }

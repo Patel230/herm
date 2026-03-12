@@ -23,6 +23,9 @@ type PromptData struct {
 	HasScratchpad  bool
 	HasAgent       bool
 	HasWebSearch   bool
+	HasGlob        bool
+	HasGrep        bool
+	HasReadFile    bool
 	ContainerImage string
 	WorkDir        string
 	Date           string
@@ -50,6 +53,9 @@ func buildSystemPrompt(tools []Tool, serverTools []types.ToolDefinition, skills 
 		HasScratchpad:  toolNames["scratchpad"],
 		HasAgent:       toolNames["agent"],
 		HasWebSearch:   toolNames[types.ServerToolWebSearch],
+		HasGlob:        toolNames["glob"],
+		HasGrep:        toolNames["grep"],
+		HasReadFile:    toolNames["read_file"],
 		ContainerImage: containerImage,
 		WorkDir:        workDir,
 		Date:           time.Now().Format("2006-01-02 15:04 MST"),

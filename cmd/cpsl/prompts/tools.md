@@ -1,6 +1,16 @@
 {{define "tools"}}
 
 ## Tools
+{{- if .HasGlob}}
+
+### glob, grep, read_file
+Dedicated file exploration tools — use these instead of bash for all file discovery, search, and reading.
+- **glob**: Find files by pattern (e.g. '**/*.go'). Fast, .gitignore-aware. Use first to discover project structure.
+- **grep**: Search file contents by regex. Modes: files_with_matches (default), content (with line numbers), count. Supports glob filters and context lines.
+- **read_file**: Read file contents with line numbers. Supports offset/limit for partial reads — avoid loading entire large files.
+- Explore in layers: glob (structure) → grep (search) → read_file (examine). Each step narrows focus.
+- Do NOT use bash for file operations (find, rg, cat, head, tail, grep) — the dedicated tools produce structured, compact output that saves tokens.
+{{- end}}
 {{- if .HasBash}}
 
 ### bash
@@ -8,12 +18,15 @@ Runs commands inside an isolated Docker container (image: {{.ContainerImage}}) w
 - The base container is minimal — it may lack compilers, runtimes, and dev tools.
 - Before running project code, check if required tools are installed (e.g. 'which go' or 'python3 --version'). If missing, use devenv to build a proper image — don't ad-hoc install or try to run code that will fail.
 - Do NOT install tools/runtimes via bash (e.g. apt-get install, apk add). Those installs are ephemeral and lost on container restart. Use devenv instead to persist them in the image.
+{{- if not .HasGlob}}
 - Explore files in layers — cheap to expensive:
   1. Structure: tree or find (filenames only, fast overview)
   2. Search: rg (ripgrep) is the primary code search tool — fast, .gitignore-aware, recursive. Fall back to grep -rn if needed
   3. Read: cat/head/tail on specific files (expensive — be selective)
   4. History: git log/git blame when understanding changes matters
 - Pipe long output through head/tail/grep to keep results focused.
+{{- end}}
+- Use bash for: running builds, tests, installs, and commands that aren't file reads.
 - Run tests after changes.
 {{- end}}
 {{- if .HasGit}}
