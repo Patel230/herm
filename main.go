@@ -844,7 +844,7 @@ func resolveWorkspaceCmd(cfg Config) workspaceMsg {
 	return workspaceMsg{worktreePath: cwd}
 }
 
-func bootContainerCmd(cfg Config, workspace string, ch chan<- any) {
+func bootContainerCmd(cfg Config, workspace string, sessionID string, ch chan<- any) {
 	ccfg := cfg.containerConfig()
 	client := NewContainerClient(ccfg)
 
@@ -859,11 +859,13 @@ func bootContainerCmd(cfg Config, workspace string, ch chan<- any) {
 
 	ch <- containerStatusMsg{text: "starting…"}
 
-	mounts := []MountSpec{{
-		Source:      workspace,
-		Destination: "/workspace",
-		ReadOnly:    false,
-	}}
+	attachDir := filepath.Join(workspace, ".cpsl", "attachments", sessionID)
+	_ = os.MkdirAll(attachDir, 0o755)
+
+	mounts := []MountSpec{
+		{Source: workspace, Destination: "/workspace", ReadOnly: false},
+		{Source: attachDir, Destination: "/attachments", ReadOnly: true},
+	}
 
 	if err := client.Start(workspace, mounts); err != nil {
 		ch <- containerStatusMsg{text: "start failed"}
@@ -2697,7 +2699,12 @@ func (a *App) switchToWorktree(wtPath, name, branch string) {
 			a.resultCh <- containerStatusMsg{text: "stopping…"}
 			_ = a.container.Stop()
 			a.resultCh <- containerStatusMsg{text: "starting…"}
-			mounts := []MountSpec{{Source: wtPath, Destination: "/workspace"}}
+			attachDir := filepath.Join(wtPath, ".cpsl", "attachments", a.sessionID)
+			_ = os.MkdirAll(attachDir, 0o755)
+			mounts := []MountSpec{
+				{Source: wtPath, Destination: "/workspace"},
+				{Source: attachDir, Destination: "/attachments", ReadOnly: true},
+			}
 			if err := a.container.Start(wtPath, mounts); err != nil {
 				a.resultCh <- containerStatusMsg{text: "start failed"}
 				a.resultCh <- containerErrMsg{err: err}
@@ -3138,10 +3145,10 @@ func (a *App) startAgent(userMessage string) {
 		tools = append(tools, NewBashTool(a.container, 120))
 		if a.worktreePath != "" {
 			cpslDir := filepath.Join(a.worktreePath, ".cpsl")
-			mounts := []MountSpec{{
-				Source:      a.worktreePath,
-				Destination: "/workspace",
-			}}
+			mounts := []MountSpec{
+				{Source: a.worktreePath, Destination: "/workspace"},
+				{Source: a.attachmentDir(), Destination: "/attachments", ReadOnly: true},
+			}
 			var projectID string
 			if repoRoot := gitRepoRoot(); repoRoot != "" {
 				projectID, _ = ensureProjectID(repoRoot)
@@ -3435,7 +3442,7 @@ func (a *App) handleResult(result any) {
 		cfg := a.config
 		wtPath := msg.worktreePath
 		go func() { a.resultCh <- fetchStatusCmd(wtPath) }()
-		go func() { bootContainerCmd(cfg, wtPath, a.resultCh) }()
+		go func() { bootContainerCmd(cfg, wtPath, a.sessionID, a.resultCh) }()
 		go cleanupTmpDir(wtPath)
 
 	case containerReadyMsg:

@@ -45,9 +45,9 @@ Copy attached files to `.cpsl/attachments/<sessionID>/` on the host, mount at `/
 - [x] 1c: Add `attachmentDir()` helper on `App` that returns `filepath.Join(worktreePath, ".cpsl", "attachments", sessionID)` — used by mount construction and cleanup
 
 ## Phase 2: Container mount wiring
-- [ ] 2a: In `bootContainerCmd()`, add the attachment mount to the mounts slice. The function receives `workspace` — derive the attachment dir from it using the session ID (pass session ID as parameter)
-- [ ] 2b: In the worktree switch handler (main.go:2674), add the attachment mount alongside the workspace mount
-- [ ] 2c: In `startAgent()` mounts for `DevEnvTool`, add the attachment mount so container rebuilds preserve it
+- [x] 2a: In `bootContainerCmd()`, add the attachment mount to the mounts slice. The function receives `workspace` — derive the attachment dir from it using the session ID (pass session ID as parameter)
+- [x] 2b: In the worktree switch handler (main.go:2674), add the attachment mount alongside the workspace mount
+- [x] 2c: In `startAgent()` mounts for `DevEnvTool`, add the attachment mount so container rebuilds preserve it
 
 ## Phase 3: Per-run cleanup and system prompt
 - [ ] 3a: At the top of `startAgent()`, move existing files in the session's attachment dir to `past/` subfolder (create `past/` if needed, skip if dir doesn't exist yet)
