@@ -27,8 +27,8 @@ Clean up the repo structure: remove junk, add README/LICENSE, move Go source out
 
 ## Phase 2: Add README and LICENSE
 
-- [ ] 2a: Add MIT `LICENSE` file with current year and placeholder author
-- [ ] 2b: Add `README.md` with project description, build instructions (`go build ./cmd/cpsl`), run instructions, and project structure overview
+- [x] 2a: Add MIT `LICENSE` file with current year and placeholder author
+- [x] 2b: Add `README.md` with project description, build instructions (`go build ./cmd/cpsl`), run instructions, and project structure overview
 
 ## Phase 3: Extract system prompts to markdown templates
 
