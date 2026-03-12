@@ -419,15 +419,21 @@ func writeRows(buf *strings.Builder, rows []string, from int) {
 
 // ─── Logo ───
 
-// buildLogo returns the logo lines colored with terminal blue.
+// buildLogo returns the colored logo lines.
+// Shell body uses two warm sand tones, eyes are black,
+// and the interior (face area) has a grey-blue background.
 func buildLogo() []string {
-	c := fmt.Sprintf("\033[38;5;%dm", 4) // ANSI blue
-	rst := "\033[0m"
+	shA := "\033[38;5;180m" // shell body (warm sand)
+	shB := "\033[38;5;223m" // shell highlight (lighter peach)
+	ib := "\033[48;5;60m"   // interior bg (grey-blue)
+	ey := "\033[38;5;232m"  // black eyes
+	tb := "\033[48;5;60m"   // tentacle bg
+	r := "\033[0m"
 	return []string{
 		"",
-		fmt.Sprintf("    %s▄███▄%s ░▄▀▀▒█▀▄░▄▀▀░█▒░", c, rst),
-		fmt.Sprintf("  %s▄██• •█%s ░▀▄▄░█▀▒▒▄██▒█▄▄", c, rst),
-		fmt.Sprintf(" %s▀███▄█▄█%s Contained Coding Agent", c, rst),
+		"    " + shA + "▄" + shB + "███" + shA + "▄" + r + " ░▄▀▀▒█▀▄░▄▀▀░█▒░",
+		"  " + shA + "▄██" + ib + ey + "• •" + r + shA + "█" + r + " ░▀▄▄░█▀▒▒▄██▒█▄▄",
+		" " + shA + "▀" + shB + "██" + shA + "█" + tb + shA + "▌▌▌" + r + shA + "█" + r + " Contained Coding Agent",
 		"",
 	}
 }
