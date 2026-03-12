@@ -69,16 +69,17 @@ Add a separate model slot for exploration/sub-agent work. Make `/model` open the
 
 Manage how much context tool results consume over a long conversation.
 
-- [ ] 3a: **Research langdag's conversation retrieval** — understand how `GetAncestors()` builds the message chain. Can nodes be modified after creation? Can we mark content as "clearable"?
-- [ ] 3b: **Implement tool result clearing** — when context grows beyond a threshold, replace old tool result content with a short placeholder (e.g., `[cleared — re-read if needed]`). Clear largest/oldest results first. This mirrors Anthropic's `clear_tool_uses` API feature.
+- [x] 3a: **Research langdag's conversation retrieval** — understand how `GetAncestors()` builds the message chain. Can nodes be modified after creation? Can we mark content as "clearable"?
+  - `GetAncestors()` walks ParentID chain, returns `[]*types.Node` root→leaf. `Storage.UpdateNode()` allows in-place modification. `PromptFrom()` re-reads nodes from storage, so cleared content takes effect on next LLM call.
+- [x] 3b: **Implement tool result clearing** — when context grows beyond a threshold, replace old tool result content with a short placeholder (e.g., `[cleared — re-read if needed]`). Clear largest/oldest results first. This mirrors Anthropic's `clear_tool_uses` API feature.
 - [ ] 3c: **Implement conversation compaction** — when approaching context limits, summarize conversation history using the exploration model (cheap). Replace history with: system prompt + summary + recent N turns.
 - [ ] 3d: **Add `/compact` command** — manual trigger for compaction with optional focus hint (e.g., `/compact focus on the auth changes`).
 - [ ] 3e: **Test compaction** — verify agent maintains coherent behavior after compaction (remembers goals, doesn't re-read files unnecessarily).
 
-**Open questions:**
-- Does langdag support modifying nodes in the tree after creation, or do we need a new branch?
-- Right threshold for auto-compaction? Claude Code uses ~95% of context window.
-- Rule-based clearing (drop old tool results) vs model-based summarization — or both in layers?
+**Resolved questions:**
+- langdag supports `Storage.UpdateNode()` — nodes can be modified in place, no branching needed.
+- Tool result clearing triggers at 80% of context window. Compaction threshold TBD.
+- Using both: rule-based clearing (3b, done) first, then model-based compaction (3c).
 
 ---
 
