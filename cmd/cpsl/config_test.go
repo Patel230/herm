@@ -527,3 +527,87 @@ func TestExitConfigModeSavesBothConfigs(t *testing.T) {
 		t.Errorf("global Personality = %q, want %q", globalLoaded.Personality, "global-personality")
 	}
 }
+
+// --- ExplorationModel tests ---
+
+func explorationTestModels() []ModelDef {
+	return []ModelDef{
+		{Provider: ProviderAnthropic, ID: "claude-sonnet"},
+		{Provider: ProviderAnthropic, ID: "claude-haiku"},
+		{Provider: ProviderOpenAI, ID: "gpt-4o"},
+	}
+}
+
+func TestResolveExplorationModel_FallsBackToActive(t *testing.T) {
+	cfg := Config{
+		AnthropicAPIKey: "key",
+		ActiveModel:     "claude-sonnet",
+		// ExplorationModel is empty
+	}
+	got := cfg.resolveExplorationModel(explorationTestModels())
+	if got != "claude-sonnet" {
+		t.Errorf("resolveExplorationModel = %q, want %q (should fall back to active)", got, "claude-sonnet")
+	}
+}
+
+func TestResolveExplorationModel_UsesConfigured(t *testing.T) {
+	cfg := Config{
+		AnthropicAPIKey:  "key",
+		ActiveModel:      "claude-sonnet",
+		ExplorationModel: "claude-haiku",
+	}
+	got := cfg.resolveExplorationModel(explorationTestModels())
+	if got != "claude-haiku" {
+		t.Errorf("resolveExplorationModel = %q, want %q", got, "claude-haiku")
+	}
+}
+
+func TestResolveExplorationModel_InvalidFallsBack(t *testing.T) {
+	cfg := Config{
+		AnthropicAPIKey:  "key",
+		ActiveModel:      "claude-sonnet",
+		ExplorationModel: "nonexistent-model",
+	}
+	got := cfg.resolveExplorationModel(explorationTestModels())
+	if got != "claude-sonnet" {
+		t.Errorf("resolveExplorationModel = %q, want %q (should fall back for invalid model)", got, "claude-sonnet")
+	}
+}
+
+func TestResolveExplorationModel_NoKeyForProvider(t *testing.T) {
+	cfg := Config{
+		AnthropicAPIKey:  "key",
+		ActiveModel:      "claude-sonnet",
+		ExplorationModel: "gpt-4o", // valid model but no OpenAI key
+	}
+	got := cfg.resolveExplorationModel(explorationTestModels())
+	// gpt-4o provider has no key, so it's not in available models — falls back
+	if got != "claude-sonnet" {
+		t.Errorf("resolveExplorationModel = %q, want %q (no key for exploration model provider)", got, "claude-sonnet")
+	}
+}
+
+func TestMergeConfigsExplorationModel(t *testing.T) {
+	global := Config{
+		ActiveModel:      "claude-sonnet",
+		ExplorationModel: "claude-haiku",
+	}
+	project := ProjectConfig{
+		ExplorationModel: "gpt-4o",
+	}
+	merged := mergeConfigs(global, project)
+	if merged.ExplorationModel != "gpt-4o" {
+		t.Errorf("merged ExplorationModel = %q, want %q", merged.ExplorationModel, "gpt-4o")
+	}
+}
+
+func TestMergeConfigsExplorationModelEmpty(t *testing.T) {
+	global := Config{
+		ExplorationModel: "claude-haiku",
+	}
+	project := ProjectConfig{} // empty — should not override
+	merged := mergeConfigs(global, project)
+	if merged.ExplorationModel != "claude-haiku" {
+		t.Errorf("merged ExplorationModel = %q, want %q (empty project should not override)", merged.ExplorationModel, "claude-haiku")
+	}
+}

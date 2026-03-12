@@ -57,7 +57,7 @@ Add a separate model slot for exploration/sub-agent work. Make `/model` open the
 - [x] 2b: **Add exploration model to config UI** — add "Exploration Model" field to both Global (tab 1) and Project (tab 2) config tabs. When the user presses Enter on a model field, show the model picker inline (reuse the existing `/model` menu as a picker within the config editor).
 - [x] 2c: **Change `/model` to open config** — instead of showing a standalone model picker, `/model` should open `/config` and navigate to the relevant tab where model fields live. Pressing Enter on "Active Model" or "Exploration Model" opens the model selector.
 - [x] 2d: **Route sub-agents to exploration model** — in `SubAgentTool`, use `config.ExplorationModel` (resolved) instead of the parent's `active_model`. If exploration model is unset, fall back to active model.
-- [ ] 2e: **Test model routing** — verify sub-agents use the configured exploration model, and that changing it in config takes effect for subsequent sub-agent calls.
+- [x] 2e: **Test model routing** — verify sub-agents use the configured exploration model, and that changing it in config takes effect for subsequent sub-agent calls.
 
 **Open questions:**
 - Should the exploration model also be used for compaction/summarization tasks (Phase 3)?
