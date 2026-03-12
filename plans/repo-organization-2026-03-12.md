@@ -42,7 +42,7 @@ The goal: move prompt text out of Go string literals into `.md` files that are e
 
 - [x] 3a: Create prompt template files in `prompts/` directory — one file per section (role.md, tools.md, practices.md, communication.md, skills.md, environment.md) plus a master template that includes them
 - [x] 3b: Rewrite `buildSystemPrompt` to parse and execute the templates from embedded FS, passing a data struct. The output must be identical to the current implementation
-- [ ] 3c: Update `systemprompt_test.go` — existing tests should still pass (same output). Add a test that verifies template parsing succeeds
+- [x] 3c: Update `systemprompt_test.go` — existing tests should still pass (same output). Add a test that verifies template parsing succeeds
 
 ## Phase 4: Move Go source into `cmd/cpsl/`
 
