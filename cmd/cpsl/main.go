@@ -1998,11 +1998,13 @@ func (a *App) Run() error {
 		}
 	}()
 
-	// Enter alt-screen, enable bracketed paste
+	// Enter alt-screen, enable bracketed paste, enable modifyOtherKeys mode 1
 	fmt.Print("\033[?1049h")
 	fmt.Print("\033[?2004h")
+	fmt.Print("\033[>4;2m")
 	defer func() {
 		fmt.Print("\033[?25h")  // ensure cursor visible on exit
+		fmt.Print("\033[>4;0m") // disable modifyOtherKeys
 		fmt.Print("\033[?2004l")
 		fmt.Print("\033[?1049l")
 		end := time.Now()
@@ -2296,6 +2298,15 @@ func (a *App) handleEscapeSequence(stdinCh chan byte, readByte func() (byte, boo
 		return
 	}
 
+	if b == 0x7F {
+		// Alt+Backspace: delete word backward
+		if !a.awaitingApproval {
+			a.deleteWordBackward()
+			a.renderInput()
+		}
+		return
+	}
+
 	if b != '[' {
 		// ESC followed by non-[ byte (e.g. Alt+key) — treat as plain escape
 		a.handlePlainEscape()
@@ -2309,8 +2320,9 @@ func (a *App) handleEscapeSequence(stdinCh chan byte, readByte func() (byte, boo
 	}
 
 	// Check for bracketed paste: ESC [ 2 0 0 ~
+	// Also handles modifyOtherKeys: ESC [ 2 7 ; <mod> ; <code> ~
 	if b == '2' {
-		a.handlePossibleBracketedPaste(readByte)
+		a.handleCSIDigit2(readByte)
 		return
 	}
 
@@ -2427,7 +2439,34 @@ func (a *App) handleEscapeSequence(stdinCh chan byte, readByte func() (byte, boo
 	}
 }
 
-func (a *App) handlePossibleBracketedPaste(readByte func() (byte, bool)) {
+// handleModifyOtherKeys processes a modifyOtherKeys sequence (CSI 27;mod;code~).
+// With modifyOtherKeys mode 2, the terminal encodes modified keys that would
+// otherwise be ambiguous (e.g., Ctrl+C as CSI 27;5;99~ instead of byte 0x03).
+// We translate these back to the actions the app already handles.
+func (a *App) handleModifyOtherKeys(mod, code int) {
+	if a.awaitingApproval {
+		return
+	}
+	mod-- // CSI modifier encoding
+	isAlt := mod&2 != 0
+	isCtrl := mod&4 != 0
+
+	switch {
+	case isAlt && code == 127: // Alt+Backspace → delete word
+		a.deleteWordBackward()
+		a.renderInput()
+	case isAlt && code == '\r': // Alt+Enter → insert newline
+		a.insertAtCursor('\n')
+		a.renderInput()
+	case isCtrl && code >= 'a' && code <= 'z':
+		// Translate Ctrl+letter to traditional control byte
+		// and inject into the input channel for normal processing.
+		ctrlByte := byte(code - 'a' + 1)
+		go func() { a.stdinCh <- ctrlByte }()
+	}
+}
+
+func (a *App) handleCSIDigit2(readByte func() (byte, bool)) {
 	// We've read ESC [ 2, check for 0 0 ~
 	b0, ok := readByte()
 	if !ok {
@@ -2487,6 +2526,32 @@ func (a *App) handlePossibleBracketedPaste(readByte func() (byte, bool)) {
 		return
 	}
 
+	// modifyOtherKeys: ESC [ 27 ; <mod> ; <code> ~
+	// We've read ESC [ 2, b0='7', b1=';', b2=<mod digit>
+	if b0 == '7' && b1 == ';' {
+		// Read remaining: possibly more mod digits, ';', code digits, '~'
+		// Collect all remaining bytes until '~'
+		seq := []byte{b2}
+		for {
+			next, ok := readByte()
+			if !ok {
+				return
+			}
+			if next == '~' {
+				break
+			}
+			seq = append(seq, next)
+		}
+		// Parse: seq should be "<mod>;<code>" (b2 is the first byte)
+		// Full param after "27;" is string(seq), parse mod and code
+		parts := string(seq)
+		var mod, code int
+		if n, _ := fmt.Sscanf(parts, "%d;%d", &mod, &code); n == 2 {
+			a.handleModifyOtherKeys(mod, code)
+		}
+		return
+	}
+
 	// Not a bracketed paste, might be another sequence starting with 2
 	// e.g., Insert key (ESC [ 2 ~)
 	if b0 == '~' {
@@ -2519,18 +2584,19 @@ func (a *App) handleModifiedCSI(readByte func() (byte, bool)) {
 
 	modNum := int(modByte - '0')
 	modNum-- // CSI encoding
+	isAlt := modNum&2 != 0
 	isCtrl := modNum&4 != 0
 
 	switch letter {
 	case 'C': // Right
-		if isCtrl {
+		if isCtrl || isAlt {
 			a.moveWordRight()
 		} else if a.cursor < len(a.input) {
 			a.cursor++
 		}
 		a.renderInput()
 	case 'D': // Left
-		if isCtrl {
+		if isCtrl || isAlt {
 			a.moveWordLeft()
 		} else if a.cursor > 0 {
 			a.cursor--
@@ -3697,6 +3763,7 @@ func (a *App) enterShellMode() {
 
 	// Exit alt screen, restore terminal
 	fmt.Print("\033[?25h")   // show cursor
+	fmt.Print("\033[>4;0m")  // disable modifyOtherKeys
 	fmt.Print("\033[?2004l") // disable bracketed paste
 	fmt.Print("\033[?1049l") // exit alt screen
 	term.Restore(a.fd, a.oldState)
@@ -3717,9 +3784,10 @@ func (a *App) enterShellMode() {
 	}
 	a.oldState = oldState
 
-	// Re-enter alt screen, re-enable bracketed paste
+	// Re-enter alt screen, re-enable bracketed paste, modifyOtherKeys
 	fmt.Print("\033[?1049h")
 	fmt.Print("\033[?2004h")
+	fmt.Print("\033[>4;2m")
 
 	// Restart the stdin reader goroutine
 	a.startStdinReader()
