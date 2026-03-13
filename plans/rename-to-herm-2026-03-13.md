@@ -34,7 +34,7 @@ Rename the Go module, the `cmd/cpsl/` directory to `cmd/herm/`, and update build
 
 Update all test files to use the new naming. These are in `cmd/herm/` after Phase 3's rename.
 
-- [ ] 4a: Update devenv_test.go — all `.cpsl/` paths, `cpslDir` variables, `/tmp/cpsl` paths, expected image names (`"cpsl-abcdef12:..."` → `"herm-abcdef12:..."`), Dockerfile messages
+- [x] 4a: Update devenv_test.go — all `.cpsl/` paths, `cpslDir` variables, `/tmp/cpsl` paths, expected image names (`"cpsl-abcdef12:..."` → `"herm-abcdef12:..."`), Dockerfile messages
 - [ ] 4b: Update worktree_test.go (`.cpsl-lock` → `.herm-lock`), model_test.go (`"cpsl-test-*"` temp dir prefix → `"herm-test-*"`, comments about `~/.cpsl/`), history_test.go (`.cpsl/history` → `.herm/history`)
 - [ ] 4c: Update render_test.go and filetools_test.go — any test output/fixture strings containing `cpsl` paths (e.g., `cmd/cpsl/main.go` → `cmd/herm/main.go`, `# cpsl/cmd/cpsl` → `# herm/cmd/herm`)
 

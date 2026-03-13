@@ -1,8 +1,8 @@
 # Binaries
-herm
-main
-debug
-simple-chat
+/herm
+/main
+/debug
+/simple-chat
 cmd/herm/herm
 cmd/debug/debug
 cmd/simple-chat/simple-chat

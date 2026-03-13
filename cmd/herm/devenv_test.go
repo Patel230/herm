@@ -10,7 +10,7 @@ import (
 )
 
 func TestDevEnvTool_Definition(t *testing.T) {
-	tool := NewDevEnvTool(nil, "/tmp/cpsl", "/tmp/workspace", nil, "", nil, nil)
+	tool := NewDevEnvTool(nil, "/tmp/herm", "/tmp/workspace", nil, "", nil, nil)
 	def := tool.Definition()
 	if def.Name != "devenv" {
 		t.Errorf("Name = %q, want %q", def.Name, "devenv")
@@ -26,30 +26,30 @@ func TestDevEnvTool_Definition(t *testing.T) {
 
 func TestDevEnvTool_ReadNoDockerfile(t *testing.T) {
 	dir := t.TempDir()
-	cpslDir := filepath.Join(dir, ".cpsl")
+	hermDir := filepath.Join(dir, ".herm")
 	workspace := dir
 
-	tool := NewDevEnvTool(nil, cpslDir, workspace, nil, "", nil, nil)
+	tool := NewDevEnvTool(nil, hermDir, workspace, nil, "", nil, nil)
 	input, _ := json.Marshal(devenvInput{Action: "read"})
 
 	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if !strings.Contains(result, "No .cpsl/Dockerfile exists yet") {
+	if !strings.Contains(result, "No .herm/Dockerfile exists yet") {
 		t.Errorf("expected 'no Dockerfile' message, got: %s", result)
 	}
 }
 
 func TestDevEnvTool_ReadExistingDockerfile(t *testing.T) {
 	dir := t.TempDir()
-	cpslDir := filepath.Join(dir, ".cpsl")
-	os.MkdirAll(cpslDir, 0o755)
+	hermDir := filepath.Join(dir, ".herm")
+	os.MkdirAll(hermDir, 0o755)
 
 	content := "FROM alpine:latest\nRUN apk add go\n"
-	os.WriteFile(filepath.Join(cpslDir, "Dockerfile"), []byte(content), 0o644)
+	os.WriteFile(filepath.Join(hermDir, "Dockerfile"), []byte(content), 0o644)
 
-	tool := NewDevEnvTool(nil, cpslDir, dir, nil, "", nil, nil)
+	tool := NewDevEnvTool(nil, hermDir, dir, nil, "", nil, nil)
 	input, _ := json.Marshal(devenvInput{Action: "read"})
 
 	result, err := tool.Execute(context.Background(), input)
@@ -63,20 +63,20 @@ func TestDevEnvTool_ReadExistingDockerfile(t *testing.T) {
 
 func TestDevEnvTool_ReadDetectsRootDockerfile(t *testing.T) {
 	dir := t.TempDir()
-	cpslDir := filepath.Join(dir, ".cpsl")
+	hermDir := filepath.Join(dir, ".herm")
 
-	// No .cpsl/Dockerfile, but a root Dockerfile exists.
+	// No .herm/Dockerfile, but a root Dockerfile exists.
 	rootContent := "FROM node:20\nWORKDIR /app\n"
 	os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(rootContent), 0o644)
 
-	tool := NewDevEnvTool(nil, cpslDir, dir, nil, "", nil, nil)
+	tool := NewDevEnvTool(nil, hermDir, dir, nil, "", nil, nil)
 	input, _ := json.Marshal(devenvInput{Action: "read"})
 
 	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if !strings.Contains(result, "No .cpsl/Dockerfile exists yet") {
+	if !strings.Contains(result, "No .herm/Dockerfile exists yet") {
 		t.Error("expected 'no Dockerfile' message")
 	}
 	if !strings.Contains(result, "Dockerfile exists in the project root") {
@@ -89,14 +89,14 @@ func TestDevEnvTool_ReadDetectsRootDockerfile(t *testing.T) {
 
 func TestDevEnvTool_ReadSurfacesNamedDockerfiles(t *testing.T) {
 	dir := t.TempDir()
-	cpslDir := filepath.Join(dir, ".cpsl")
-	os.MkdirAll(cpslDir, 0o755)
+	hermDir := filepath.Join(dir, ".herm")
+	os.MkdirAll(hermDir, 0o755)
 
-	// Named Dockerfiles exist but no canonical .cpsl/Dockerfile.
-	os.WriteFile(filepath.Join(cpslDir, "go.Dockerfile"), []byte("FROM golang:1.22\n"), 0o644)
-	os.WriteFile(filepath.Join(cpslDir, "node.Dockerfile"), []byte("FROM node:22\n"), 0o644)
+	// Named Dockerfiles exist but no canonical .herm/Dockerfile.
+	os.WriteFile(filepath.Join(hermDir, "go.Dockerfile"), []byte("FROM golang:1.22\n"), 0o644)
+	os.WriteFile(filepath.Join(hermDir, "node.Dockerfile"), []byte("FROM node:22\n"), 0o644)
 
-	tool := NewDevEnvTool(nil, cpslDir, dir, nil, "", nil, nil)
+	tool := NewDevEnvTool(nil, hermDir, dir, nil, "", nil, nil)
 	input, _ := json.Marshal(devenvInput{Action: "read"})
 
 	result, err := tool.Execute(context.Background(), input)
@@ -113,9 +113,9 @@ func TestDevEnvTool_ReadSurfacesNamedDockerfiles(t *testing.T) {
 
 func TestDevEnvTool_WriteDockerfile(t *testing.T) {
 	dir := t.TempDir()
-	cpslDir := filepath.Join(dir, ".cpsl")
+	hermDir := filepath.Join(dir, ".herm")
 
-	tool := NewDevEnvTool(nil, cpslDir, dir, nil, "", nil, nil)
+	tool := NewDevEnvTool(nil, hermDir, dir, nil, "", nil, nil)
 	content := "FROM ubuntu:22.04\nRUN apt-get update\n"
 	input, _ := json.Marshal(devenvInput{Action: "write", Content: content})
 
@@ -128,7 +128,7 @@ func TestDevEnvTool_WriteDockerfile(t *testing.T) {
 	}
 
 	// Verify file was written to canonical path.
-	data, err := os.ReadFile(filepath.Join(cpslDir, "Dockerfile"))
+	data, err := os.ReadFile(filepath.Join(hermDir, "Dockerfile"))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
@@ -139,9 +139,9 @@ func TestDevEnvTool_WriteDockerfile(t *testing.T) {
 
 func TestDevEnvTool_WriteEmptyContent(t *testing.T) {
 	dir := t.TempDir()
-	cpslDir := filepath.Join(dir, ".cpsl")
+	hermDir := filepath.Join(dir, ".herm")
 
-	tool := NewDevEnvTool(nil, cpslDir, dir, nil, "", nil, nil)
+	tool := NewDevEnvTool(nil, hermDir, dir, nil, "", nil, nil)
 	input, _ := json.Marshal(devenvInput{Action: "write", Content: ""})
 
 	_, err := tool.Execute(context.Background(), input)
@@ -155,9 +155,9 @@ func TestDevEnvTool_WriteEmptyContent(t *testing.T) {
 
 func TestDevEnvTool_BuildNoDockerfile(t *testing.T) {
 	dir := t.TempDir()
-	cpslDir := filepath.Join(dir, ".cpsl")
+	hermDir := filepath.Join(dir, ".herm")
 
-	tool := NewDevEnvTool(nil, cpslDir, dir, nil, "", nil, nil)
+	tool := NewDevEnvTool(nil, hermDir, dir, nil, "", nil, nil)
 	input, _ := json.Marshal(devenvInput{Action: "build"})
 
 	_, err := tool.Execute(context.Background(), input)
@@ -174,9 +174,9 @@ func TestDevEnvTool_BuildCallsRebuild(t *testing.T) {
 	defer func() { dockerCommand = orig }()
 
 	dir := t.TempDir()
-	cpslDir := filepath.Join(dir, ".cpsl")
-	os.MkdirAll(cpslDir, 0o755)
-	os.WriteFile(filepath.Join(cpslDir, "Dockerfile"), []byte("FROM alpine:latest\n"), 0o644)
+	hermDir := filepath.Join(dir, ".herm")
+	os.MkdirAll(hermDir, 0o755)
+	os.WriteFile(filepath.Join(hermDir, "Dockerfile"), []byte("FROM alpine:latest\n"), 0o644)
 
 	dockerCommand = fakeDockerCommand(func(args []string) (string, string, int) {
 		if len(args) >= 2 {
@@ -198,7 +198,7 @@ func TestDevEnvTool_BuildCallsRebuild(t *testing.T) {
 	container.containerID = "oldcontainer456"
 
 	mounts := []MountSpec{{Source: dir, Destination: "/workspace"}}
-	tool := NewDevEnvTool(container, cpslDir, dir, mounts, "", nil, nil)
+	tool := NewDevEnvTool(container, hermDir, dir, mounts, "", nil, nil)
 	input, _ := json.Marshal(devenvInput{Action: "build"})
 
 	result, err := tool.Execute(context.Background(), input)
@@ -247,9 +247,9 @@ func TestDevEnvTool_OnRebuildCallback(t *testing.T) {
 	defer func() { dockerCommand = orig }()
 
 	dir := t.TempDir()
-	cpslDir := filepath.Join(dir, ".cpsl")
-	os.MkdirAll(cpslDir, 0o755)
-	os.WriteFile(filepath.Join(cpslDir, "Dockerfile"), []byte("FROM golang:1.22\n"), 0o644)
+	hermDir := filepath.Join(dir, ".herm")
+	os.MkdirAll(hermDir, 0o755)
+	os.WriteFile(filepath.Join(hermDir, "Dockerfile"), []byte("FROM golang:1.22\n"), 0o644)
 
 	dockerCommand = fakeDockerCommand(func(args []string) (string, string, int) {
 		if len(args) >= 2 {
@@ -273,7 +273,7 @@ func TestDevEnvTool_OnRebuildCallback(t *testing.T) {
 	onRebuild := func(img string) { callbackImage = img }
 
 	mounts := []MountSpec{{Source: dir, Destination: "/workspace"}}
-	tool := NewDevEnvTool(container, cpslDir, dir, mounts, "abcdef1234567890", onRebuild, nil)
+	tool := NewDevEnvTool(container, hermDir, dir, mounts, "abcdef1234567890", onRebuild, nil)
 	input, _ := json.Marshal(devenvInput{Action: "build"})
 
 	result, err := tool.Execute(context.Background(), input)
@@ -285,7 +285,7 @@ func TestDevEnvTool_OnRebuildCallback(t *testing.T) {
 	}
 
 	// Image tag uses hash of Dockerfile content.
-	expectedImage := "cpsl-abcdef12:3c9030126559"
+	expectedImage := "herm-abcdef12:3c9030126559"
 	if callbackImage != expectedImage {
 		t.Errorf("onRebuild called with %q, want %q", callbackImage, expectedImage)
 	}
@@ -298,9 +298,9 @@ func TestDevEnvTool_OnRebuildCallback(t *testing.T) {
 // old callers) is silently accepted without error and still uses the canonical path.
 func TestDevEnvTool_NameParamIgnored(t *testing.T) {
 	dir := t.TempDir()
-	cpslDir := filepath.Join(dir, ".cpsl")
+	hermDir := filepath.Join(dir, ".herm")
 
-	tool := NewDevEnvTool(nil, cpslDir, dir, nil, "", nil, nil)
+	tool := NewDevEnvTool(nil, hermDir, dir, nil, "", nil, nil)
 	content := "FROM golang:1.22\n"
 	// Pass name:"go" — it should be ignored.
 	input, _ := json.Marshal(devenvInput{Action: "write", Name: "go", Content: content})
@@ -310,11 +310,11 @@ func TestDevEnvTool_NameParamIgnored(t *testing.T) {
 		t.Fatalf("Execute write: %v", err)
 	}
 
-	// File must be at the canonical path, not .cpsl/go.Dockerfile.
-	if _, statErr := os.Stat(filepath.Join(cpslDir, "Dockerfile")); statErr != nil {
-		t.Error("expected .cpsl/Dockerfile to exist")
+	// File must be at the canonical path, not .herm/go.Dockerfile.
+	if _, statErr := os.Stat(filepath.Join(hermDir, "Dockerfile")); statErr != nil {
+		t.Error("expected .herm/Dockerfile to exist")
 	}
-	if _, statErr := os.Stat(filepath.Join(cpslDir, "go.Dockerfile")); !os.IsNotExist(statErr) {
-		t.Error(".cpsl/go.Dockerfile must not be created")
+	if _, statErr := os.Stat(filepath.Join(hermDir, "go.Dockerfile")); !os.IsNotExist(statErr) {
+		t.Error(".herm/go.Dockerfile must not be created")
 	}
 }
