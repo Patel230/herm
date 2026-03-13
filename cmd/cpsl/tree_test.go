@@ -218,6 +218,107 @@ func TestShortModel(t *testing.T) {
 	}
 }
 
+func TestRebuildChatMessages_IncludesToolCalls(t *testing.T) {
+	a := &App{}
+
+	nodes := []*types.Node{
+		{ID: "1", NodeType: types.NodeTypeUser, Content: "Run ls"},
+		{ID: "2", ParentID: "1", NodeType: types.NodeTypeAssistant,
+			Content: `[{"type":"text","text":"Let me run that."},{"type":"tool_use","id":"call_1","name":"bash","input":{"command":"ls -la"}}]`},
+		{ID: "3", ParentID: "2", NodeType: types.NodeTypeUser,
+			Content: `[{"type":"tool_result","tool_use_id":"call_1","content":"file1.go\nfile2.go"}]`},
+		{ID: "4", ParentID: "3", NodeType: types.NodeTypeAssistant, Content: "Here are the files."},
+	}
+
+	msgs := a.rebuildChatMessages(nodes)
+
+	// Should have: user, assistant text, toolCall, toolResult, assistant text
+	var kinds []chatMsgKind
+	for _, m := range msgs {
+		kinds = append(kinds, m.kind)
+	}
+	want := []chatMsgKind{msgUser, msgAssistant, msgToolCall, msgToolResult, msgAssistant}
+	if len(kinds) != len(want) {
+		t.Fatalf("got %d messages %v, want %d %v", len(kinds), kinds, len(want), want)
+	}
+	for i := range want {
+		if kinds[i] != want[i] {
+			t.Errorf("msg[%d].kind = %v, want %v", i, kinds[i], want[i])
+		}
+	}
+
+	// Tool call should contain the bash command summary.
+	for _, m := range msgs {
+		if m.kind == msgToolCall {
+			if !strings.Contains(m.content, "ls -la") {
+				t.Errorf("tool call content = %q, want it to contain 'ls -la'", m.content)
+			}
+		}
+	}
+
+	// Tool result should contain the collapsed output.
+	for _, m := range msgs {
+		if m.kind == msgToolResult {
+			if !strings.Contains(m.content, "file1.go") {
+				t.Errorf("tool result content = %q, want it to contain 'file1.go'", m.content)
+			}
+		}
+	}
+}
+
+func TestRebuildChatMessages_ToolResultError(t *testing.T) {
+	a := &App{}
+
+	nodes := []*types.Node{
+		{ID: "1", NodeType: types.NodeTypeUser, Content: "Do something"},
+		{ID: "2", ParentID: "1", NodeType: types.NodeTypeAssistant,
+			Content: `[{"type":"tool_use","id":"call_1","name":"bash","input":{"command":"bad-cmd"}}]`},
+		{ID: "3", ParentID: "2", NodeType: types.NodeTypeUser,
+			Content: `[{"type":"tool_result","tool_use_id":"call_1","content":"command not found","is_error":true}]`},
+		{ID: "4", ParentID: "3", NodeType: types.NodeTypeAssistant, Content: "That failed."},
+	}
+
+	msgs := a.rebuildChatMessages(nodes)
+
+	for _, m := range msgs {
+		if m.kind == msgToolResult {
+			if !m.isError {
+				t.Errorf("expected tool result to be marked as error")
+			}
+			return
+		}
+	}
+	t.Errorf("no tool result found in messages")
+}
+
+func TestRebuildChatMessages_OldFormatToolNodes(t *testing.T) {
+	a := &App{}
+
+	nodes := []*types.Node{
+		{ID: "1", NodeType: types.NodeTypeUser, Content: "Run ls"},
+		{ID: "2", ParentID: "1", NodeType: types.NodeTypeAssistant, Content: "Let me run that."},
+		{ID: "3", ParentID: "2", NodeType: types.NodeTypeToolCall, Content: `{"name":"bash","input":{"command":"ls"}}`},
+		{ID: "4", ParentID: "3", NodeType: types.NodeTypeToolResult, Content: "file1.go\nfile2.go"},
+		{ID: "5", ParentID: "4", NodeType: types.NodeTypeAssistant, Content: "Here are the files."},
+	}
+
+	msgs := a.rebuildChatMessages(nodes)
+
+	var kinds []chatMsgKind
+	for _, m := range msgs {
+		kinds = append(kinds, m.kind)
+	}
+	want := []chatMsgKind{msgUser, msgAssistant, msgToolCall, msgToolResult, msgAssistant}
+	if len(kinds) != len(want) {
+		t.Fatalf("got %d messages %v, want %d %v", len(kinds), kinds, len(want), want)
+	}
+	for i := range want {
+		if kinds[i] != want[i] {
+			t.Errorf("msg[%d].kind = %v, want %v", i, kinds[i], want[i])
+		}
+	}
+}
+
 func TestTruncate(t *testing.T) {
 	if got := truncate("short", 10); got != "short" {
 		t.Errorf("truncate short = %q", got)

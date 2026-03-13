@@ -422,6 +422,7 @@ func writeRows(buf *strings.Builder, rows []string, from int) {
 // buildLogo returns the colored logo lines.
 // Shell body uses two warm sand tones, eyes are black,
 // and the interior (face area) has a grey-blue background.
+// HERM acronym rendered as 2-row block art with cyan→pink gradient.
 func buildLogo() []string {
 	shA := "\033[38;5;180m" // shell body (warm sand)
 	shB := "\033[38;5;223m" // shell highlight (lighter peach)
@@ -429,11 +430,17 @@ func buildLogo() []string {
 	ey := "\033[38;5;232m"  // black eyes
 	tb := "\033[48;5;60m"   // tentacle bg
 	r := "\033[0m"
+	d := "\033[2m" // dim (tagline)
+	// HERM gradient: cyan → blue-purple → purple → hot pink
+	cH := "\033[1;38;2;0;212;255m"
+	cE := "\033[1;38;2;85;140;230m"
+	cR := "\033[1;38;2;170;68;200m"
+	cM := "\033[1;38;2;255;20;147m"
 	return []string{
 		"",
-		"    " + shA + "▄" + shB + "███" + shA + "▄" + r + " ░▄▀▀▒█▀▄░▄▀▀░█▒░",
-		"  " + shA + "▄██" + ib + ey + "• •" + r + shA + "█" + r + " ░▀▄▄░█▀▒▒▄██▒█▄▄",
-		" " + shA + "▀" + shB + "██" + shA + "█" + tb + shA + "▌▌▌" + r + shA + "█" + r + " Contained Coding Agent",
+		"    " + shA + "▄" + shB + "███" + shA + "▄" + r + "  " + cH + "█ █" + r + " " + cE + "█▀▀" + r + " " + cR + "█▀█" + r + " " + cM + "█▄ ▄█" + r,
+		"  " + shA + "▄██" + ib + ey + "• •" + r + shA + "█" + r + "  " + cH + "█▀█" + r + " " + cE + "██▄" + r + " " + cR + "█▀▄" + r + " " + cM + "█ ▀ █" + r,
+		" " + shA + "▀" + shB + "██" + shA + "█" + tb + shA + "▌▌▌" + r + shA + "█" + r + "  " + d + "Helpful Encapsulated Reasoning Machine" + r,
 		"",
 	}
 }

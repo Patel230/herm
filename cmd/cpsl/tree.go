@@ -210,24 +210,52 @@ func (a *App) loadConversation(id string) {
 
 	a.messages = a.rebuildChatMessages(ancestors)
 	a.messages = append(a.messages, chatMessage{kind: msgSuccess, content: fmt.Sprintf("Loaded conversation %s — continuing from node %s", id[:min(8, len(id))], leaf.ID[:min(8, len(leaf.ID))])})
-	a.render()
+	a.renderFull()
 }
 
-// rebuildChatMessages converts a node ancestor chain into displayable chat messages.
+// rebuildChatMessages converts a node ancestor chain into displayable chat messages,
+// including tool call/result pairs rendered as tool boxes.
 func (a *App) rebuildChatMessages(nodes []*types.Node) []chatMessage {
 	var msgs []chatMessage
+	// pendingToolUses holds tool_use blocks from the last assistant node,
+	// keyed by ID so we can pair them with results.
+	var pendingToolUses []types.ContentBlock
+
 	for _, n := range nodes {
 		switch {
-		case n.NodeType == types.NodeTypeUser && isToolResultContent(n.Content):
-			// Skip tool result nodes — they're internal.
-			continue
-		case n.NodeType == types.NodeTypeToolCall || n.NodeType == types.NodeTypeToolResult:
-			continue
 		case n.NodeType == types.NodeTypeAssistant:
 			text := extractAssistantText(n.Content)
+			toolUses := extractAssistantToolUses(n.Content)
 			if text != "" {
 				msgs = append(msgs, chatMessage{kind: msgAssistant, content: text})
 			}
+			pendingToolUses = toolUses
+
+		case n.NodeType == types.NodeTypeUser && isToolResultContent(n.Content):
+			// Pair tool results with pending tool_use blocks from the assistant.
+			results := parseToolResultBlocks(n.Content)
+			for _, r := range results {
+				title := "~ tool"
+				for _, tc := range pendingToolUses {
+					if tc.ID == r.ToolUseID {
+						title = toolCallSummary(tc.Name, tc.Input)
+						break
+					}
+				}
+				msgs = append(msgs, chatMessage{kind: msgToolCall, content: title, leadBlank: true})
+				msgs = append(msgs, chatMessage{kind: msgToolResult, content: collapseToolResult(r.Content), isError: r.IsError})
+			}
+			pendingToolUses = nil
+
+		case n.NodeType == types.NodeTypeToolCall:
+			name := extractToolName(n.Content)
+			input := extractToolCallInput(n.Content)
+			msgs = append(msgs, chatMessage{kind: msgToolCall, content: toolCallSummary(name, input), leadBlank: true})
+
+		case n.NodeType == types.NodeTypeToolResult:
+			isErr := strings.Contains(n.Content, `"is_error":true`)
+			msgs = append(msgs, chatMessage{kind: msgToolResult, content: collapseToolResult(n.Content), isError: isErr})
+
 		case n.NodeType == types.NodeTypeUser:
 			msgs = append(msgs, chatMessage{kind: msgUser, content: n.Content, leadBlank: true})
 		}
@@ -489,4 +517,49 @@ func extractToolName(content string) string {
 		return ""
 	}
 	return content[start : start+end]
+}
+
+// extractToolCallInput extracts the input JSON from a tool_call node's content.
+func extractToolCallInput(content string) json.RawMessage {
+	var block struct {
+		Input json.RawMessage `json:"input"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(content)), &block) == nil {
+		return block.Input
+	}
+	return nil
+}
+
+// extractAssistantToolUses returns tool_use content blocks from an assistant node.
+func extractAssistantToolUses(content string) []types.ContentBlock {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || trimmed[0] != '[' {
+		return nil
+	}
+	var blocks []types.ContentBlock
+	if err := json.Unmarshal([]byte(trimmed), &blocks); err != nil {
+		return nil
+	}
+	var tools []types.ContentBlock
+	for _, b := range blocks {
+		if b.Type == "tool_use" {
+			tools = append(tools, b)
+		}
+	}
+	return tools
+}
+
+// parseToolResultBlocks returns tool_result content blocks from a user node.
+func parseToolResultBlocks(content string) []types.ContentBlock {
+	var blocks []types.ContentBlock
+	if err := json.Unmarshal([]byte(strings.TrimSpace(content)), &blocks); err != nil {
+		return nil
+	}
+	var results []types.ContentBlock
+	for _, b := range blocks {
+		if b.Type == "tool_result" {
+			results = append(results, b)
+		}
+	}
+	return results
 }
