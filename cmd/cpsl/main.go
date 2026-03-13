@@ -3240,7 +3240,7 @@ func (a *App) promptForWorktreeName(repoRoot, baseDir string) {
 			a.render()
 			return
 		}
-		branch := "cpsl-" + name
+		branch := "herm-" + name
 		a.switchToWorktree(wtPath, name, branch)
 	}
 	a.resetInput()

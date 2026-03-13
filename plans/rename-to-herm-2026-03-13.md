@@ -19,7 +19,7 @@ All config path logic flows from a single constant (`configDir` in config.go) an
 Container names, image tags, and worktree branch prefixes all use `cpsl-` as a prefix.
 
 - [x] 2a: Update Docker container naming in container.go (`"cpsl-%s"` → `"herm-%s"`); update Docker image naming in tools.go (`"cpsl-local:"` and `"cpsl-"` prefix → `"herm-local:"` / `"herm-"`); update image naming in main.go (`"cpsl-local:"` → `"herm-local:"`)
-- [ ] 2b: Update git worktree branch prefix in worktree.go (`"cpsl-"` → `"herm-"`) and main.go (`"cpsl-"` → `"herm-"`)
+- [x] 2b: Update git worktree branch prefix in worktree.go (`"cpsl-"` → `"herm-"`) and main.go (`"cpsl-"` → `"herm-"`)
 
 ## Phase 3: Module, Binary, and Directory Structure
 
