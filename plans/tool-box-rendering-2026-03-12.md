@@ -14,8 +14,8 @@ Merge tool call + result into a single bordered box:
 
 ```
 ┌ ~ glob ───────┐
-.cpsl/.DS_Store
-.cpsl/Dockerfile
+.herm/.DS_Store
+.herm/Dockerfile
 ...
 hello.ts
 main.go

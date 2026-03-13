@@ -43,7 +43,7 @@ Update all test files to use the new naming. These are in `cmd/herm/` after Phas
 Rename local `.cpsl/` to `.herm/` and update plan docs that reference old naming.
 
 - [x] 5a: Rename local `.cpsl/` directory → `.herm/` (project.json, config.json, Dockerfile, skills/, etc.)
-- [ ] 5b: Update active plan files in `plans/` that reference `.cpsl` paths (archived plans can stay as-is — they're historical)
+- [x] 5b: Update active plan files in `plans/` that reference `.cpsl` paths (archived plans can stay as-is — they're historical)
 
 ## Phase 6: Build Verification
 
