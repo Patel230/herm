@@ -73,6 +73,40 @@ func (c Config) availableModels(models []ModelDef) []ModelDef {
 	return filterModelsByProviders(models, c.configuredProviders())
 }
 
+// defaultActiveModels maps provider to the preferred default active model ID.
+// These are checked against the runtime catalog — if the ID isn't present, we
+// fall back to the first available model.
+var defaultActiveModels = map[string]string{
+	ProviderAnthropic: "claude-sonnet-4-6",
+	ProviderOpenAI:    "gpt-4.1-2025-04-14",
+	ProviderGrok:      "grok-3",
+	ProviderGemini:    "gemini-2.5-pro",
+}
+
+// defaultExplorationModels maps provider to the preferred cheap/fast model
+// for sub-agents and exploration tasks.
+var defaultExplorationModels = map[string]string{
+	ProviderAnthropic: "claude-haiku-4-5",
+	ProviderOpenAI:    "gpt-4.1-mini-2025-04-14",
+	ProviderGrok:      "grok-3-mini",
+	ProviderGemini:    "gemini-2.5-flash",
+}
+
+// preferredDefault looks up the default model ID for the given provider and
+// returns it if it exists in the available models list. Returns "" otherwise.
+func preferredDefault(models []ModelDef, provider string, defaults map[string]string) string {
+	id, ok := defaults[provider]
+	if !ok {
+		return ""
+	}
+	for _, m := range models {
+		if m.ID == id {
+			return id
+		}
+	}
+	return ""
+}
+
 // resolveActiveModel returns a valid active model ID. If the current ActiveModel
 // is invalid or its provider has no key, it falls back to the first available
 // model, or empty string if no keys are configured.
@@ -87,14 +121,22 @@ func (c Config) resolveActiveModel(models []ModelDef) string {
 			return c.ActiveModel
 		}
 	}
-	// Fall back to first available
+	// Try provider-specific default before falling back to first available
+	if id := preferredDefault(available, c.defaultLangdagProvider(), defaultActiveModels); id != "" {
+		return id
+	}
 	return available[0].ID
 }
 
 // resolveExplorationModel returns the model ID for sub-agents/exploration.
-// Falls back to resolveActiveModel if ExplorationModel is unset or invalid.
+// When unset, prefers a cheap/fast provider-specific default (e.g. haiku for
+// Anthropic) before falling back to resolveActiveModel.
 func (c Config) resolveExplorationModel(models []ModelDef) string {
 	if c.ExplorationModel == "" {
+		available := c.availableModels(models)
+		if id := preferredDefault(available, c.defaultLangdagProvider(), defaultExplorationModels); id != "" {
+			return id
+		}
 		return c.resolveActiveModel(models)
 	}
 	available := c.availableModels(models)

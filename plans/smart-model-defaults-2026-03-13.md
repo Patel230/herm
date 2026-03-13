@@ -31,16 +31,16 @@
 ---
 
 ## Phase 1: Add provider-specific default model maps
-- [ ] 1a: Add `defaultActiveModels` and `defaultExplorationModels` maps in config.go — keyed by provider, valued by model ID. Anthropic: `claude-sonnet-4-6` / `claude-haiku-4-5`. Other providers: best guess from catalog, verified during implementation.
-- [ ] 1b: Add helper `preferredDefault(models []ModelDef, provider string, defaults map[string]string) string` — looks up the default ID for the provider, checks it exists in the available models list, returns it or empty string.
+- [x] 1a: Add `defaultActiveModels` and `defaultExplorationModels` maps in config.go — keyed by provider, valued by model ID. Anthropic: `claude-sonnet-4-6` / `claude-haiku-4-5`. Other providers: best guess from catalog, verified during implementation.
+- [x] 1b: Add helper `preferredDefault(models []ModelDef, provider string, defaults map[string]string) string` — looks up the default ID for the provider, checks it exists in the available models list, returns it or empty string.
 
 ## Phase 2: Update resolution logic
-- [ ] 2a: Update `resolveActiveModel()` — when falling back (no valid ActiveModel set), try `preferredDefault()` for the default provider before returning `available[0].ID`.
-- [ ] 2b: Update `resolveExplorationModel()` — when ExplorationModel is unset, try `preferredDefault()` with the exploration defaults map for the active model's provider, then fall back to `resolveActiveModel()`.
+- [x] 2a: Update `resolveActiveModel()` — when falling back (no valid ActiveModel set), try `preferredDefault()` for the default provider before returning `available[0].ID`.
+- [x] 2b: Update `resolveExplorationModel()` — when ExplorationModel is unset, try `preferredDefault()` with the exploration defaults map for the active model's provider, then fall back to `resolveActiveModel()`.
 
 ## Phase 3: Tests
-- [ ] 3a: Add test: Anthropic key set, no ActiveModel configured → resolves to `claude-sonnet-4-6` (if in catalog).
-- [ ] 3b: Add test: Anthropic key set, no ExplorationModel configured → resolves to `claude-haiku-4-5` (if in catalog), NOT to active model.
-- [ ] 3c: Add test: preferred default model not in catalog → gracefully falls back to first available.
-- [ ] 3d: Add test: OpenAI-only config gets appropriate defaults.
-- [ ] 3e: Run full test suite, verify build.
+- [x] 3a: Add test: Anthropic key set, no ActiveModel configured → resolves to `claude-sonnet-4-6` (if in catalog).
+- [x] 3b: Add test: Anthropic key set, no ExplorationModel configured → resolves to `claude-haiku-4-5` (if in catalog), NOT to active model.
+- [x] 3c: Add test: preferred default model not in catalog → gracefully falls back to first available.
+- [x] 3d: Add test: OpenAI-only config gets appropriate defaults.
+- [x] 3e: Run full test suite, verify build.

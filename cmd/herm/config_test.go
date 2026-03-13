@@ -611,3 +611,82 @@ func TestMergeConfigsExplorationModelEmpty(t *testing.T) {
 		t.Errorf("merged ExplorationModel = %q, want %q (empty project should not override)", merged.ExplorationModel, "claude-haiku")
 	}
 }
+
+// --- Smart model defaults tests ---
+
+// defaultTestModels includes the exact model IDs from the default maps so
+// we can test that preferredDefault picks them correctly.
+func defaultTestModels() []ModelDef {
+	return []ModelDef{
+		{Provider: ProviderAnthropic, ID: "claude-sonnet-4-6"},
+		{Provider: ProviderAnthropic, ID: "claude-haiku-4-5"},
+		{Provider: ProviderAnthropic, ID: "claude-opus-4-6"},
+		{Provider: ProviderOpenAI, ID: "gpt-4.1-2025-04-14"},
+		{Provider: ProviderOpenAI, ID: "gpt-4.1-mini-2025-04-14"},
+		{Provider: ProviderGrok, ID: "grok-3"},
+		{Provider: ProviderGrok, ID: "grok-3-mini"},
+		{Provider: ProviderGemini, ID: "gemini-2.5-pro"},
+		{Provider: ProviderGemini, ID: "gemini-2.5-flash"},
+	}
+}
+
+func TestResolveActiveModel_DefaultsToSonnet(t *testing.T) {
+	cfg := Config{AnthropicAPIKey: "key"} // no ActiveModel set
+	got := cfg.resolveActiveModel(defaultTestModels())
+	if got != "claude-sonnet-4-6" {
+		t.Errorf("resolveActiveModel = %q, want %q", got, "claude-sonnet-4-6")
+	}
+}
+
+func TestResolveExplorationModel_DefaultsToHaiku(t *testing.T) {
+	cfg := Config{
+		AnthropicAPIKey: "key",
+		// no ActiveModel, no ExplorationModel
+	}
+	got := cfg.resolveExplorationModel(defaultTestModels())
+	if got != "claude-haiku-4-5" {
+		t.Errorf("resolveExplorationModel = %q, want %q (should default to haiku, not active model)", got, "claude-haiku-4-5")
+	}
+}
+
+func TestResolveActiveModel_DefaultNotInCatalog(t *testing.T) {
+	// Models list does NOT include the default IDs — should fall back to first available
+	models := []ModelDef{
+		{Provider: ProviderAnthropic, ID: "claude-old-model"},
+		{Provider: ProviderAnthropic, ID: "claude-other-model"},
+	}
+	cfg := Config{AnthropicAPIKey: "key"}
+	got := cfg.resolveActiveModel(models)
+	if got != "claude-old-model" {
+		t.Errorf("resolveActiveModel = %q, want %q (fallback to first available)", got, "claude-old-model")
+	}
+}
+
+func TestResolveExplorationModel_DefaultNotInCatalog(t *testing.T) {
+	// Models list does NOT include haiku — should fall back to active model
+	models := []ModelDef{
+		{Provider: ProviderAnthropic, ID: "claude-sonnet-4-6"},
+	}
+	cfg := Config{AnthropicAPIKey: "key"}
+	got := cfg.resolveExplorationModel(models)
+	// No haiku in catalog, falls back to resolveActiveModel → claude-sonnet-4-6
+	if got != "claude-sonnet-4-6" {
+		t.Errorf("resolveExplorationModel = %q, want %q (fallback when default not in catalog)", got, "claude-sonnet-4-6")
+	}
+}
+
+func TestResolveActiveModel_OpenAIDefaults(t *testing.T) {
+	cfg := Config{OpenAIAPIKey: "key"} // no ActiveModel set
+	got := cfg.resolveActiveModel(defaultTestModels())
+	if got != "gpt-4.1-2025-04-14" {
+		t.Errorf("resolveActiveModel = %q, want %q", got, "gpt-4.1-2025-04-14")
+	}
+}
+
+func TestResolveExplorationModel_OpenAIDefaults(t *testing.T) {
+	cfg := Config{OpenAIAPIKey: "key"}
+	got := cfg.resolveExplorationModel(defaultTestModels())
+	if got != "gpt-4.1-mini-2025-04-14" {
+		t.Errorf("resolveExplorationModel = %q, want %q", got, "gpt-4.1-mini-2025-04-14")
+	}
+}
