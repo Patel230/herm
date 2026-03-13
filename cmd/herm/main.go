@@ -1328,12 +1328,12 @@ type App struct {
 	toolTimer     *time.Ticker
 
 	// Agent status timer (animated label while agent is running)
-	agentStartTime      time.Time
-	agentTicker         *time.Ticker
-	agentElapsed        time.Duration // persists final time after agent stops
-	agentTextIndex      int           // which funny text is showing
-	agentStartInTokens  int           // snapshot of sessionInputTokens at agent start
-	agentStartOutTokens int           // snapshot of sessionOutputTokens at agent start
+	agentStartTime     time.Time
+	agentTicker        *time.Ticker
+	agentElapsed       time.Duration // persists final time after agent stops
+	agentTextIndex     int           // which funny text is showing
+	agentDisplayInTok  float64       // lerped display value for input tokens
+	agentDisplayOutTok float64       // lerped display value for output tokens
 
 	// Menu state (for inline menus below input - Phase 3)
 	menuLines        []string
@@ -1519,18 +1519,18 @@ func (a *App) buildBlockRows() []string {
 	if a.agentRunning {
 		elapsed := time.Since(a.agentStartTime)
 		text := funnyTexts[a.agentTextIndex]
-		inTok := a.sessionInputTokens - a.agentStartInTokens
-		outTok := a.sessionOutputTokens - a.agentStartOutTokens
-		label := fmt.Sprintf("%s\033[3m%s  %.2fs  \033[0m%s↓%s  ↑%s\033[0m",
-			pastelColor(elapsed), text, elapsed.Seconds(),
-			pastelColor(elapsed), formatTokenCount(inTok), formatTokenCount(outTok))
+		color := pastelColor(elapsed)
+		label := fmt.Sprintf("%s\033[3m%s %.2fs ↓%s ↑%s\033[0m",
+			color, text, elapsed.Seconds(),
+			formatTokenCount(int(math.Round(a.agentDisplayInTok))),
+			formatTokenCount(int(math.Round(a.agentDisplayOutTok))))
 		rows = append(rows, label)
 		rows = append(rows, "")
 	} else if a.agentElapsed > 0 {
-		inTok := a.sessionInputTokens - a.agentStartInTokens
-		outTok := a.sessionOutputTokens - a.agentStartOutTokens
-		rows = append(rows, fmt.Sprintf("\033[2m%.2fs  ↓%s  ↑%s\033[0m",
-			a.agentElapsed.Seconds(), formatTokenCount(inTok), formatTokenCount(outTok)))
+		rows = append(rows, fmt.Sprintf("\033[2m%.2fs ↓%s ↑%s\033[0m",
+			a.agentElapsed.Seconds(),
+			formatTokenCount(a.sessionInputTokens),
+			formatTokenCount(a.sessionOutputTokens)))
 		rows = append(rows, "")
 	}
 	// Show live sub-agent activity (capped to 3 lines, dim/italic)
@@ -4116,8 +4116,8 @@ func (a *App) startAgent(userMessage string) {
 	a.agentStartTime = time.Now()
 	a.agentElapsed = 0
 	a.agentTextIndex = 0
-	a.agentStartInTokens = a.sessionInputTokens
-	a.agentStartOutTokens = a.sessionOutputTokens
+	a.agentDisplayInTok = float64(a.sessionInputTokens)
+	a.agentDisplayOutTok = float64(a.sessionOutputTokens)
 	if a.agentTicker != nil {
 		a.agentTicker.Stop()
 	}
@@ -4250,6 +4250,8 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 			a.agentTicker = nil
 		}
 		a.agentElapsed = time.Since(a.agentStartTime)
+		a.agentDisplayInTok = float64(a.sessionInputTokens)
+		a.agentDisplayOutTok = float64(a.sessionOutputTokens)
 		if event.NodeID != "" {
 			a.agentNodeID = event.NodeID
 		}
@@ -4349,6 +4351,9 @@ func (a *App) handleResult(result any) {
 		if a.agentRunning {
 			elapsed := time.Since(a.agentStartTime)
 			a.agentTextIndex = int(elapsed.Seconds()/3) % len(funnyTexts)
+			// Lerp displayed tokens toward actual totals
+			a.agentDisplayInTok += (float64(a.sessionInputTokens) - a.agentDisplayInTok) * 0.15
+			a.agentDisplayOutTok += (float64(a.sessionOutputTokens) - a.agentDisplayOutTok) * 0.15
 		}
 		a.render()
 		return
