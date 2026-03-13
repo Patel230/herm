@@ -257,7 +257,7 @@ func catalogCachePath() string {
 	if err != nil {
 		home = "."
 	}
-	return filepath.Join(home, ".cpsl", "model_catalog.json")
+	return filepath.Join(home, ".herm", "model_catalog.json")
 }
 
 // computeCost calculates the USD cost for a single LLM call based on token

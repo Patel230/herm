@@ -30,7 +30,7 @@ func langdagStoragePath() string {
 	if err != nil {
 		home = "."
 	}
-	dbDir := filepath.Join(home, ".cpsl")
+	dbDir := filepath.Join(home, ".herm")
 	_ = os.MkdirAll(dbDir, 0o755)
 	return filepath.Join(dbDir, "conversations.db")
 }

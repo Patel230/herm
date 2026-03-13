@@ -218,10 +218,10 @@ func (t *GitTool) RequiresApproval(input json.RawMessage) bool {
 }
 
 // DevEnvTool allows the agent to read, write, and build a custom Dockerfile
-// in the project's .cpsl/ directory, then hot-swap the running container.
+// in the project's .herm/ directory, then hot-swap the running container.
 type DevEnvTool struct {
 	container *ContainerClient
-	cpslDir   string // host path to .cpsl/ directory (contains Dockerfile)
+	hermDir   string // host path to .herm/ directory (contains Dockerfile)
 	workspace string // host workspace path (docker build context)
 	mounts    []MountSpec
 	projectID string                 // first 8 chars used in image tags
@@ -230,10 +230,10 @@ type DevEnvTool struct {
 }
 
 // NewDevEnvTool creates a DevEnvTool with the given container client and paths.
-func NewDevEnvTool(container *ContainerClient, cpslDir, workspace string, mounts []MountSpec, projectID string, onRebuild func(string), onStatus func(string)) *DevEnvTool {
+func NewDevEnvTool(container *ContainerClient, hermDir, workspace string, mounts []MountSpec, projectID string, onRebuild func(string), onStatus func(string)) *DevEnvTool {
 	return &DevEnvTool{
 		container: container,
-		cpslDir:   cpslDir,
+		hermDir:   hermDir,
 		workspace: workspace,
 		mounts:    mounts,
 		projectID: projectID,
@@ -245,14 +245,14 @@ func NewDevEnvTool(container *ContainerClient, cpslDir, workspace string, mounts
 func (t *DevEnvTool) Definition() types.ToolDefinition {
 	return types.ToolDefinition{
 		Name:        "devenv",
-		Description: "Manage the single dev container Dockerfile at .cpsl/Dockerfile. The built image replaces the running container and persists across sessions. Use this to install languages, tools, compilers, and system dependencies permanently. Always read before writing.",
+		Description: "Manage the single dev container Dockerfile at .herm/Dockerfile. The built image replaces the running container and persists across sessions. Use this to install languages, tools, compilers, and system dependencies permanently. Always read before writing.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
 				"action": {
 					"type": "string",
 					"enum": ["read", "write", "build"],
-					"description": "read: view the current Dockerfile (and note any other .cpsl/*.Dockerfile files), write: replace the Dockerfile content entirely, build: build the image and hot-swap the running container"
+					"description": "read: view the current Dockerfile (and note any other .herm/*.Dockerfile files), write: replace the Dockerfile content entirely, build: build the image and hot-swap the running container"
 				},
 				"content": {
 					"type": "string",
@@ -292,20 +292,20 @@ func (t *DevEnvTool) RequiresApproval(_ json.RawMessage) bool {
 	return false
 }
 
-// dockerfilePath returns the canonical path to .cpsl/Dockerfile.
+// dockerfilePath returns the canonical path to .herm/Dockerfile.
 func (t *DevEnvTool) dockerfilePath() string {
-	return filepath.Join(t.cpslDir, "Dockerfile")
+	return filepath.Join(t.hermDir, "Dockerfile")
 }
 
 func (t *DevEnvTool) readDockerfile() (string, error) {
 	data, err := os.ReadFile(t.dockerfilePath())
 	if err != nil {
 		if os.IsNotExist(err) {
-			msg := "No .cpsl/Dockerfile exists yet. Use the 'write' action to create one."
+			msg := "No .herm/Dockerfile exists yet. Use the 'write' action to create one."
 
-			// Surface any named .cpsl/*.Dockerfile files so they can be consolidated.
-			if entries, globErr := filepath.Glob(filepath.Join(t.cpslDir, "*.Dockerfile")); globErr == nil && len(entries) > 0 {
-				msg += "\n\nNote: named Dockerfiles exist that should be consolidated into .cpsl/Dockerfile:"
+			// Surface any named .herm/*.Dockerfile files so they can be consolidated.
+			if entries, globErr := filepath.Glob(filepath.Join(t.hermDir, "*.Dockerfile")); globErr == nil && len(entries) > 0 {
+				msg += "\n\nNote: named Dockerfiles exist that should be consolidated into .herm/Dockerfile:"
 				for _, e := range entries {
 					msg += "\n  " + filepath.Base(e)
 					if d, readErr := os.ReadFile(e); readErr == nil {
@@ -326,8 +326,8 @@ func (t *DevEnvTool) readDockerfile() (string, error) {
 
 	// Also report any stale named Dockerfiles alongside the active one.
 	result := string(data)
-	if entries, globErr := filepath.Glob(filepath.Join(t.cpslDir, "*.Dockerfile")); globErr == nil && len(entries) > 0 {
-		result += "\n\nWarning: the following named Dockerfiles also exist and are not active. Consolidate their contents into .cpsl/Dockerfile and remove them:\n"
+	if entries, globErr := filepath.Glob(filepath.Join(t.hermDir, "*.Dockerfile")); globErr == nil && len(entries) > 0 {
+		result += "\n\nWarning: the following named Dockerfiles also exist and are not active. Consolidate their contents into .herm/Dockerfile and remove them:\n"
 		for _, e := range entries {
 			result += "  " + filepath.Base(e) + "\n"
 		}
@@ -340,22 +340,22 @@ func (t *DevEnvTool) writeDockerfile(content string) (string, error) {
 		return "", fmt.Errorf("content is required for write action")
 	}
 
-	// Ensure .cpsl/ directory exists.
-	if err := os.MkdirAll(t.cpslDir, 0o755); err != nil {
-		return "", fmt.Errorf("creating .cpsl directory: %w", err)
+	// Ensure .herm/ directory exists.
+	if err := os.MkdirAll(t.hermDir, 0o755); err != nil {
+		return "", fmt.Errorf("creating .herm directory: %w", err)
 	}
 
 	if err := os.WriteFile(t.dockerfilePath(), []byte(content), 0o644); err != nil {
 		return "", fmt.Errorf("writing Dockerfile: %w", err)
 	}
 
-	return "Dockerfile written to .cpsl/Dockerfile. Use the 'build' action to build and apply it.", nil
+	return "Dockerfile written to .herm/Dockerfile. Use the 'build' action to build and apply it.", nil
 }
 
 func (t *DevEnvTool) buildAndReplace() (string, error) {
 	dfPath := t.dockerfilePath()
 	if _, err := os.Stat(dfPath); os.IsNotExist(err) {
-		return "", fmt.Errorf("no Dockerfile at .cpsl/Dockerfile — use 'write' first")
+		return "", fmt.Errorf("no Dockerfile at .herm/Dockerfile — use 'write' first")
 	}
 
 	// Deterministic image name: cpsl-<shortProjectID>:<hash[:12]>.

@@ -34,7 +34,7 @@ func newHistory(projectDir string, maxSize int) *History {
 	return &History{
 		maxSize:  maxSize,
 		index:    -1,
-		filePath: filepath.Join(projectDir, ".cpsl", historyFileName),
+		filePath: filepath.Join(projectDir, ".herm", historyFileName),
 	}
 }
 
