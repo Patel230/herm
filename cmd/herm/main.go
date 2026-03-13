@@ -1520,14 +1520,14 @@ func (a *App) buildBlockRows() []string {
 		elapsed := time.Since(a.agentStartTime)
 		text := funnyTexts[a.agentTextIndex]
 		color := pastelColor(elapsed)
-		label := fmt.Sprintf("%s\033[3m%s %.2fs ↓%s ↑%s\033[0m",
+		label := fmt.Sprintf("%s\033[3m%s %.2fs ↑%s ↓%s\033[0m",
 			color, text, elapsed.Seconds(),
 			formatTokenCount(int(math.Round(a.agentDisplayInTok))),
 			formatTokenCount(int(math.Round(a.agentDisplayOutTok))))
 		rows = append(rows, label)
 		rows = append(rows, "")
 	} else if a.agentElapsed > 0 {
-		rows = append(rows, fmt.Sprintf("\033[2m%.2fs ↓%s ↑%s\033[0m",
+		rows = append(rows, fmt.Sprintf("\033[2m%.2fs ↑%s ↓%s\033[0m",
 			a.agentElapsed.Seconds(),
 			formatTokenCount(a.sessionInputTokens),
 			formatTokenCount(a.sessionOutputTokens)))
