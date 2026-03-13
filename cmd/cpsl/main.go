@@ -3583,6 +3583,8 @@ func (a *App) handleConfigByte(ch byte, stdinCh chan byte, readByte func() (byte
 			}
 			a.cfgCursor = 0
 			a.renderInput()
+		case '2': // modifyOtherKeys (Ctrl+S, Ctrl+C, etc.)
+			a.handleCSIDigit2(readByte, func(string) {})
 		default:
 			// Consume modified key sequences (ESC [ 1 ; mod letter)
 			if b == '1' {
