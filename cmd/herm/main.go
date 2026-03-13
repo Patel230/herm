@@ -1328,10 +1328,12 @@ type App struct {
 	toolTimer     *time.Ticker
 
 	// Agent status timer (animated label while agent is running)
-	agentStartTime time.Time
-	agentTicker    *time.Ticker
-	agentElapsed   time.Duration // persists final time after agent stops
-	agentTextIndex int           // which funny text is showing
+	agentStartTime      time.Time
+	agentTicker         *time.Ticker
+	agentElapsed        time.Duration // persists final time after agent stops
+	agentTextIndex      int           // which funny text is showing
+	agentStartInTokens  int           // snapshot of sessionInputTokens at agent start
+	agentStartOutTokens int           // snapshot of sessionOutputTokens at agent start
 
 	// Menu state (for inline menus below input - Phase 3)
 	menuLines        []string
@@ -1495,7 +1497,7 @@ func (a *App) buildBlockRows() []string {
 			rows = append(rows, "")
 		}
 	}
-	// Show streaming text or thinking indicator above the input area
+	// Show streaming text above the input area
 	if a.streamingText != "" {
 		for _, logLine := range strings.Split(a.streamingText, "\n") {
 			wasInCodeBlock := inCodeBlock
@@ -1512,14 +1514,23 @@ func (a *App) buildBlockRows() []string {
 			}
 		}
 		rows = append(rows, "")
-	} else if a.agentRunning {
+	}
+	// Show animated status line while agent is running, or dim elapsed when done
+	if a.agentRunning {
 		elapsed := time.Since(a.agentStartTime)
 		text := funnyTexts[a.agentTextIndex]
-		label := fmt.Sprintf("%s\033[3m%s  %.2fs\033[0m", pastelColor(elapsed), text, elapsed.Seconds())
+		inTok := a.sessionInputTokens - a.agentStartInTokens
+		outTok := a.sessionOutputTokens - a.agentStartOutTokens
+		label := fmt.Sprintf("%s\033[3m%s  %.2fs  \033[0m%s↓%s  ↑%s\033[0m",
+			pastelColor(elapsed), text, elapsed.Seconds(),
+			pastelColor(elapsed), formatTokenCount(inTok), formatTokenCount(outTok))
 		rows = append(rows, label)
 		rows = append(rows, "")
 	} else if a.agentElapsed > 0 {
-		rows = append(rows, fmt.Sprintf("\033[2m%.2fs\033[0m", a.agentElapsed.Seconds()))
+		inTok := a.sessionInputTokens - a.agentStartInTokens
+		outTok := a.sessionOutputTokens - a.agentStartOutTokens
+		rows = append(rows, fmt.Sprintf("\033[2m%.2fs  ↓%s  ↑%s\033[0m",
+			a.agentElapsed.Seconds(), formatTokenCount(inTok), formatTokenCount(outTok)))
 		rows = append(rows, "")
 	}
 	// Show live sub-agent activity (capped to 3 lines, dim/italic)
@@ -4105,6 +4116,8 @@ func (a *App) startAgent(userMessage string) {
 	a.agentStartTime = time.Now()
 	a.agentElapsed = 0
 	a.agentTextIndex = 0
+	a.agentStartInTokens = a.sessionInputTokens
+	a.agentStartOutTokens = a.sessionOutputTokens
 	if a.agentTicker != nil {
 		a.agentTicker.Stop()
 	}
