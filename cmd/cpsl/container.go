@@ -89,7 +89,7 @@ func (c *ContainerClient) Start(workspace string, mounts []MountSpec) error {
 		return &ContainerError{Code: ErrStartFailed, Message: "container already running"}
 	}
 
-	name := fmt.Sprintf("cpsl-%s", randomID())
+	name := fmt.Sprintf("herm-%s", randomID())
 
 	args := []string{"run", "-d", "--name", name}
 	for _, m := range mounts {

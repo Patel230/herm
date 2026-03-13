@@ -358,7 +358,7 @@ func (t *DevEnvTool) buildAndReplace() (string, error) {
 		return "", fmt.Errorf("no Dockerfile at .herm/Dockerfile — use 'write' first")
 	}
 
-	// Deterministic image name: cpsl-<shortProjectID>:<hash[:12]>.
+	// Deterministic image name: herm-<shortProjectID>:<hash[:12]>.
 	content, err := os.ReadFile(dfPath)
 	if err != nil {
 		return "", fmt.Errorf("reading Dockerfile: %w", err)
@@ -366,9 +366,9 @@ func (t *DevEnvTool) buildAndReplace() (string, error) {
 	hash := sha256.Sum256(content)
 	hashStr := hex.EncodeToString(hash[:])[:12]
 
-	imageName := "cpsl-local:" + hashStr
+	imageName := "herm-local:" + hashStr
 	if len(t.projectID) >= 8 {
-		imageName = "cpsl-" + t.projectID[:8] + ":" + hashStr
+		imageName = "herm-" + t.projectID[:8] + ":" + hashStr
 	}
 
 	if t.onStatus != nil {

@@ -1062,7 +1062,7 @@ func bootContainerCmd(workspace string, sessionID string, ch chan<- any) {
 
 // buildContainerImage builds a Docker image from .herm/Dockerfile in the workspace.
 // If no Dockerfile exists, it writes the embedded base template first.
-// Image tag is deterministic: cpsl-<projectID[:8]>:<sha256[:12]> based on Dockerfile content.
+// Image tag is deterministic: herm-<projectID[:8]>:<sha256[:12]> based on Dockerfile content.
 // If the image already exists (docker image inspect), the build is skipped.
 // Returns the built image name, or empty string on failure (caller falls back to raw image).
 func buildContainerImage(workspace string, ch chan<- any) string {
@@ -1086,10 +1086,10 @@ func buildContainerImage(workspace string, ch chan<- any) string {
 	hashStr := hex.EncodeToString(hash[:])[:12]
 
 	// Derive image name from project ID + content hash.
-	imageName := "cpsl-local:" + hashStr
+	imageName := "herm-local:" + hashStr
 	if repoRoot := gitRepoRoot(); repoRoot != "" {
 		if projectID, err := ensureProjectID(repoRoot); err == nil && len(projectID) >= 8 {
-			imageName = "cpsl-" + projectID[:8] + ":" + hashStr
+			imageName = "herm-" + projectID[:8] + ":" + hashStr
 		}
 	}
 
