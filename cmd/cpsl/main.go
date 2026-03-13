@@ -963,6 +963,8 @@ type catalogMsg struct {
 
 type resizeMsg struct{}
 
+type toolTimerTickMsg struct{}
+
 // ─── Debug logging ───
 
 var debugEnabled = os.Getenv("CPSL_DEBUG") != ""
@@ -1264,6 +1266,10 @@ type App struct {
 	subAgentLines    []string // completed lines from sub-agent output
 	containerImage   string   // runtime container image name (not persisted)
 
+	// Tool timer (live elapsed display)
+	toolStartTime time.Time
+	toolTimer     *time.Ticker
+
 	// Menu state (for inline menus below input - Phase 3)
 	menuLines        []string
 	menuHeader       string // optional header row above scrollable items
@@ -1349,18 +1355,29 @@ func (a *App) buildBlockRows() []string {
 				skipNext = true
 				goto blankLine
 			}
-			// Unpaired (in-progress): render just the top border (open box).
+			// Unpaired (in-progress): show open box, or full box with live timer after 500ms.
 			if msg.leadBlank {
 				rows = append(rows, "")
 			}
-			box := renderToolBox(title, "", a.width, false, "")
-			// Strip bottom border — only show top border for in-progress.
-			boxLines := strings.Split(box, "\n")
-			if len(boxLines) > 1 {
-				boxLines = boxLines[:len(boxLines)-1] // remove └...┘
+			var liveDur string
+			if !a.toolStartTime.IsZero() {
+				liveDur = formatDuration(time.Since(a.toolStartTime))
 			}
-			for _, logLine := range boxLines {
-				rows = append(rows, wrapString(logLine, 0, a.width)...)
+			box := renderToolBox(title, "", a.width, false, liveDur)
+			if liveDur == "" {
+				// Under 500ms: strip bottom border (open box).
+				boxLines := strings.Split(box, "\n")
+				if len(boxLines) > 1 {
+					boxLines = boxLines[:len(boxLines)-1] // remove └...┘
+				}
+				for _, logLine := range boxLines {
+					rows = append(rows, wrapString(logLine, 0, a.width)...)
+				}
+			} else {
+				// Over 500ms: show full box with live duration.
+				for _, logLine := range strings.Split(box, "\n") {
+					rows = append(rows, wrapString(logLine, 0, a.width)...)
+				}
 			}
 			goto blankLine
 		}
@@ -4066,10 +4083,25 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 			a.streamingText = ""
 		}
 		a.messages = append(a.messages, chatMessage{kind: msgToolCall, content: toolCallSummary(event.ToolName, event.ToolInput), leadBlank: true})
+		a.toolStartTime = time.Now()
+		if a.toolTimer != nil {
+			a.toolTimer.Stop()
+		}
+		a.toolTimer = time.NewTicker(100 * time.Millisecond)
+		go func(ticker *time.Ticker, ch chan any) {
+			for range ticker.C {
+				ch <- toolTimerTickMsg{}
+			}
+		}(a.toolTimer, a.resultCh)
 		a.render()
 
 	case EventToolResult:
 		debugLog("tool_result: err=%v result=%q", event.IsError, truncateForLog(event.ToolResult, 500))
+		if a.toolTimer != nil {
+			a.toolTimer.Stop()
+			a.toolTimer = nil
+		}
+		a.toolStartTime = time.Time{}
 		result := collapseToolResult(event.ToolResult)
 		a.needsTextSep = true
 		a.sessionToolResults++
@@ -4209,6 +4241,10 @@ func (a *App) drainResults() {
 
 func (a *App) handleResult(result any) {
 	switch msg := result.(type) {
+	case toolTimerTickMsg:
+		a.render()
+		return
+
 	case ctrlCExpiredMsg:
 		_ = msg
 		if a.ctrlCHint {
@@ -4317,6 +4353,10 @@ func (a *App) handleResult(result any) {
 // ─── Cleanup ───
 
 func (a *App) cleanup() {
+	if a.toolTimer != nil {
+		a.toolTimer.Stop()
+		a.toolTimer = nil
+	}
 	close(a.stopCh)
 	if a.agent != nil {
 		a.agent.Cancel()

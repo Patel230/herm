@@ -56,9 +56,9 @@ Modify `renderToolBox` to accept and render an optional duration string in the b
 
 Show a live elapsed timer on in-progress tool boxes once 500ms has elapsed.
 
-- [ ] 3a: Add `toolStartTime time.Time` and `toolTimer *time.Ticker` fields to App. On `EventToolCallStart`, set `toolStartTime` and start a ticker (~100ms). On `EventToolResult`, stop the ticker and clear both fields
-- [ ] 3b: Route ticker events through the existing event channel to trigger re-renders. In `buildBlockRows`, for unpaired (in-progress) tool calls: if `time.Since(a.toolStartTime) >= 500ms`, render a full box (with bottom border + live duration) instead of an open box
-- [ ] 3c: Verify the timer updates smoothly and stops cleanly on tool completion — no goroutine leaks, no flickering
+- [x] 3a: Add `toolStartTime time.Time` and `toolTimer *time.Ticker` fields to App. On `EventToolCallStart`, set `toolStartTime` and start a ticker (~100ms). On `EventToolResult`, stop the ticker and clear both fields
+- [x] 3b: Route ticker events through the existing event channel to trigger re-renders. In `buildBlockRows`, for unpaired (in-progress) tool calls: if `time.Since(a.toolStartTime) >= 500ms`, render a full box (with bottom border + live duration) instead of an open box
+- [x] 3c: Verify the timer updates smoothly and stops cleanly on tool completion — no goroutine leaks, no flickering
 
 ## Phase 4: Session replay (blocked on langdag update)
 
