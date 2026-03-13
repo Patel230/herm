@@ -54,9 +54,9 @@ Add timing fields and a ticker that drives re-renders while the agent is active.
 
 Replace the static "thinking..." with animated colored text and elapsed time.
 
-- [ ] 2a: Add a `var funnyTexts = []string{...}` array with ~15-20 short whimsical messages (all lowercase, with trailing "...")
-- [ ] 2b: Add `hslToRGB(h, s, l float64) (r, g, b int)` helper. Add `pastelColor(elapsed time.Duration) string` that returns `\033[38;2;R;G;Bm` with hue cycling ~1 rotation per 4 seconds, saturation 0.65, lightness 0.78
-- [ ] 2c: Replace the "thinking..." block in `buildBlockRows()` — while `agentRunning`, show: `{pastelColor}{funnyText}  {elapsed}s{reset}` where elapsed is `fmt.Sprintf("%.2f", time.Since(a.agentStartTime).Seconds())`. Add italic (`\033[3m`) for the text portion
+- [x] 2a: Add a `var funnyTexts = []string{...}` array with ~15-20 short whimsical messages (all lowercase, with trailing "...")
+- [x] 2b: Add `hslToRGB(h, s, l float64) (r, g, b int)` helper. Add `pastelColor(elapsed time.Duration) string` that returns `\033[38;2;R;G;Bm` with hue cycling ~1 rotation per 4 seconds, saturation 0.65, lightness 0.78
+- [x] 2c: Replace the "thinking..." block in `buildBlockRows()` — while `agentRunning`, show: `{pastelColor}{funnyText}  {elapsed}s{reset}` where elapsed is `fmt.Sprintf("%.2f", time.Since(a.agentStartTime).Seconds())`. Add italic (`\033[3m`) for the text portion
 
 ## Phase 3: Done state display
 

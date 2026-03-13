@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -988,6 +989,39 @@ var funnyTexts = []string{
 	"reading the tea leaves...",
 }
 
+// hslToRGB converts HSL (h in [0,360), s and l in [0,1]) to RGB [0,255].
+func hslToRGB(h, s, l float64) (int, int, int) {
+	c := (1 - math.Abs(2*l-1)) * s
+	hp := h / 60
+	x := c * (1 - math.Abs(math.Mod(hp, 2)-1))
+	var r1, g1, b1 float64
+	switch {
+	case hp < 1:
+		r1, g1, b1 = c, x, 0
+	case hp < 2:
+		r1, g1, b1 = x, c, 0
+	case hp < 3:
+		r1, g1, b1 = 0, c, x
+	case hp < 4:
+		r1, g1, b1 = 0, x, c
+	case hp < 5:
+		r1, g1, b1 = x, 0, c
+	default:
+		r1, g1, b1 = c, 0, x
+	}
+	m := l - c/2
+	return int(math.Round((r1 + m) * 255)),
+		int(math.Round((g1 + m) * 255)),
+		int(math.Round((b1 + m) * 255))
+}
+
+// pastelColor returns an ANSI true-color escape for a smoothly cycling pastel hue.
+func pastelColor(elapsed time.Duration) string {
+	hue := math.Mod(elapsed.Seconds()*90, 360) // full rotation every 4s
+	r, g, b := hslToRGB(hue, 0.65, 0.78)
+	return fmt.Sprintf("\033[38;2;%d;%d;%dm", r, g, b)
+}
+
 // ─── Debug logging ───
 
 var debugEnabled = os.Getenv("HERM_DEBUG") != ""
@@ -1479,7 +1513,13 @@ func (a *App) buildBlockRows() []string {
 		}
 		rows = append(rows, "")
 	} else if a.agentRunning {
-		rows = append(rows, "\033[2;3mthinking...\033[0m")
+		elapsed := time.Since(a.agentStartTime)
+		text := funnyTexts[a.agentTextIndex]
+		label := fmt.Sprintf("%s\033[3m%s  %.2fs\033[0m", pastelColor(elapsed), text, elapsed.Seconds())
+		rows = append(rows, label)
+		rows = append(rows, "")
+	} else if a.agentElapsed > 0 {
+		rows = append(rows, fmt.Sprintf("\033[2m%.2fs\033[0m", a.agentElapsed.Seconds()))
 		rows = append(rows, "")
 	}
 	// Show live sub-agent activity (capped to 3 lines, dim/italic)
@@ -2951,6 +2991,8 @@ func (a *App) handleEnter() {
 	if val == "" {
 		return
 	}
+
+	a.agentElapsed = 0
 
 	if a.history != nil {
 		a.history.Add(val)
