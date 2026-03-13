@@ -965,6 +965,29 @@ type resizeMsg struct{}
 
 type toolTimerTickMsg struct{}
 
+type agentTickMsg struct{}
+
+var funnyTexts = []string{
+	"pondering the cosmos...",
+	"consulting the oracle...",
+	"herding electrons...",
+	"untangling spaghetti...",
+	"asking the rubber duck...",
+	"dividing by zero...",
+	"reticulating splines...",
+	"compiling thoughts...",
+	"traversing the astral plane...",
+	"shaking the magic 8-ball...",
+	"feeding the hamsters...",
+	"polishing pixels...",
+	"summoning the muse...",
+	"counting backwards from infinity...",
+	"aligning the chakras...",
+	"brewing coffee virtually...",
+	"negotiating with the compiler...",
+	"reading the tea leaves...",
+}
+
 // ─── Debug logging ───
 
 var debugEnabled = os.Getenv("HERM_DEBUG") != ""
@@ -1269,6 +1292,12 @@ type App struct {
 	// Tool timer (live elapsed display)
 	toolStartTime time.Time
 	toolTimer     *time.Ticker
+
+	// Agent status timer (animated label while agent is running)
+	agentStartTime time.Time
+	agentTicker    *time.Ticker
+	agentElapsed   time.Duration // persists final time after agent stops
+	agentTextIndex int           // which funny text is showing
 
 	// Menu state (for inline menus below input - Phase 3)
 	menuLines        []string
@@ -4031,6 +4060,18 @@ func (a *App) startAgent(userMessage string) {
 	a.agentRunning = true
 	a.streamingText = ""
 	a.needsTextSep = true
+	a.agentStartTime = time.Now()
+	a.agentElapsed = 0
+	a.agentTextIndex = 0
+	if a.agentTicker != nil {
+		a.agentTicker.Stop()
+	}
+	a.agentTicker = time.NewTicker(50 * time.Millisecond)
+	go func(ticker *time.Ticker, ch chan any) {
+		for range ticker.C {
+			ch <- agentTickMsg{}
+		}
+	}(a.agentTicker, a.resultCh)
 
 	parentNodeID := a.agentNodeID
 	go agent.Run(context.Background(), userMessage, parentNodeID)
@@ -4149,6 +4190,11 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 	case EventDone:
 		debugLog("done: nodeID=%s streamingLen=%d", event.NodeID, len(a.streamingText))
 		a.agentRunning = false
+		if a.agentTicker != nil {
+			a.agentTicker.Stop()
+			a.agentTicker = nil
+		}
+		a.agentElapsed = time.Since(a.agentStartTime)
 		if event.NodeID != "" {
 			a.agentNodeID = event.NodeID
 		}
@@ -4242,6 +4288,13 @@ func (a *App) drainResults() {
 func (a *App) handleResult(result any) {
 	switch msg := result.(type) {
 	case toolTimerTickMsg:
+		a.render()
+		return
+	case agentTickMsg:
+		if a.agentRunning {
+			elapsed := time.Since(a.agentStartTime)
+			a.agentTextIndex = int(elapsed.Seconds()/3) % len(funnyTexts)
+		}
 		a.render()
 		return
 

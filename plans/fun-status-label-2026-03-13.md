@@ -46,9 +46,9 @@ When `agentRunning` becomes false, the final elapsed time should persist in the 
 
 Add timing fields and a ticker that drives re-renders while the agent is active.
 
-- [ ] 1a: Add fields to app struct: `agentStartTime time.Time`, `agentTicker *time.Ticker`, `agentElapsed time.Duration` (persists final time after agent stops), `agentTextIndex int` (which funny text is showing)
-- [ ] 1b: Add `agentTickMsg` type. On `agentRunning = true`, record `agentStartTime`, reset `agentElapsed`, start a 50ms ticker (faster than tool timer for smoother color), launch goroutine forwarding ticks to `resultCh`. On `EventDone`, stop ticker, store `agentElapsed = time.Since(agentStartTime)`
-- [ ] 1c: Handle `agentTickMsg` in the main event loop — call `render()` (same pattern as `toolTimerTickMsg`). Also advance `agentTextIndex` every ~3s based on elapsed time (index = `int(elapsed.Seconds() / 3) % len(funnyTexts)`)
+- [x] 1a: Add fields to app struct: `agentStartTime time.Time`, `agentTicker *time.Ticker`, `agentElapsed time.Duration` (persists final time after agent stops), `agentTextIndex int` (which funny text is showing)
+- [x] 1b: Add `agentTickMsg` type. On `agentRunning = true`, record `agentStartTime`, reset `agentElapsed`, start a 50ms ticker (faster than tool timer for smoother color), launch goroutine forwarding ticks to `resultCh`. On `EventDone`, stop ticker, store `agentElapsed = time.Since(agentStartTime)`
+- [x] 1c: Handle `agentTickMsg` in the main event loop — call `render()` (same pattern as `toolTimerTickMsg`). Also advance `agentTextIndex` every ~3s based on elapsed time (index = `int(elapsed.Seconds() / 3) % len(funnyTexts)`)
 
 ## Phase 2: Funny texts and pastel color rendering
 
