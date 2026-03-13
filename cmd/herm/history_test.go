@@ -243,7 +243,7 @@ func TestHistoryCompaction(t *testing.T) {
 	}
 
 	// The file should have 15 lines now (one per Add call)
-	filePath := filepath.Join(dir, ".cpsl", "history")
+	filePath := filepath.Join(dir, ".herm", "history")
 	lineCount := countLines(t, filePath)
 	if lineCount != 15 {
 		t.Fatalf("expected 15 lines in file before compaction, got %d", lineCount)

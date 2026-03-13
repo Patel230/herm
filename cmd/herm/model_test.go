@@ -6,9 +6,9 @@ import (
 )
 
 // TestMain runs all tests in a temp directory so that saveConfig() calls
-// never clobber the real ~/.cpsl/config.json.
+// never clobber the real ~/.herm/config.json.
 func TestMain(m *testing.M) {
-	tmp, err := os.MkdirTemp("", "cpsl-test-*")
+	tmp, err := os.MkdirTemp("", "herm-test-*")
 	if err != nil {
 		panic(err)
 	}

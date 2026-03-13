@@ -59,7 +59,7 @@ func TestEnsureProjectID(t *testing.T) {
 	}
 
 	// Verify file contents.
-	data, err := os.ReadFile(filepath.Join(repo, ".cpsl", "project.json"))
+	data, err := os.ReadFile(filepath.Join(repo, ".herm", "project.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,8 +324,8 @@ func TestEnsureGitignoreLock_CreatesFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != ".cpsl-lock\n" {
-		t.Errorf("expected '.cpsl-lock\\n', got %q", string(data))
+	if string(data) != ".herm-lock\n" {
+		t.Errorf("expected '.herm-lock\\n', got %q", string(data))
 	}
 }
 
@@ -343,7 +343,7 @@ func TestEnsureGitignoreLock_AppendsToExisting(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(data)
-	if content != "node_modules/\n.env\n\n.cpsl-lock\n" {
+	if content != "node_modules/\n.env\n\n.herm-lock\n" {
 		t.Errorf("unexpected content: %q", content)
 	}
 }
@@ -362,14 +362,14 @@ func TestEnsureGitignoreLock_AppendsToExistingNoTrailingNewline(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(data)
-	if content != "node_modules/\n.env\n\n.cpsl-lock\n" {
+	if content != "node_modules/\n.env\n\n.herm-lock\n" {
 		t.Errorf("unexpected content: %q", content)
 	}
 }
 
 func TestEnsureGitignoreLock_AlreadyPresent(t *testing.T) {
 	dir := t.TempDir()
-	existing := "node_modules/\n.cpsl-lock\n.env\n"
+	existing := "node_modules/\n.herm-lock\n.env\n"
 	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(existing), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +396,7 @@ func TestEnsureGitignoreLock_Idempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != ".cpsl-lock\n" {
+	if string(data) != ".herm-lock\n" {
 		t.Errorf("expected single entry, got %q", string(data))
 	}
 }
