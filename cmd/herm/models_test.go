@@ -13,6 +13,8 @@ func testModels() []ModelDef {
 		{Provider: ProviderAnthropic, ID: "claude-sonnet-4-0-20250514", PromptPrice: 3.0, CompletionPrice: 15.0},
 		{Provider: ProviderAnthropic, ID: "claude-haiku-4-5-20250414", PromptPrice: 0.8, CompletionPrice: 4.0},
 		{Provider: ProviderAnthropic, ID: "claude-opus-4-0-20250514", PromptPrice: 15.0, CompletionPrice: 75.0},
+		{Provider: ProviderGrok, ID: "grok-4-1-fast-reasoning", PromptPrice: 3.0, CompletionPrice: 15.0},
+		{Provider: ProviderGrok, ID: "grok-4-1-fast-non-reasoning", PromptPrice: 0.3, CompletionPrice: 0.5},
 		{Provider: ProviderOpenAI, ID: "gpt-4o", PromptPrice: 2.5, CompletionPrice: 10.0},
 		{Provider: ProviderOpenAI, ID: "gpt-4o-mini", PromptPrice: 0.15, CompletionPrice: 0.6},
 		{Provider: ProviderOpenAI, ID: "o3-mini", PromptPrice: 1.1, CompletionPrice: 4.4},
@@ -206,7 +208,7 @@ func TestModelsFromCatalog(t *testing.T) {
 				{ID: "claude-opus-4-6", InputPricePer1M: 5, OutputPricePer1M: 25, ContextWindow: 200000},
 			},
 			"grok": {
-				{ID: "grok-3", InputPricePer1M: 3, OutputPricePer1M: 15, ContextWindow: 131072},
+				{ID: "grok-4-1-fast-reasoning", InputPricePer1M: 3, OutputPricePer1M: 15, ContextWindow: 131072},
 			},
 		},
 	}
