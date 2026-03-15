@@ -44,6 +44,26 @@ herm/
 go test ./...
 ```
 
+## FAQ
+
+<details>
+<summary>How is it different from Claude Code?</summary>
+
+Claude Code runs directly on your host and needs your approval for every potentially dangerous action. herm runs everything in containers, so the agent can act freely without risking your system. herm also supports multiple model providers and ships its system prompts in the open.
+</details>
+
+<details>
+<summary>How is it different from OpenCode?</summary>
+
+OpenCode is a great terminal AI assistant, but it runs on your host like most coding agents. herm's core idea is that containerization should be the default — not an afterthought. If the agent can't break anything, you don't need permission prompts.
+</details>
+
+<details>
+<summary>How is it different from Pi Coding Agent?</summary>
+
+<a href="https://github.com/badlogic/pi-mono">Pi</a> focuses on extensibility through TypeScript plugins and a large ecosystem of community packages. herm takes a different bet: safety through containerization. Instead of asking users to manage permissions, herm sandboxes everything by default so the agent can operate autonomously.
+</details>
+
 ## Dependencies
 
 herm is built on top of [langdag](https://langdag.com), a Go library for managing LLM conversations as directed acyclic graphs with multi-provider support. This project originally started as a way to dogfood langdag.
