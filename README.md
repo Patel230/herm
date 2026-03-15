@@ -74,6 +74,12 @@ OpenCode is a great terminal AI assistant, but it runs on your host like most co
 <a href="https://github.com/badlogic/pi-mono">Pi</a> focuses on extensibility through TypeScript plugins and a large ecosystem of community packages. herm takes a different bet: safety through containerization. Instead of asking users to manage permissions, herm sandboxes everything by default so the agent can operate autonomously.
 </details>
 
+<details>
+<summary>What is the logo supposed to represent?</summary>
+
+It's an hermit crab called Herm, short for Herman. It represents the hermetic nature of the agent — everything sealed inside its shell.
+</details>
+
 ## Dependencies
 
 herm is built on top of [langdag](https://langdag.com), a Go library for managing LLM conversations as directed acyclic graphs with multi-provider support. This project originally started as a way to dogfood langdag.
