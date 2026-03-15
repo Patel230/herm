@@ -10,16 +10,26 @@ A coding agent CLI that's containerized by default. Every command runs inside a 
 
 **Multi-provider** — Use Anthropic, OpenAI, Gemini, or Grok. Switch models on the fly.
 
+**Self-building dev environments** — Need Python but it's not installed? herm will extend its own container by writing Dockerfiles dynamically. Dev environments are scoped per project (git repo) and persist across sessions.
+
 **100% open-source** — Everything is open, including the system prompts. No hidden instructions, no black boxes. Read them, fork them, change them.
 
-## Quick Start
+## Requirements
 
-Requires Go 1.25+ and Docker.
+- macOS (only platform tested so far)
+- Docker installed and running
+- Go 1.25+
+
+## Quick Start
 
 ```sh
 go build -o herm ./cmd/herm
 ./herm
 ```
+
+## Roadmap
+
+- OCI container support without Docker, using Apple's [Containerization framework](https://developer.apple.com/documentation/containerization)
 
 ## Project Structure
 
