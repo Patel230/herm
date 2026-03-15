@@ -1,37 +1,41 @@
 # herm
 
-Terminal-native AI coding agent running in containers.
+A coding agent CLI that's containerized by default. Every command runs inside a Docker sandbox — nothing touches your host. No approval prompts, no "are you sure?" dialogs. Just let it work.
 
 ![demo](img/demo.gif)
 
-## Features
+## Why herm?
 
-- Interactive chat with LLM agents via [langdag](https://langdag.com)
-- Docker container integration for sandboxed code execution
-- Git worktree management
-- Markdown rendering in the terminal
-- Configurable models, skills, and system prompts
-- Conversation history and scratchpad
+**Containerized by default** — The agent runs inside Docker containers with full control: installing packages, editing files, running builds. Your host machine stays untouched. No permission prompts, ever.
 
-## Build
+**Multi-provider** — Use Anthropic, OpenAI, Gemini, or Grok. Switch models on the fly.
 
-Requires Go 1.25+.
+**100% open-source** — Everything is open, including the system prompts. No hidden instructions, no black boxes. Read them, fork them, change them.
+
+## Quick Start
+
+Requires Go 1.25+ and Docker.
 
 ```sh
 go build -o herm ./cmd/herm
-```
-
-Additional commands:
-
-```sh
-go build ./cmd/simple-chat   # minimal chat client
-go build ./cmd/debug          # debug utilities
-```
-
-## Run
-
-```sh
 ./herm
+```
+
+## Project Structure
+
+```
+herm/
+├── cmd/
+│   ├── herm/                  Main application
+│   │   ├── prompts/           System prompt templates (embedded)
+│   │   └── dockerfiles/       Container definitions (embedded)
+│   └── debug/                 Debug utilities
+├── .herm/
+│   └── skills/                Skill definitions (e.g. devenv)
+├── plans/                     Project planning docs
+├── go.mod
+├── LICENSE
+└── README.md
 ```
 
 ## Test
@@ -40,16 +44,9 @@ go build ./cmd/debug          # debug utilities
 go test ./...
 ```
 
-## Project Structure
+## Dependencies
 
-```
-cmd/herm/         Main application source (package main)
-cmd/herm/prompts/ System prompt templates (embedded)
-cmd/herm/dockerfiles/ Dockerfiles for container support (embedded)
-cmd/simple-chat/  Minimal chat client
-cmd/debug/        Debug utilities
-plans/            Project planning docs
-```
+herm is built on top of [langdag](https://langdag.com), a Go library for managing LLM conversations as directed acyclic graphs with multi-provider support. This project originally started as a way to dogfood langdag.
 
 ## License
 
