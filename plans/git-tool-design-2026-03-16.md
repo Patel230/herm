@@ -60,7 +60,7 @@ Small improvements to the GitTool to make the agent's experience cleaner.
 
 ## Phase 3: Update role prompt for clarity
 
-- [ ] 3a: Adjust `prompts/role.md` to mention that the `git` tool bridges to the host for version control — it has access to credentials the container doesn't. Don't overstate it; the agent already knows it's in a container. Just make clear that remote git operations (push/pull/fetch) go through the host tool.
+- [x] 3a: Adjust `prompts/role.md` to mention that the `git` tool bridges to the host for version control — it has access to credentials the container doesn't. Don't overstate it; the agent already knows it's in a container. Just make clear that remote git operations (push/pull/fetch) go through the host tool.
 
 ## Phase 4: Tests
 
