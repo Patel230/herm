@@ -30,7 +30,7 @@ This is the most critical untested file — the entire agent orchestration layer
 - [x] 1c: Test `newLangdagClientForProvider()` — verify each provider branch (Anthropic, OpenAI, Grok, Gemini) and invalid provider error
 - [x] 1d: Test `generateAgentID()` — verify format, uniqueness across calls
 - [x] 1e: Test `langdagStoragePath()` — verify path construction, directory creation
-- [ ] 1f: Test `Run()` and `runLoop()` with a mock langdag client — verify: (1) text streaming emits TextDelta events, (2) tool calls dispatch to correct tool and emit ToolCallStart/ToolCallDone events, (3) approval-required tools pause and resume on Approve(), (4) Cancel() stops the loop, (5) context window exceeded triggers clearing, (6) max tool iterations terminates loop
+- [x] 1f: Test `Run()` and `runLoop()` with a mock langdag client — verify: (1) text streaming emits TextDelta events, (2) tool calls dispatch to correct tool and emit ToolCallStart/ToolCallDone events, (3) approval-required tools pause and resume on Approve(), (4) Cancel() stops the loop, (5) context window exceeded triggers clearing, (6) max tool iterations terminates loop
 - [ ] 1g: Test `emit()` and `emitUsage()` — verify events are delivered to the channel, verify AgentID is set
 
 ## Phase 2: Tools & Sub-Agent
