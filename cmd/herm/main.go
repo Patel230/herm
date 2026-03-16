@@ -834,6 +834,9 @@ func renderToolBox(title, content string, maxWidth int, isError bool, durationSt
 		for _, line := range strings.Split(content, "\n") {
 			b.WriteByte('\n')
 			b.WriteString(contentStyle)
+			if visibleWidth(line) > innerWidth {
+				line = truncateVisual(line, innerWidth)
+			}
 			b.WriteString(line)
 			b.WriteString(reset)
 		}
@@ -886,6 +889,7 @@ func truncateWithEllipsis(s string, maxLen int) string {
 	if len(runes) <= maxLen {
 		return s
 	}
+
 	if maxLen <= 0 {
 		return ""
 	}
@@ -893,6 +897,62 @@ func truncateWithEllipsis(s string, maxLen int) string {
 		return "…"
 	}
 	return string(runes[:maxLen-1]) + "…"
+}
+
+// truncateVisual truncates s to at most maxCols visible terminal columns,
+// appending "…" if truncation occurs. It is ANSI-escape-aware: escape sequences
+// do not count toward visible width.
+func truncateVisual(s string, maxCols int) string {
+	if maxCols <= 0 {
+		return ""
+	}
+	if visibleWidth(s) <= maxCols {
+		return s
+	}
+	// Walk byte-by-byte, skipping ANSI sequences, collecting runes until
+	// we would exceed maxCols-1 columns (reserving 1 for the "…").
+	b := []byte(s)
+	n := len(b)
+	i := 0
+	var out strings.Builder
+	cols := 0
+	for i < n {
+		if b[i] == 0x1b {
+			// Consume the escape sequence without counting columns.
+			j := i + 1
+			if j < n && b[j] == '[' {
+				j++
+				for j < n && !isCSIFinal(b[j]) {
+					j++
+				}
+				if j < n {
+					j++
+				}
+			} else if j < n && b[j] == ']' {
+				j++
+				for j+1 < n {
+					if b[j] == 0x1b && b[j+1] == '\\' {
+						j += 2
+						break
+					}
+					j++
+				}
+			}
+			out.Write(b[i:j])
+			i = j
+			continue
+		}
+		r, size := utf8.DecodeRune(b[i:])
+		rw := uniseg.StringWidth(string(r))
+		if cols+rw > maxCols-1 {
+			break
+		}
+		out.WriteRune(r)
+		cols += rw
+		i += size
+	}
+	out.WriteString("…")
+	return out.String()
 }
 
 // ─── Async message types ───
