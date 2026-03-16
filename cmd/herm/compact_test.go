@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -440,3 +441,100 @@ func TestCompactThenContinueConversation(t *testing.T) {
 		t.Errorf("chain depth = %d, want %d", depth, expectedDepth)
 	}
 }
+
+// ─── 3d: compactConversation error paths ───
+
+// TestCompactConversation_GetAncestorsError verifies that a storage read failure
+// is propagated correctly.
+func TestCompactConversation_GetAncestorsError(t *testing.T) {
+	store := &failingAncestorStorage{newClearingMockStorage()}
+	prov := &mockProvider{model: "test-model"}
+	client := langdag.NewWithDeps(store, prov)
+
+	_, err := compactConversation(context.Background(), client, "any-node", "test-model", "")
+	if err == nil {
+		t.Fatal("expected error when GetAncestors fails")
+	}
+	if !strings.Contains(err.Error(), "get ancestors") {
+		t.Errorf("error = %q, want 'get ancestors'", err.Error())
+	}
+}
+
+// TestCompactConversation_LLMFailure verifies that an LLM call failure
+// mid-compaction is propagated.
+func TestCompactConversation_LLMFailure(t *testing.T) {
+	store := newClearingMockStorage()
+	prov := &failingProvider{}
+	client := langdag.NewWithDeps(store, prov)
+
+	// Build enough nodes to pass the "too short" check.
+	now := time.Now()
+	nodeCount := compactKeepRecent + 4
+	nodes := make([]*types.Node, nodeCount)
+	for i := 0; i < nodeCount; i++ {
+		id := "lf-" + string(rune('A'+i))
+		parentID := ""
+		if i > 0 {
+			parentID = nodes[i-1].ID
+		}
+		nt := types.NodeTypeUser
+		if i%2 == 1 {
+			nt = types.NodeTypeAssistant
+		}
+		nodes[i] = &types.Node{
+			ID: id, ParentID: parentID, RootID: "lf-A", Sequence: i,
+			NodeType: nt, Content: "msg " + string(rune('A'+i)), CreatedAt: now,
+		}
+	}
+	leafID := nodes[len(nodes)-1].ID
+	var ids []string
+	for _, n := range nodes {
+		_ = store.CreateNode(context.Background(), n)
+		ids = append(ids, n.ID)
+	}
+	store.ancestorChains[leafID] = ids
+
+	_, err := compactConversation(context.Background(), client, leafID, "test-model", "")
+	if err == nil {
+		t.Fatal("expected error when LLM call fails")
+	}
+	if !strings.Contains(err.Error(), "summarize") {
+		t.Errorf("error = %q, want 'summarize'", err.Error())
+	}
+}
+
+// TestCompactConversation_EmptyConversation verifies that a nonexistent node
+// returns an error (either from storage lookup or the too-short check).
+func TestCompactConversation_EmptyConversation(t *testing.T) {
+	store := newClearingMockStorage()
+	prov := &mockProvider{model: "test-model"}
+	client := langdag.NewWithDeps(store, prov)
+
+	_, err := compactConversation(context.Background(), client, "nonexistent", "test-model", "")
+	if err == nil {
+		t.Fatal("expected error for empty/nonexistent conversation")
+	}
+	// Could be "get ancestors" (from langdag lookup) or "too short" (if nil returned).
+	// Either way, the operation should fail.
+}
+
+// failingAncestorStorage always errors on GetAncestors.
+type failingAncestorStorage struct{ *clearingMockStorage }
+
+func (s *failingAncestorStorage) GetAncestors(_ context.Context, _ string) ([]*types.Node, error) {
+	return nil, fmt.Errorf("storage unavailable")
+}
+
+// failingProvider always errors on Complete.
+type failingProvider struct{}
+
+func (p *failingProvider) Complete(_ context.Context, _ *types.CompletionRequest) (*types.CompletionResponse, error) {
+	return nil, fmt.Errorf("LLM service unavailable")
+}
+
+func (p *failingProvider) Stream(_ context.Context, _ *types.CompletionRequest) (<-chan types.StreamEvent, error) {
+	return nil, fmt.Errorf("LLM service unavailable")
+}
+
+func (p *failingProvider) Name() string               { return "mock" }
+func (p *failingProvider) Models() []types.ModelInfo   { return nil }

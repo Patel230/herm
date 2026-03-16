@@ -48,10 +48,10 @@ This is the most critical untested file — the entire agent orchestration layer
 
 ## Phase 3: Compact & Tree
 
-- [ ] 3a: Test `extractAssistantText()` — verify extraction from various content block formats (text, tool_use, mixed)
-- [ ] 3b: Test `parseAssistantContent()` — verify parsing of assistant message content with tool calls and text blocks
-- [ ] 3c: Test `parseToolResults()` and `isToolResultContent()` — verify tool result JSON parsing, edge cases with malformed content
-- [ ] 3d: Test `compactConversation()` error paths — storage read failure, LLM call failure mid-compaction, empty conversation
+- [x] 3a: Test `extractAssistantText()` — verify extraction from various content block formats (text, tool_use, mixed)
+- [x] 3b: Test `parseAssistantContent()` — verify parsing of assistant message content with tool calls and text blocks
+- [x] 3c: Test `parseToolResults()` and `isToolResultContent()` — verify tool result JSON parsing, edge cases with malformed content
+- [x] 3d: Test `compactConversation()` error paths — storage read failure, LLM call failure mid-compaction, empty conversation
 
 **Parallel Tasks: 3e, 3f**
 

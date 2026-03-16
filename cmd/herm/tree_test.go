@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -327,5 +328,244 @@ func TestTruncate(t *testing.T) {
 	// Should be 9 chars of original + "…"
 	if got != "this is a…" {
 		t.Errorf("truncate long = %q, want %q", got, "this is a…")
+	}
+}
+
+// ─── 3a: extractAssistantText ───
+
+func TestExtractAssistantText_PlainText(t *testing.T) {
+	got := extractAssistantText("Hello world")
+	if got != "Hello world" {
+		t.Errorf("plain text: got %q, want %q", got, "Hello world")
+	}
+}
+
+func TestExtractAssistantText_Empty(t *testing.T) {
+	if got := extractAssistantText(""); got != "" {
+		t.Errorf("empty: got %q", got)
+	}
+	if got := extractAssistantText("   "); got != "" {
+		t.Errorf("whitespace: got %q", got)
+	}
+}
+
+func TestExtractAssistantText_JSONTextBlocks(t *testing.T) {
+	blocks, _ := json.Marshal([]types.ContentBlock{
+		{Type: "text", Text: "First paragraph."},
+		{Type: "text", Text: "Second paragraph."},
+	})
+	got := extractAssistantText(string(blocks))
+	if got != "First paragraph.\nSecond paragraph." {
+		t.Errorf("got %q, want joined text blocks", got)
+	}
+}
+
+func TestExtractAssistantText_ToolUseOnly(t *testing.T) {
+	blocks, _ := json.Marshal([]types.ContentBlock{
+		{Type: "tool_use", ID: "call_1", Name: "bash", Input: json.RawMessage(`{"command":"ls"}`)},
+	})
+	got := extractAssistantText(string(blocks))
+	if got != "" {
+		t.Errorf("tool_use only: got %q, want empty", got)
+	}
+}
+
+func TestExtractAssistantText_MixedContent(t *testing.T) {
+	blocks, _ := json.Marshal([]types.ContentBlock{
+		{Type: "text", Text: "Let me check."},
+		{Type: "tool_use", ID: "call_1", Name: "bash", Input: json.RawMessage(`{}`)},
+		{Type: "text", Text: "Done now."},
+	})
+	got := extractAssistantText(string(blocks))
+	if got != "Let me check.\nDone now." {
+		t.Errorf("mixed: got %q", got)
+	}
+}
+
+func TestExtractAssistantText_InvalidJSON(t *testing.T) {
+	// Starts with '[' but isn't valid JSON → should return "".
+	got := extractAssistantText("[not valid json")
+	if got != "" {
+		t.Errorf("invalid JSON: got %q, want empty", got)
+	}
+}
+
+func TestExtractAssistantText_EmptyTextBlocks(t *testing.T) {
+	blocks, _ := json.Marshal([]types.ContentBlock{
+		{Type: "text", Text: ""},
+		{Type: "text", Text: "Real content"},
+		{Type: "text", Text: ""},
+	})
+	got := extractAssistantText(string(blocks))
+	if got != "Real content" {
+		t.Errorf("empty text blocks: got %q, want %q", got, "Real content")
+	}
+}
+
+// ─── 3b: parseAssistantContent ───
+
+func TestParseAssistantContent_PlainText(t *testing.T) {
+	preview, tools := parseAssistantContent("Hello, how can I help?")
+	if preview != "Hello, how can I help?" {
+		t.Errorf("preview = %q", preview)
+	}
+	if len(tools) != 0 {
+		t.Errorf("tools = %v, want empty", tools)
+	}
+}
+
+func TestParseAssistantContent_MultilinePlainText(t *testing.T) {
+	preview, _ := parseAssistantContent("Line one\nLine two\nLine three")
+	if preview != "Line one" {
+		t.Errorf("preview = %q, want first line only", preview)
+	}
+}
+
+func TestParseAssistantContent_Empty(t *testing.T) {
+	preview, tools := parseAssistantContent("")
+	if preview != "" || tools != nil {
+		t.Errorf("empty: preview=%q tools=%v", preview, tools)
+	}
+}
+
+func TestParseAssistantContent_TextAndToolUse(t *testing.T) {
+	blocks, _ := json.Marshal([]types.ContentBlock{
+		{Type: "text", Text: "Let me run that command."},
+		{Type: "tool_use", ID: "call_abc", Name: "bash", Input: json.RawMessage(`{"command":"ls"}`)},
+	})
+	preview, tools := parseAssistantContent(string(blocks))
+	if preview != "Let me run that command." {
+		t.Errorf("preview = %q", preview)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("tools count = %d, want 1", len(tools))
+	}
+	if tools[0].id != "call_abc" || tools[0].name != "bash" {
+		t.Errorf("tool = %+v", tools[0])
+	}
+}
+
+func TestParseAssistantContent_MultipleToolUses(t *testing.T) {
+	blocks, _ := json.Marshal([]types.ContentBlock{
+		{Type: "tool_use", ID: "c1", Name: "bash", Input: json.RawMessage(`{}`)},
+		{Type: "tool_use", ID: "c2", Name: "git", Input: json.RawMessage(`{}`)},
+	})
+	_, tools := parseAssistantContent(string(blocks))
+	if len(tools) != 2 {
+		t.Fatalf("tools count = %d, want 2", len(tools))
+	}
+	if tools[0].name != "bash" || tools[1].name != "git" {
+		t.Errorf("tools = %+v %+v", tools[0], tools[1])
+	}
+}
+
+func TestParseAssistantContent_ToolUseNoName(t *testing.T) {
+	blocks, _ := json.Marshal([]types.ContentBlock{
+		{Type: "tool_use", ID: "c1", Input: json.RawMessage(`{}`)},
+	})
+	_, tools := parseAssistantContent(string(blocks))
+	if len(tools) != 1 || tools[0].name != "tool" {
+		t.Errorf("unnamed tool_use should default to 'tool', got %+v", tools)
+	}
+}
+
+func TestParseAssistantContent_InvalidJSON(t *testing.T) {
+	preview, tools := parseAssistantContent("[{broken")
+	if preview != "" || tools != nil {
+		t.Errorf("invalid JSON: preview=%q tools=%v", preview, tools)
+	}
+}
+
+// ─── 3c: parseToolResults and isToolResultContent ───
+
+func TestIsToolResultContent_True(t *testing.T) {
+	content := `[{"type":"tool_result","tool_use_id":"c1","content":"ok"}]`
+	if !isToolResultContent(content) {
+		t.Error("should detect tool_result content")
+	}
+}
+
+func TestIsToolResultContent_WithWhitespace(t *testing.T) {
+	content := `  [{"type":"tool_result","tool_use_id":"c1","content":"ok"}]  `
+	if !isToolResultContent(content) {
+		t.Error("should handle leading/trailing whitespace")
+	}
+}
+
+func TestIsToolResultContent_False_PlainText(t *testing.T) {
+	if isToolResultContent("Hello world") {
+		t.Error("plain text should not be tool result content")
+	}
+}
+
+func TestIsToolResultContent_False_OtherJSON(t *testing.T) {
+	content := `[{"type":"text","text":"hello"}]`
+	if isToolResultContent(content) {
+		t.Error("text blocks should not be tool result content")
+	}
+}
+
+func TestIsToolResultContent_False_Empty(t *testing.T) {
+	if isToolResultContent("") {
+		t.Error("empty should return false")
+	}
+	if isToolResultContent("   ") {
+		t.Error("whitespace should return false")
+	}
+}
+
+func TestParseToolResults_Single(t *testing.T) {
+	content := toolResultContent("call_1", "file1.go")
+	results := parseToolResults(content)
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if results[0].toolUseID != "call_1" {
+		t.Errorf("toolUseID = %q", results[0].toolUseID)
+	}
+	if results[0].isError {
+		t.Error("should not be error")
+	}
+}
+
+func TestParseToolResults_Multiple(t *testing.T) {
+	blocks, _ := json.Marshal([]types.ContentBlock{
+		{Type: "tool_result", ToolUseID: "c1", Content: "ok"},
+		{Type: "tool_result", ToolUseID: "c2", Content: "fail", IsError: true},
+	})
+	results := parseToolResults(string(blocks))
+	if len(results) != 2 {
+		t.Fatalf("got %d results, want 2", len(results))
+	}
+	if results[0].toolUseID != "c1" || results[0].isError {
+		t.Errorf("result[0] = %+v", results[0])
+	}
+	if results[1].toolUseID != "c2" || !results[1].isError {
+		t.Errorf("result[1] = %+v", results[1])
+	}
+}
+
+func TestParseToolResults_MixedBlockTypes(t *testing.T) {
+	blocks, _ := json.Marshal([]types.ContentBlock{
+		{Type: "text", Text: "some text"},
+		{Type: "tool_result", ToolUseID: "c1", Content: "ok"},
+	})
+	results := parseToolResults(string(blocks))
+	if len(results) != 1 {
+		t.Fatalf("should only return tool_result blocks, got %d", len(results))
+	}
+}
+
+func TestParseToolResults_InvalidJSON(t *testing.T) {
+	results := parseToolResults("not json")
+	if results != nil {
+		t.Errorf("invalid JSON should return nil, got %v", results)
+	}
+}
+
+func TestParseToolResults_EmptyArray(t *testing.T) {
+	results := parseToolResults("[]")
+	if len(results) != 0 {
+		t.Errorf("empty array should return empty, got %d", len(results))
 	}
 }
