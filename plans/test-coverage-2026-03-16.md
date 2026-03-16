@@ -35,9 +35,9 @@ This is the most critical untested file — the entire agent orchestration layer
 
 ## Phase 2: Tools & Sub-Agent
 
-- [ ] 2a: Test `truncateOutput()` in tools.go — verify line limit (200 lines), byte limit (30KB), exact boundary behavior, empty input
-- [ ] 2b: Test `gitArgsContainForce()` — verify detection of `--force`, `-f`, `--force-with-lease` in various argument positions, verify false for normal args
-- [ ] 2c: Test `gitCredentialHint()` — verify detection of common credential error patterns (authentication failed, could not read username, permission denied), verify no false positives on normal error output
+- [x] 2a: Test `truncateOutput()` in tools.go — verify line limit (200 lines), byte limit (30KB), exact boundary behavior, empty input
+- [x] 2b: Test `gitArgsContainForce()` — verify detection of `--force`, `-f`, `--force-with-lease` in various argument positions, verify false for normal args
+- [x] 2c: Test `gitCredentialHint()` — verify detection of common credential error patterns (authentication failed, could not read username, permission denied), verify no false positives on normal error output
 
 **Parallel Tasks: 2d, 2e**
 
