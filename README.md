@@ -1,5 +1,7 @@
 # herm
 
+[![Tests](https://github.com/aduermael/herm/actions/workflows/test.yml/badge.svg)](https://github.com/aduermael/herm/actions/workflows/test.yml)
+
 A coding agent CLI that's containerized by default. Every command runs inside a Docker container, nothing touches your host. No approval prompts, no "are you sure?" dialogs. Just let it work.
 
 ![demo](img/demo.gif)

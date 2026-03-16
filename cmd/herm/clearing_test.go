@@ -100,6 +100,12 @@ func (s *clearingMockStorage) GetNodeByAlias(_ context.Context, _ string) (*type
 func (s *clearingMockStorage) ListAliases(_ context.Context, _ string) ([]string, error) {
 	return nil, nil
 }
+func (s *clearingMockStorage) IndexToolIDs(_ context.Context, _ string, _ []string, _ string) error {
+	return nil
+}
+func (s *clearingMockStorage) GetOrphanedToolUses(_ context.Context, _ []string) (map[string][]string, error) {
+	return nil, nil
+}
 
 // Helper: build a tool result content JSON string.
 func toolResultContent(toolUseID, content string) string {
