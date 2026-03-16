@@ -284,6 +284,135 @@ func TestSubAgentToolForwardsEventsWithAgentID(t *testing.T) {
 	}
 }
 
+// --- Task 2f: SubAgentTool.Execute additional tests ---
+
+func TestSubAgentToolResumeWithAgentID(t *testing.T) {
+	client := newTestClient("resumed output")
+	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, "/workspace", "", "alpine:latest")
+
+	// First call — establishes a sub-agent and saves its nodeID.
+	result1, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"initial work"}`))
+	if err != nil {
+		t.Fatalf("first Execute error: %v", err)
+	}
+
+	// Extract agent_id from the result (format: "[agent_id: <id>]\n\n<output>").
+	agentID := extractAgentID(t, result1)
+
+	// Second call — resume with the agent_id.
+	result2, err := tool.Execute(context.Background(), json.RawMessage(
+		`{"task":"continue work","agent_id":"`+agentID+`"}`))
+	if err != nil {
+		t.Fatalf("resume Execute error: %v", err)
+	}
+	if !strings.Contains(result2, "agent_id:") {
+		t.Errorf("resumed result should contain agent_id, got: %q", result2)
+	}
+}
+
+func TestSubAgentToolUnknownAgentID(t *testing.T) {
+	client := newTestClient("ok")
+	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, "/workspace", "", "alpine:latest")
+
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"resume","agent_id":"nonexistent"}`))
+	if err == nil {
+		t.Fatal("expected error for unknown agent_id")
+	}
+	if !strings.Contains(err.Error(), "unknown agent_id") {
+		t.Errorf("error = %q, want to contain 'unknown agent_id'", err.Error())
+	}
+}
+
+func TestSubAgentToolDepthExcludesNestedAgent(t *testing.T) {
+	// At maxDepth=1, currentDepth=0 → nextDepth=1 which is NOT < maxDepth → no nested agent tool.
+	tool := NewSubAgentTool(nil, nil, nil, "", 10, 1, 0, "/workspace", "", "alpine:latest")
+	subTools := tool.buildSubAgentTools()
+
+	for _, st := range subTools {
+		if st.Definition().Name == "agent" {
+			t.Error("sub-agent at max depth should NOT have nested agent tool")
+		}
+	}
+}
+
+func TestSubAgentToolDepthAllowsNestedAgent(t *testing.T) {
+	// At maxDepth=3, currentDepth=0 → nextDepth=1 < 3 → nested agent tool included.
+	baseTool := &testTool{name: "bash", result: "ok"}
+	tool := NewSubAgentTool(nil, []Tool{baseTool}, nil, "", 10, 3, 0, "/workspace", "", "alpine:latest")
+	subTools := tool.buildSubAgentTools()
+
+	hasAgent := false
+	for _, st := range subTools {
+		if st.Definition().Name == "agent" {
+			hasAgent = true
+		}
+	}
+	if !hasAgent {
+		t.Error("sub-agent below max depth should have nested agent tool")
+	}
+	// Should also include the base tools.
+	hasBash := false
+	for _, st := range subTools {
+		if st.Definition().Name == "bash" {
+			hasBash = true
+		}
+	}
+	if !hasBash {
+		t.Error("sub-agent should include base tools")
+	}
+}
+
+func TestSubAgentToolNoOutput(t *testing.T) {
+	// Provider returns empty text.
+	client := newTestClient("")
+	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, "/workspace", "", "alpine:latest")
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do nothing"}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if !strings.Contains(result, "sub-agent produced no output") {
+		t.Errorf("empty output should produce fallback message, got: %q", result)
+	}
+}
+
+func TestSubAgentToolResultContainsAgentID(t *testing.T) {
+	client := newTestClient("some output")
+	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, "/workspace", "", "alpine:latest")
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do work"}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if !strings.HasPrefix(result, "[agent_id:") {
+		t.Errorf("result should start with [agent_id:, got: %q", result[:min(50, len(result))])
+	}
+}
+
+func TestFormatSubAgentResult(t *testing.T) {
+	got := formatSubAgentResult("abc123", "hello world")
+	if got != "[agent_id: abc123]\n\nhello world" {
+		t.Errorf("unexpected format: %q", got)
+	}
+}
+
+// extractAgentID parses the agent_id from a SubAgentTool result string.
+func extractAgentID(t *testing.T, result string) string {
+	t.Helper()
+	// Format: "[agent_id: <id>]\n\n<output>"
+	prefix := "[agent_id: "
+	idx := strings.Index(result, prefix)
+	if idx < 0 {
+		t.Fatalf("result does not contain agent_id prefix: %q", result)
+	}
+	rest := result[idx+len(prefix):]
+	end := strings.Index(rest, "]")
+	if end < 0 {
+		t.Fatalf("result has no closing ] for agent_id: %q", result)
+	}
+	return rest[:end]
+}
+
 func TestTruncateSubAgentOutput(t *testing.T) {
 	// Short output — no truncation.
 	short := "hello world"

@@ -44,7 +44,7 @@ This is the most critical untested file — the entire agent orchestration layer
 - [x] 2d: Test `BashTool.Execute()` — verify command is passed to container exec, output truncation is applied, error handling for container failures
 - [x] 2e: Test `GitTool.Execute()` and `GitTool.RequiresApproval()` — verify allowed subcommands pass, disallowed subcommands rejected, force-push requires approval, co-author trailer appended on commit
 
-- [ ] 2f: Test `SubAgentTool.Execute()` — verify sub-agent is spawned with correct parameters, output is returned, events forwarded to parent channel, agent_id resume works, depth exceeded error, output truncation at 30KB
+- [x] 2f: Test `SubAgentTool.Execute()` — verify sub-agent is spawned with correct parameters, output is returned, events forwarded to parent channel, agent_id resume works, depth exceeded error, output truncation at 30KB
 
 ## Phase 3: Compact & Tree
 
