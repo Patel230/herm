@@ -475,6 +475,17 @@ func TestRenderToolBox(t *testing.T) {
 			t.Errorf("error box bottom should show duration: %q", bottom)
 		}
 	})
+
+	t.Run("tabs replaced with spaces", func(t *testing.T) {
+		got := strip(renderToolBox("~ grep", "9:\tlangdag.com/langdag v0.5.5", 80, false, ""))
+		lines := strings.Split(got, "\n")
+		if strings.Contains(lines[1], "\t") {
+			t.Errorf("content should not contain tabs: %q", lines[1])
+		}
+		if lines[1] != "9: langdag.com/langdag v0.5.5" {
+			t.Errorf("tab not replaced with space: got %q", lines[1])
+		}
+	})
 }
 
 func TestFormatDuration(t *testing.T) {
