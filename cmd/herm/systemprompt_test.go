@@ -394,3 +394,133 @@ func TestWebSearchToolDef(t *testing.T) {
 		t.Error("web search tool should have a description")
 	}
 }
+
+func TestBuildSystemPromptEmptyToolsList(t *testing.T) {
+	// Non-nil but empty slices — no tools registered at all.
+	prompt := buildSystemPrompt([]Tool{}, []types.ToolDefinition{}, nil, "/work", "", "alpine:latest", "")
+
+	// Structural sections must still be present.
+	for _, section := range []string{"## Tools", "## Practices", "## Communication"} {
+		if !strings.Contains(prompt, section) {
+			t.Errorf("prompt missing structural section %q", section)
+		}
+	}
+
+	// No tool-specific subsections should appear.
+	for _, sub := range []string{"### bash", "### git", "### devenv", "### web_search", "### glob, grep, read_file", "### agent"} {
+		if strings.Contains(prompt, sub) {
+			t.Errorf("prompt should not contain tool subsection %q when no tools are registered", sub)
+		}
+	}
+}
+
+func TestBuildSystemPromptNilSkillsVsEmpty(t *testing.T) {
+	// Both nil and an empty slice should produce no Skills section.
+	promptNil := buildSystemPrompt(nil, nil, nil, "/work", "", "alpine:latest", "")
+	promptEmpty := buildSystemPrompt(nil, nil, []Skill{}, "/work", "", "alpine:latest", "")
+
+	if strings.Contains(promptNil, "## Skills") {
+		t.Error("nil skills: prompt should not contain Skills section")
+	}
+	if strings.Contains(promptEmpty, "## Skills") {
+		t.Error("empty skills slice: prompt should not contain Skills section")
+	}
+	if promptNil != promptEmpty {
+		t.Error("nil skills and empty skills slice should produce identical prompts")
+	}
+}
+
+func TestBuildSystemPromptPersonalitySpecialChars(t *testing.T) {
+	// text/template inserts data values as plain strings — it does not re-parse them as
+	// template syntax. This means curly braces in the personality value are safe: they are
+	// written to the output buffer verbatim and will NOT cause a panic or template error.
+	// HTML special characters (&, <, >) are also safe because text/template (unlike
+	// html/template) does not HTML-escape output.
+	personality := `You like "quotes" & <angle brackets> and {{curly braces}}`
+	prompt := buildSystemPrompt(nil, nil, nil, "/work", personality, "alpine:latest", "")
+
+	if !strings.Contains(prompt, "## Personality") {
+		t.Error("prompt missing Personality section")
+	}
+	// All special characters should appear verbatim in the output.
+	for _, fragment := range []string{`"quotes"`, `& <angle brackets>`, `{{curly braces}}`} {
+		if !strings.Contains(prompt, fragment) {
+			t.Errorf("prompt missing personality fragment %q — special chars may have been escaped or dropped", fragment)
+		}
+	}
+}
+
+func TestBuildSystemPromptAgentTool(t *testing.T) {
+	tools := []Tool{stubTool{"agent"}}
+	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "")
+
+	// The agent tool triggers the orchestrator role in the role template.
+	if !strings.Contains(prompt, "orchestrator") {
+		t.Error("role section should describe orchestrator role when agent tool is present")
+	}
+	// The agent subsection should appear in the Tools section.
+	if !strings.Contains(prompt, "### agent") {
+		t.Error("prompt missing ### agent subsection when agent tool is present")
+	}
+	// Key guidance from the agent subsection.
+	for _, fragment := range []string{"sub-agent", "agent_id", "context window"} {
+		if !strings.Contains(prompt, fragment) {
+			t.Errorf("agent subsection missing expected content: %q", fragment)
+		}
+	}
+}
+
+func TestBuildSystemPromptAllServerTools(t *testing.T) {
+	// Provide only server tools — no client tools at all.
+	serverTools := []types.ToolDefinition{WebSearchToolDef()}
+	prompt := buildSystemPrompt(nil, serverTools, nil, "/work", "", "alpine:latest", "")
+
+	// The server tool should be reflected in the prompt.
+	if !strings.Contains(prompt, "### web_search") {
+		t.Error("prompt missing web_search section when registered as a server tool")
+	}
+	// No client-tool subsections should appear.
+	for _, sub := range []string{"### bash", "### git", "### devenv", "### glob, grep, read_file", "### agent"} {
+		if strings.Contains(prompt, sub) {
+			t.Errorf("prompt should not contain client tool subsection %q when only server tools are registered", sub)
+		}
+	}
+	// Structural sections must still be present.
+	for _, section := range []string{"## Tools", "## Practices", "## Communication"} {
+		if !strings.Contains(prompt, section) {
+			t.Errorf("prompt missing structural section %q", section)
+		}
+	}
+}
+
+func TestBuildSystemPromptMultipleSkills(t *testing.T) {
+	longContent := strings.Repeat("This is a detailed guideline for writing idiomatic Go code. ", 9) // ~504 chars
+	skills := []Skill{
+		{Name: "EmptySkill", Description: "A skill with no body content", Content: ""},
+		{Name: "LongSkill", Description: "A skill with a very long body", Content: longContent},
+		{Name: "NormalSkill", Description: "A typical skill", Content: "Keep functions small and focused."},
+	}
+	prompt := buildSystemPrompt(nil, nil, skills, "/work", "", "alpine:latest", "")
+
+	if !strings.Contains(prompt, "## Skills") {
+		t.Error("prompt missing Skills section")
+	}
+	// All skill names must appear in the summary list and as subsection headers.
+	for _, skill := range skills {
+		summaryLine := "**" + skill.Name + "**: " + skill.Description
+		if !strings.Contains(prompt, summaryLine) {
+			t.Errorf("prompt missing skill summary line: %q", summaryLine)
+		}
+		header := "### " + skill.Name
+		if !strings.Contains(prompt, header) {
+			t.Errorf("prompt missing skill subsection header: %q", header)
+		}
+	}
+	// Non-empty content must appear verbatim.
+	if !strings.Contains(prompt, longContent) {
+		t.Error("prompt missing long skill content")
+	}
+	if !strings.Contains(prompt, "Keep functions small and focused.") {
+		t.Error("prompt missing normal skill content")
+	}
+}

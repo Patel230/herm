@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -241,4 +242,241 @@ func TestContainerClient_Status(t *testing.T) {
 	}
 
 	_ = c.Stop()
+}
+
+func TestContainerClient_Rebuild(t *testing.T) {
+	orig := dockerCommand
+	defer func() { dockerCommand = orig }()
+
+	var calledBuild, calledRmOld, calledRunNew bool
+	const oldID = "oldcontainer123"
+	const newID = "newcontainer456"
+
+	dockerCommand = fakeDockerCommand(func(args []string) (string, string, int) {
+		if len(args) >= 2 {
+			switch args[1] {
+			case "run":
+				if !calledBuild {
+					// First run call: initial Start before Rebuild.
+					return oldID + "\n", "", 0
+				}
+				// Second run call: Start inside Rebuild.
+				calledRunNew = true
+				return newID + "\n", "", 0
+			case "build":
+				calledBuild = true
+				return "", "", 0
+			case "rm":
+				// docker rm -f <id>
+				if len(args) >= 4 && args[2] == "-f" && args[3] == oldID {
+					calledRmOld = true
+				}
+				return "", "", 0
+			}
+		}
+		return "", "unknown", 1
+	})
+
+	c := NewContainerClient(ContainerConfig{Image: "alpine:latest"})
+
+	// Start the client so it is already running with oldID.
+	if err := c.Start("/workspace", nil); err != nil {
+		t.Fatalf("initial Start: %v", err)
+	}
+	if c.containerID != oldID {
+		t.Fatalf("pre-condition: containerID = %q, want %q", c.containerID, oldID)
+	}
+
+	mounts := []MountSpec{{Source: "/workspace", Destination: "/workspace"}}
+	err := c.Rebuild("myimage:latest", "/workspace/Dockerfile", "/workspace", mounts)
+	if err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+
+	// docker build must have been called with the right args.
+	if !calledBuild {
+		t.Error("expected docker build to be called")
+	}
+
+	// Old container must have been stopped.
+	if !calledRmOld {
+		t.Errorf("expected docker rm -f %s to be called", oldID)
+	}
+
+	// A new container must have been started.
+	if !calledRunNew {
+		t.Error("expected docker run to be called for new container")
+	}
+
+	// Config image must be updated.
+	c.mu.Lock()
+	gotImage := c.config.Image
+	c.mu.Unlock()
+	if gotImage != "myimage:latest" {
+		t.Errorf("config.Image = %q, want %q", gotImage, "myimage:latest")
+	}
+
+	// Client must be running with the new ID.
+	if !c.running {
+		t.Error("expected client to be running after Rebuild")
+	}
+	if c.containerID != newID {
+		t.Errorf("containerID = %q, want %q", c.containerID, newID)
+	}
+}
+
+func TestContainerClient_RebuildBuildFailure(t *testing.T) {
+	orig := dockerCommand
+	defer func() { dockerCommand = orig }()
+
+	var calledRm bool
+	const startID = "running789"
+
+	dockerCommand = fakeDockerCommand(func(args []string) (string, string, int) {
+		if len(args) >= 2 {
+			switch args[1] {
+			case "run":
+				return startID + "\n", "", 0
+			case "build":
+				return "", "error: cmd failed: sh -c &amp;&amp; false", 1
+			case "rm":
+				calledRm = true
+				return "", "", 0
+			}
+		}
+		return "", "unknown", 1
+	})
+
+	c := NewContainerClient(ContainerConfig{Image: "alpine:latest"})
+	if err := c.Start("/workspace", nil); err != nil {
+		t.Fatalf("initial Start: %v", err)
+	}
+
+	err := c.Rebuild("myimage:latest", "/workspace/Dockerfile", "/workspace", nil)
+	if err == nil {
+		t.Fatal("expected error from Rebuild when build fails")
+	}
+
+	// Must return a ContainerError with ErrStartFailed.
+	cerr, ok := err.(*ContainerError)
+	if !ok {
+		t.Fatalf("expected *ContainerError, got %T", err)
+	}
+	if cerr.Code != ErrStartFailed {
+		t.Errorf("error code = %q, want %q", cerr.Code, ErrStartFailed)
+	}
+
+	// Error message must include the stderr output with HTML entities unescaped.
+	if !strings.Contains(cerr.Message, "&&") {
+		t.Errorf("expected HTML-unescaped '&&' in error message, got: %s", cerr.Message)
+	}
+
+	// Original container must NOT have been stopped.
+	if calledRm {
+		t.Error("expected docker rm to NOT be called when build fails")
+	}
+	if !c.running {
+		t.Error("expected client to still be running after build failure")
+	}
+	if c.containerID != startID {
+		t.Errorf("containerID = %q, want %q (original)", c.containerID, startID)
+	}
+}
+
+func TestContainerClient_RebuildNotRunning(t *testing.T) {
+	orig := dockerCommand
+	defer func() { dockerCommand = orig }()
+
+	var calledRm bool
+	const newID = "freshcontainer"
+
+	dockerCommand = fakeDockerCommand(func(args []string) (string, string, int) {
+		if len(args) >= 2 {
+			switch args[1] {
+			case "build":
+				return "", "", 0
+			case "run":
+				return newID + "\n", "", 0
+			case "rm":
+				calledRm = true
+				return "", "", 0
+			}
+		}
+		return "", "unknown", 1
+	})
+
+	// Do NOT call Start — client starts not running.
+	c := NewContainerClient(ContainerConfig{Image: "alpine:latest"})
+
+	mounts := []MountSpec{{Source: "/workspace", Destination: "/workspace"}}
+	err := c.Rebuild("myimage:latest", "/workspace/Dockerfile", "/workspace", mounts)
+	if err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+
+	// No rm -f should have been issued.
+	if calledRm {
+		t.Error("expected docker rm to NOT be called when client was not running")
+	}
+
+	// Client must be running with the new container ID.
+	if !c.running {
+		t.Error("expected client to be running after Rebuild")
+	}
+	if c.containerID != newID {
+		t.Errorf("containerID = %q, want %q", c.containerID, newID)
+	}
+}
+
+func TestContainerClient_RebuildStartFailure(t *testing.T) {
+	orig := dockerCommand
+	defer func() { dockerCommand = orig }()
+
+	var calledRmOld bool
+	const oldID = "oldrunning"
+
+	dockerCommand = fakeDockerCommand(func(args []string) (string, string, int) {
+		if len(args) >= 2 {
+			switch args[1] {
+			case "run":
+				// First call succeeds (initial Start), second fails (Start inside Rebuild).
+				if !calledRmOld {
+					return oldID + "\n", "", 0
+				}
+				return "", "cannot start container: out of memory", 1
+			case "build":
+				return "", "", 0
+			case "rm":
+				if len(args) >= 4 && args[2] == "-f" && args[3] == oldID {
+					calledRmOld = true
+				}
+				return "", "", 0
+			}
+		}
+		return "", "unknown", 1
+	})
+
+	c := NewContainerClient(ContainerConfig{Image: "alpine:latest"})
+	if err := c.Start("/workspace", nil); err != nil {
+		t.Fatalf("initial Start: %v", err)
+	}
+
+	err := c.Rebuild("myimage:latest", "/workspace/Dockerfile", "/workspace", nil)
+	if err == nil {
+		t.Fatal("expected error from Rebuild when docker run fails")
+	}
+
+	// Must be a ContainerError.
+	cerr, ok := err.(*ContainerError)
+	if !ok {
+		t.Fatalf("expected *ContainerError, got %T", err)
+	}
+	if cerr.Code != ErrStartFailed {
+		t.Errorf("error code = %q, want %q", cerr.Code, ErrStartFailed)
+	}
+
+	// Old container must have been stopped before the failed Start.
+	if !calledRmOld {
+		t.Errorf("expected docker rm -f %s to be called before new Start", oldID)
+	}
 }

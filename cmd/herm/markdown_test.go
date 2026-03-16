@@ -117,3 +117,266 @@ func TestCodeBlockAcrossMessages(t *testing.T) {
 		t.Error("should not be in code block after closing fence")
 	}
 }
+
+func TestRenderInlineMarkdownEdgeCases(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			"bold inside italic",
+			"*italic and **bold** inside*",
+			"\033[3mitalic and \033[1mbold\033[22m inside\033[23m",
+		},
+		{
+			"unclosed bold",
+			"**unclosed bold",
+			"**unclosed bold",
+		},
+		{
+			"unclosed italic",
+			"*unclosed italic",
+			"*unclosed italic",
+		},
+		{
+			"unclosed backtick",
+			"`unclosed code",
+			"`unclosed code",
+		},
+		{
+			"empty code two backticks",
+			"``",
+			"``",
+		},
+		{
+			"empty strikethrough",
+			"~~~~",
+			"~~~~",
+		},
+		{
+			"multiple bold sections",
+			"**a** then **b**",
+			"\033[1ma\033[22m then \033[1mb\033[22m",
+		},
+		{
+			"strikethrough with bold inside",
+			"~~**bold** strike~~",
+			"\033[9m\033[1mbold\033[22m strike\033[29m",
+		},
+		{
+			"unicode content in bold",
+			"**héllo wörld**",
+			"\033[1mhéllo wörld\033[22m",
+		},
+		{
+			// After **bold** is consumed, i lands on the third * whose predecessor
+			// is also *, so the italic guard fires and *italic* is emitted literally.
+			"adjacent bold then italic",
+			"**bold***italic*",
+			"\033[1mbold\033[22m*italic*",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := renderInlineMarkdown(tt.in)
+			if got != tt.want {
+				t.Errorf("renderInlineMarkdown(%q)\n  got  %q\n  want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProcessMarkdownLineEdgeCases(t *testing.T) {
+	tests := []struct {
+		name        string
+		line        string
+		inCodeBlock bool
+		wantResult  string
+		wantState   bool
+		wantSkip    bool
+	}{
+		{
+			"h4 heading",
+			"#### Fourth",
+			false,
+			"\033[1mFourth\033[0m",
+			false,
+			false,
+		},
+		{
+			// trimmed prefix is "```python" which starts with "```", so it toggles
+			"code fence with language tag and extra spaces",
+			"   ```python   ",
+			false,
+			"",
+			true,
+			true,
+		},
+		{
+			// empty line inside code block still gets code-block styling
+			"empty line in code block",
+			"",
+			true,
+			"\033[48;5;236m\033[38;5;248m\033[0m",
+			true,
+			false,
+		},
+		{
+			// heading syntax inside a code block is treated as code, not a heading
+			"heading inside code block",
+			"# Not a heading",
+			true,
+			"\033[48;5;236m\033[38;5;248m# Not a heading\033[0m",
+			true,
+			false,
+		},
+		{
+			// whitespace-only line outside a code block falls through to renderInlineMarkdown
+			// which returns it unchanged
+			"whitespace only line",
+			"   ",
+			false,
+			"   ",
+			false,
+			false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, state, skip := processMarkdownLine(tt.line, tt.inCodeBlock)
+			if result != tt.wantResult {
+				t.Errorf("result: got %q, want %q", result, tt.wantResult)
+			}
+			if state != tt.wantState {
+				t.Errorf("inCodeBlock: got %v, want %v", state, tt.wantState)
+			}
+			if skip != tt.wantSkip {
+				t.Errorf("skip: got %v, want %v", skip, tt.wantSkip)
+			}
+		})
+	}
+}
+
+func TestMultiCodeBlockSequence(t *testing.T) {
+	// Two successive fenced code blocks separated by plain text.
+	// Verifies that state resets properly after each closing fence.
+	lines := []struct {
+		text string
+	}{
+		{"before code"},
+		{"```go"},
+		{"x := 1"},
+		{"```"},
+		{"between"},
+		{"```python"},
+		{"y = 2"},
+		{"```"},
+		{"after code"},
+	}
+
+	type lineResult struct {
+		result string
+		state  bool
+		skip   bool
+	}
+
+	inCodeBlock := false
+	var got []lineResult
+	for _, l := range lines {
+		r, s, sk := processMarkdownLine(l.text, inCodeBlock)
+		got = append(got, lineResult{r, s, sk})
+		inCodeBlock = s
+	}
+
+	// fence lines: indices 1, 3, 5, 7 — all skip=true, result=""
+	for _, idx := range []int{1, 3, 5, 7} {
+		if !got[idx].skip {
+			t.Errorf("line %d: expected skip=true", idx)
+		}
+		if got[idx].result != "" {
+			t.Errorf("line %d: expected empty result, got %q", idx, got[idx].result)
+		}
+	}
+
+	// plain text lines outside code blocks: indices 0, 4, 8
+	for _, idx := range []int{0, 4, 8} {
+		if got[idx].skip {
+			t.Errorf("line %d: expected skip=false", idx)
+		}
+		if got[idx].state {
+			t.Errorf("line %d: expected inCodeBlock=false after plain text", idx)
+		}
+	}
+
+	// code content lines: indices 2 and 6
+	wantCodeLine := func(raw string) string {
+		return "\033[48;5;236m\033[38;5;248m" + raw + "\033[0m"
+	}
+	if got[2].result != wantCodeLine("x := 1") {
+		t.Errorf("line 2: got %q, want %q", got[2].result, wantCodeLine("x := 1"))
+	}
+	if got[6].result != wantCodeLine("y = 2") {
+		t.Errorf("line 6: got %q, want %q", got[6].result, wantCodeLine("y = 2"))
+	}
+
+	// state after opening fences (indices 1, 5): inCodeBlock=true
+	if !got[1].state {
+		t.Error("line 1 (opening go fence): expected state=true")
+	}
+	if !got[5].state {
+		t.Error("line 5 (opening python fence): expected state=true")
+	}
+
+	// state after closing fences (indices 3, 7): inCodeBlock=false
+	if got[3].state {
+		t.Error("line 3 (closing go fence): expected state=false")
+	}
+	if got[7].state {
+		t.Error("line 7 (closing python fence): expected state=false")
+	}
+
+	// final state is false
+	if inCodeBlock {
+		t.Error("final inCodeBlock should be false")
+	}
+}
+
+func TestRenderInlineMarkdownANSIPreservation(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			// A complete OSC 8 hyperlink already in the input should pass through untouched.
+			"osc8 hyperlink passthrough",
+			"\033]8;;http://x\033\\ link \033]8;;\033\\",
+			"\033]8;;http://x\033\\ link \033]8;;\033\\",
+		},
+		{
+			// CSI sequence with a non-'m' final byte (J = erase in display) must be preserved.
+			"csi non-m final byte",
+			"\033[2J",
+			"\033[2J",
+		},
+		{
+			// Existing ANSI sequences should be preserved verbatim while subsequent
+			// markdown (** bold **) is still rendered normally.
+			"ansi preserved with markdown after",
+			"\033[1mhi\033[0m **bold**",
+			"\033[1mhi\033[0m \033[1mbold\033[22m",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := renderInlineMarkdown(tt.in)
+			if got != tt.want {
+				t.Errorf("renderInlineMarkdown(%q)\n  got  %q\n  want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
