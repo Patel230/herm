@@ -46,9 +46,9 @@ The system prompts don't clearly communicate this split to the agent:
 
 Rewrite the git section in `prompts/tools.md` to clearly communicate the container/host boundary, when to use bash-git vs the git tool, and how to handle common workflows including merge conflicts.
 
-- [ ] 1a: Rewrite `prompts/tools.md` git section (lines 32-39) with clear guidance on: (1) the git tool runs on host with full credentials — prefer it for the main project since the container may not have git installed; (2) remote operations (push, pull, fetch) MUST use the git tool — these require credentials that only exist on the host; (3) local git operations via bash are fine (commit, diff, log, etc.) when git is available in the container, e.g. for managing local repos or scratch work; (4) merge conflict resolution workflow (git merge/rebase via git tool -> edit conflicts via bash -> git add + git commit via git tool); (5) what to do if push/pull/fetch fails (likely credentials issue — inform the user); (6) force-push restriction
-- [ ] 1b: Add git context to `prompts/environment.md` — add a line indicating the project is in a git worktree managed by herm, so the agent understands the workspace context
-- [ ] 1c: Update `systemprompt.go` `PromptData` if any new template variables are needed (e.g., worktree branch name)
+- [x] 1a: Rewrite `prompts/tools.md` git section (lines 32-39) with clear guidance on: (1) the git tool runs on host with full credentials — prefer it for the main project since the container may not have git installed; (2) remote operations (push, pull, fetch) MUST use the git tool — these require credentials that only exist on the host; (3) local git operations via bash are fine (commit, diff, log, etc.) when git is available in the container, e.g. for managing local repos or scratch work; (4) merge conflict resolution workflow (git merge/rebase via git tool -> edit conflicts via bash -> git add + git commit via git tool); (5) what to do if push/pull/fetch fails (likely credentials issue — inform the user); (6) force-push restriction
+- [x] 1b: Add git context to `prompts/environment.md` — add a line indicating the project is in a git worktree managed by herm, so the agent understands the workspace context
+- [x] 1c: Update `systemprompt.go` `PromptData` if any new template variables are needed (e.g., worktree branch name)
 
 ## Phase 2: Harden the git tool implementation
 

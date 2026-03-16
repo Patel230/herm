@@ -32,10 +32,28 @@ Runs commands inside an isolated Docker container (image: {{.ContainerImage}}) w
 {{- if .HasGit}}
 
 ### git
-Runs git commands on the host in the project worktree (not inside the container).
-- Review status/diff before committing. Write clear commit messages explaining why.
+Runs git commands **on the host** in the project worktree — not inside the container. This is the recommended way to run git for the main project because:
+1. The container may not have git installed.
+2. Only the host has SSH keys and credentials for remote operations.
+
+**When to use what:**
+- **git tool (host)**: Prefer for all main-project git operations. Required for remote operations — push, pull, fetch — which need host credentials.
+- **bash git (container)**: Fine for local git operations (commit, diff, log, etc.) when git is available in the container, e.g. for managing local/scratch repos. Not usable for remote operations.
+
+**Remote operations (push, pull, fetch):**
+- These MUST go through the git tool — they will fail inside the container due to missing credentials.
 - Push requires user approval — if denied, acknowledge and move on.
-- Never force-push unless explicitly asked.
+- If a remote operation fails with SSH or auth errors, tell the user it's likely a credentials issue on the host.
+
+**Merge conflict resolution:**
+1. Start the merge or rebase via the git tool (e.g. `git merge main` or `git rebase main`).
+2. Edit conflicted files to resolve them (via bash or file editing tools in the container).
+3. Stage resolved files via the git tool (`git add <file>`).
+4. Complete the merge/rebase via the git tool (`git commit` or `git rebase --continue`).
+
+**Rules:**
+- Review status/diff before committing. Write clear commit messages explaining why.
+- Never force-push unless the user explicitly asks.
 {{- end}}
 {{- if .HasDevenv}}
 

@@ -82,7 +82,7 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 	}
 
 	// Build a sub-agent system prompt: reuse buildSystemPrompt with a preamble.
-	basePrompt := buildSystemPrompt(t.tools, t.serverTools, nil, t.workDir, t.personality, t.containerImage)
+	basePrompt := buildSystemPrompt(t.tools, t.serverTools, nil, t.workDir, t.personality, t.containerImage, "")
 	systemPrompt := subAgentPreamble + "\n\n" + basePrompt
 
 	agent := NewAgent(t.client, t.tools, t.serverTools, systemPrompt, t.model, 0)

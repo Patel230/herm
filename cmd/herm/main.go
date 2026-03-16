@@ -4156,7 +4156,11 @@ func (a *App) startAgent(userMessage string) {
 	subAgentTool := NewSubAgentTool(a.langdagClient, tools, serverTools, explorationModelID, maxTurns, workDir, a.config.Personality, containerImage)
 	tools = append(tools, subAgentTool)
 
-	systemPrompt := buildSystemPrompt(tools, serverTools, skills, workDir, a.config.Personality, containerImage)
+	var wtBranch string
+	if a.worktreePath != "" {
+		wtBranch = worktreeBranch(a.worktreePath)
+	}
+	systemPrompt := buildSystemPrompt(tools, serverTools, skills, workDir, a.config.Personality, containerImage, wtBranch)
 
 	if a.displaySystemPrompts {
 		a.messages = append(a.messages, chatMessage{kind: msgSystemPrompt, content: "── System Prompt ──\n" + systemPrompt})

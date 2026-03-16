@@ -28,6 +28,7 @@ type PromptData struct {
 	HasReadFile    bool
 	ContainerImage string
 	WorkDir        string
+	WorktreeBranch string // current branch in the git worktree, if known
 	Date           string
 	Personality    string
 	Skills         []Skill
@@ -37,7 +38,7 @@ type PromptData struct {
 // Tool-specific guidelines are included only when the corresponding tool is available.
 // serverTools are provider-side tools (e.g. web search) declared but not executed by the client.
 // Structured into: Role, Tools, Practices, Communication, Skills, Environment.
-func buildSystemPrompt(tools []Tool, serverTools []types.ToolDefinition, skills []Skill, workDir string, personality string, containerImage string) string {
+func buildSystemPrompt(tools []Tool, serverTools []types.ToolDefinition, skills []Skill, workDir string, personality string, containerImage string, worktreeBranch string) string {
 	toolNames := make(map[string]bool)
 	for _, t := range tools {
 		toolNames[t.Definition().Name] = true
@@ -58,6 +59,7 @@ func buildSystemPrompt(tools []Tool, serverTools []types.ToolDefinition, skills 
 		HasReadFile:    toolNames["read_file"],
 		ContainerImage: containerImage,
 		WorkDir:        workDir,
+		WorktreeBranch: worktreeBranch,
 		Date:           time.Now().Format("2006-01-02 15:04 MST"),
 		Personality:    personality,
 		Skills:         skills,
