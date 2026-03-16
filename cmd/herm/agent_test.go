@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"langdag.com/langdag/types"
@@ -146,5 +149,138 @@ func TestNewAgentServerTools(t *testing.T) {
 	// Server tools should NOT be in the tools map (they're provider-executed).
 	if _, ok := agent.tools["web_search"]; ok {
 		t.Error("server tool should not be in tools map")
+	}
+}
+
+// --- Task 1b: newLangdagClient ---
+
+func TestNewLangdagClientSelectsFirstAvailableProvider(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	// Anthropic key present → should select Anthropic.
+	cfg := Config{AnthropicAPIKey: "sk-ant-test"}
+	client, err := newLangdagClient(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if client == nil {
+		t.Fatal("expected non-nil client")
+	}
+}
+
+func TestNewLangdagClientFallsThrough(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	// Only OpenAI key present → should select OpenAI.
+	cfg := Config{OpenAIAPIKey: "sk-openai-test"}
+	client, err := newLangdagClient(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if client == nil {
+		t.Fatal("expected non-nil client when OpenAI key is set")
+	}
+}
+
+func TestNewLangdagClientNoKeys(t *testing.T) {
+	// No API keys → returns nil, nil.
+	cfg := Config{}
+	client, err := newLangdagClient(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if client != nil {
+		t.Error("expected nil client when no keys configured")
+	}
+}
+
+// --- Task 1c: newLangdagClientForProvider ---
+
+func TestNewLangdagClientForProviderBranches(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	tests := []struct {
+		provider string
+		cfg      Config
+	}{
+		{ProviderAnthropic, Config{AnthropicAPIKey: "key-a"}},
+		{ProviderOpenAI, Config{OpenAIAPIKey: "key-o"}},
+		{ProviderGrok, Config{GrokAPIKey: "key-g"}},
+		{ProviderGemini, Config{GeminiAPIKey: "key-m"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.provider, func(t *testing.T) {
+			client, err := newLangdagClientForProvider(tt.cfg, tt.provider)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if client == nil {
+				t.Fatal("expected non-nil client")
+			}
+		})
+	}
+}
+
+func TestNewLangdagClientForProviderInvalid(t *testing.T) {
+	_, err := newLangdagClientForProvider(Config{}, "unsupported-provider")
+	if err == nil {
+		t.Fatal("expected error for unsupported provider")
+	}
+	if !strings.Contains(err.Error(), "unsupported provider") {
+		t.Errorf("error = %q, want to contain 'unsupported provider'", err.Error())
+	}
+}
+
+// --- Task 1d: generateAgentID ---
+
+func TestGenerateAgentIDFormat(t *testing.T) {
+	id := generateAgentID()
+	// 4 random bytes → 8 hex characters.
+	if len(id) != 8 {
+		t.Errorf("id length = %d, want 8", len(id))
+	}
+	for _, c := range id {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			t.Errorf("id contains non-hex char: %c", c)
+		}
+	}
+}
+
+func TestGenerateAgentIDUniqueness(t *testing.T) {
+	seen := make(map[string]bool)
+	for i := 0; i < 100; i++ {
+		id := generateAgentID()
+		if seen[id] {
+			t.Fatalf("duplicate ID after %d calls: %s", i, id)
+		}
+		seen[id] = true
+	}
+}
+
+// --- Task 1e: langdagStoragePath ---
+
+func TestLangdagStoragePath(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	path := langdagStoragePath()
+
+	// Should be under HOME/.herm/conversations.db
+	wantDir := filepath.Join(tmp, ".herm")
+	wantPath := filepath.Join(wantDir, "conversations.db")
+	if path != wantPath {
+		t.Errorf("path = %q, want %q", path, wantPath)
+	}
+
+	// Directory should have been created.
+	info, err := os.Stat(wantDir)
+	if err != nil {
+		t.Fatalf("directory not created: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error("expected directory, got file")
 	}
 }
