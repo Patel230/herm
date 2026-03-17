@@ -20,15 +20,31 @@ A coding agent CLI that's containerized by default. Every command runs inside a 
 
 - macOS (only platform tested so far — Linux should work but hasn't been verified yet)
 - Docker installed and running
-- Go 1.24+
 
-## Quick Start
+## Install
+
+### Homebrew
+
+```sh
+brew tap aduermael/herm
+brew install herm
+```
+
+### From source
+
+Requires Go 1.24+.
 
 ```sh
 git clone https://github.com/aduermael/herm
 cd herm
 go build -o herm ./cmd/herm
 ./herm
+```
+
+## Quick Start
+
+```sh
+herm
 ```
 
 You'll need an API key for at least one provider (Anthropic, OpenAI, Grok, or Gemini) — add it via the CLI on first run.
