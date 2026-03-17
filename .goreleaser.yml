@@ -1,0 +1,50 @@
+version: 2
+
+project_name: herm
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/herm
+    binary: herm
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+
+brews:
+  - repository:
+      owner: aduermael
+      name: homebrew-herm
+      branch: main
+    directory: Formula
+    homepage: "https://github.com/aduermael/herm"
+    description: "A containerized coding agent CLI"
+    license: "MIT"
+    test: |
+      system "#{bin}/herm", "--help"
+    install: |
+      bin.install "herm"
