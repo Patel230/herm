@@ -909,3 +909,385 @@ func TestEmitUsageMissingNode(t *testing.T) {
 		t.Errorf("inputTokens = %d, want 0 for missing node", inputTokens)
 	}
 }
+
+// --- Phase 4: Parallel agent execution ---
+
+// parallelTracker is a tool that tracks concurrent execution. Each Execute call
+// increments a running counter, blocks on a gate channel, then decrements.
+// Peak concurrency is recorded in maxConc.
+type parallelTracker struct {
+	name    string
+	result  string
+	mu      sync.Mutex
+	running int
+	maxConc int
+	gate    chan struct{}
+}
+
+func (t *parallelTracker) Definition() types.ToolDefinition {
+	return types.ToolDefinition{Name: t.name, Description: "parallel tracking tool"}
+}
+
+func (t *parallelTracker) Execute(ctx context.Context, _ json.RawMessage) (string, error) {
+	t.mu.Lock()
+	t.running++
+	if t.running > t.maxConc {
+		t.maxConc = t.running
+	}
+	t.mu.Unlock()
+
+	defer func() {
+		t.mu.Lock()
+		t.running--
+		t.mu.Unlock()
+	}()
+
+	select {
+	case <-t.gate:
+		return t.result, nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+func (t *parallelTracker) RequiresApproval(_ json.RawMessage) bool { return false }
+
+func TestRunParallelAgentCalls(t *testing.T) {
+	// LLM returns 3 agent tool calls in one response.
+	prov := &scriptedProvider{
+		model: "test-model",
+		responses: []scriptedResponse{
+			{
+				text: "Spawning agents",
+				toolCalls: []types.ContentBlock{
+					{Type: "tool_use", ID: "a1", Name: "agent", Input: json.RawMessage(`{"task":"t1"}`)},
+					{Type: "tool_use", ID: "a2", Name: "agent", Input: json.RawMessage(`{"task":"t2"}`)},
+					{Type: "tool_use", ID: "a3", Name: "agent", Input: json.RawMessage(`{"task":"t3"}`)},
+				},
+				tokensIn: 100, tokensOut: 50,
+			},
+			{text: "All done!", tokensIn: 200, tokensOut: 30},
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+
+	gate := make(chan struct{})
+	tracker := &parallelTracker{name: "agent", result: "agent result", gate: gate}
+	agent := NewAgent(client, []Tool{tracker}, nil, "", "test-model", 0)
+
+	go agent.Run(context.Background(), "spawn agents", "")
+
+	// Wait for all 3 to be running concurrently.
+	deadline := time.After(5 * time.Second)
+	for {
+		tracker.mu.Lock()
+		r := tracker.running
+		tracker.mu.Unlock()
+		if r >= 3 {
+			break
+		}
+		select {
+		case <-deadline:
+			tracker.mu.Lock()
+			t.Fatalf("timeout: only %d concurrent, want 3", tracker.running)
+			tracker.mu.Unlock()
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	// All 3 running in parallel — release them.
+	close(gate)
+
+	events := drainEvents(t, agent.Events(), 5*time.Second)
+
+	// Verify peak concurrency was 3 (proves parallel execution).
+	tracker.mu.Lock()
+	mc := tracker.maxConc
+	tracker.mu.Unlock()
+	if mc < 3 {
+		t.Errorf("max concurrency = %d, want 3", mc)
+	}
+
+	// All 3 agent tool results should be present.
+	var agentResults int
+	for _, ev := range events {
+		if ev.Type == EventToolResult && ev.ToolName == "agent" {
+			agentResults++
+			if ev.ToolResult != "agent result" {
+				t.Errorf("agent result = %q, want 'agent result'", ev.ToolResult)
+			}
+		}
+	}
+	if agentResults != 3 {
+		t.Errorf("agent results = %d, want 3", agentResults)
+	}
+}
+
+func TestRunMixedSequentialAndParallelCalls(t *testing.T) {
+	// LLM returns a bash call and 2 agent calls in one response.
+	prov := &scriptedProvider{
+		model: "test-model",
+		responses: []scriptedResponse{
+			{
+				text: "",
+				toolCalls: []types.ContentBlock{
+					{Type: "tool_use", ID: "bash_1", Name: "bash", Input: json.RawMessage(`{}`)},
+					{Type: "tool_use", ID: "agent_1", Name: "agent", Input: json.RawMessage(`{"task":"t1"}`)},
+					{Type: "tool_use", ID: "agent_2", Name: "agent", Input: json.RawMessage(`{"task":"t2"}`)},
+				},
+				tokensIn: 100, tokensOut: 50,
+			},
+			{text: "Done", tokensIn: 200, tokensOut: 30},
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+
+	bashTool := &testTool{name: "bash", result: "bash output"}
+	agentTool := &testTool{name: "agent", result: "agent output"}
+	agent := NewAgent(client, []Tool{bashTool, agentTool}, nil, "", "test-model", 0)
+
+	go agent.Run(context.Background(), "do things", "")
+	events := drainEvents(t, agent.Events(), 5*time.Second)
+
+	// Collect all tool results by ID.
+	toolResults := make(map[string]string)
+	for _, ev := range events {
+		if ev.Type == EventToolResult {
+			toolResults[ev.ToolID] = ev.ToolResult
+		}
+	}
+	if toolResults["bash_1"] != "bash output" {
+		t.Errorf("bash result = %q, want 'bash output'", toolResults["bash_1"])
+	}
+	if toolResults["agent_1"] != "agent output" {
+		t.Errorf("agent_1 result = %q, want 'agent output'", toolResults["agent_1"])
+	}
+	if toolResults["agent_2"] != "agent output" {
+		t.Errorf("agent_2 result = %q, want 'agent output'", toolResults["agent_2"])
+	}
+}
+
+func TestRunParallelAgentCancellation(t *testing.T) {
+	// LLM returns 2 agent calls; we cancel before they finish.
+	prov := &scriptedProvider{
+		model: "test-model",
+		responses: []scriptedResponse{
+			{
+				text: "",
+				toolCalls: []types.ContentBlock{
+					{Type: "tool_use", ID: "a1", Name: "agent", Input: json.RawMessage(`{"task":"t1"}`)},
+					{Type: "tool_use", ID: "a2", Name: "agent", Input: json.RawMessage(`{"task":"t2"}`)},
+				},
+				tokensIn: 100, tokensOut: 50,
+			},
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+
+	gate := make(chan struct{}) // never closed — agents block until cancelled
+	tracker := &parallelTracker{name: "agent", result: "ok", gate: gate}
+	agent := NewAgent(client, []Tool{tracker}, nil, "", "test-model", 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go agent.Run(ctx, "go", "")
+
+	// Wait for both agents to be running.
+	deadline := time.After(5 * time.Second)
+	for {
+		tracker.mu.Lock()
+		r := tracker.running
+		tracker.mu.Unlock()
+		if r >= 2 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for 2 concurrent agents")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	// Cancel context — both agents should stop.
+	cancel()
+
+	// Should eventually get EventDone.
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case ev := <-agent.Events():
+			if ev.Type == EventDone {
+				return
+			}
+		case <-timer.C:
+			t.Fatal("timeout waiting for EventDone after cancellation")
+		}
+	}
+}
+
+func TestRunParallelAgentEventIDs(t *testing.T) {
+	// Verify that events from parallel agent calls carry the correct tool IDs.
+	prov := &scriptedProvider{
+		model: "test-model",
+		responses: []scriptedResponse{
+			{
+				text: "",
+				toolCalls: []types.ContentBlock{
+					{Type: "tool_use", ID: "a1", Name: "agent", Input: json.RawMessage(`{"task":"t1"}`)},
+					{Type: "tool_use", ID: "a2", Name: "agent", Input: json.RawMessage(`{"task":"t2"}`)},
+				},
+				tokensIn: 100, tokensOut: 50,
+			},
+			{text: "Done", tokensIn: 200, tokensOut: 30},
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+
+	agentTool := &testTool{name: "agent", result: "ok"}
+	agent := NewAgent(client, []Tool{agentTool}, nil, "", "test-model", 0)
+
+	go agent.Run(context.Background(), "go", "")
+	events := drainEvents(t, agent.Events(), 5*time.Second)
+
+	// Collect distinct tool IDs from EventToolCallStart for agent calls.
+	toolIDs := make(map[string]bool)
+	for _, ev := range events {
+		if ev.Type == EventToolCallStart && ev.ToolName == "agent" {
+			toolIDs[ev.ToolID] = true
+		}
+	}
+	if len(toolIDs) != 2 {
+		t.Errorf("distinct agent tool IDs = %d, want 2", len(toolIDs))
+	}
+	if !toolIDs["a1"] || !toolIDs["a2"] {
+		t.Errorf("expected tool IDs a1 and a2, got %v", toolIDs)
+	}
+}
+
+// --- Phase 5: Token budget awareness ---
+
+func TestSystemPromptWithStatsNoStats(t *testing.T) {
+	client := newTestClient("ok")
+	agent := NewAgent(client, nil, nil, "base prompt", "test-model", 0)
+
+	got := agent.systemPromptWithStats()
+	if got != "base prompt" {
+		t.Errorf("with no stats, systemPromptWithStats should return base prompt, got: %q", got)
+	}
+}
+
+func TestSystemPromptWithStatsIncludesStats(t *testing.T) {
+	client := newTestClient("ok")
+	agent := NewAgent(client, nil, nil, "base prompt", "test-model", 0)
+	agent.sessionInputTokens = 10000
+	agent.sessionOutputTokens = 2000
+	agent.sessionAgentCalls = 3
+
+	got := agent.systemPromptWithStats()
+	if !strings.Contains(got, "base prompt") {
+		t.Error("augmented prompt should still contain base prompt")
+	}
+	if !strings.Contains(got, "12000 tokens used") {
+		t.Errorf("prompt should contain total tokens (10000+2000=12000), got: %q", got)
+	}
+	if !strings.Contains(got, "3 agent calls") {
+		t.Errorf("prompt should contain agent call count, got: %q", got)
+	}
+}
+
+func TestSessionStatsAccumulateFromEmitUsage(t *testing.T) {
+	store := newMockStorage()
+	prov := &mockProvider{model: "test-model"}
+	client := langdag.NewWithDeps(store, prov)
+
+	_ = store.CreateNode(context.Background(), &types.Node{
+		ID:              "node-1",
+		NodeType:        types.NodeTypeAssistant,
+		Model:           "test-model",
+		TokensIn:        5000,
+		TokensOut:       200,
+		TokensCacheRead: 1000,
+	})
+	_ = store.CreateNode(context.Background(), &types.Node{
+		ID:              "node-2",
+		NodeType:        types.NodeTypeAssistant,
+		Model:           "test-model",
+		TokensIn:        3000,
+		TokensOut:       150,
+		TokensCacheRead: 500,
+	})
+
+	agent := NewAgent(client, nil, nil, "", "test-model", 0)
+	agent.emitUsage(context.Background(), "node-1")
+	// Drain the event.
+	<-agent.Events()
+	agent.emitUsage(context.Background(), "node-2")
+	<-agent.Events()
+
+	// Input: (5000+1000) + (3000+500) = 9500
+	if agent.sessionInputTokens != 9500 {
+		t.Errorf("sessionInputTokens = %d, want 9500", agent.sessionInputTokens)
+	}
+	// Output: 200 + 150 = 350
+	if agent.sessionOutputTokens != 350 {
+		t.Errorf("sessionOutputTokens = %d, want 350", agent.sessionOutputTokens)
+	}
+}
+
+func TestSessionAgentCallsTracked(t *testing.T) {
+	// LLM returns 2 agent calls, then finishes.
+	prov := &scriptedProvider{
+		model: "test-model",
+		responses: []scriptedResponse{
+			{
+				text: "",
+				toolCalls: []types.ContentBlock{
+					{Type: "tool_use", ID: "a1", Name: "agent", Input: json.RawMessage(`{"task":"t1"}`)},
+					{Type: "tool_use", ID: "a2", Name: "agent", Input: json.RawMessage(`{"task":"t2"}`)},
+				},
+				tokensIn: 100, tokensOut: 50,
+			},
+			{text: "Done", tokensIn: 200, tokensOut: 30},
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+
+	agentTool := &testTool{name: "agent", result: "ok"}
+	agent := NewAgent(client, []Tool{agentTool}, nil, "", "test-model", 0)
+
+	go agent.Run(context.Background(), "go", "")
+	drainEvents(t, agent.Events(), 5*time.Second)
+
+	if agent.sessionAgentCalls != 2 {
+		t.Errorf("sessionAgentCalls = %d, want 2", agent.sessionAgentCalls)
+	}
+}
+
+func TestBuildPromptOptsIncludesModel(t *testing.T) {
+	client := newTestClient("ok")
+	agent := NewAgent(client, nil, nil, "prompt", "test-model", 0)
+
+	opts := agent.buildPromptOpts()
+	// Should have at least 4 options: system prompt, max tokens, tools, model.
+	if len(opts) != 4 {
+		t.Errorf("buildPromptOpts returned %d options, want 4", len(opts))
+	}
+}
+
+func TestBuildPromptOptsNoModel(t *testing.T) {
+	client := newTestClient("ok")
+	agent := NewAgent(client, nil, nil, "prompt", "", 0)
+
+	opts := agent.buildPromptOpts()
+	// No model → only 3 options: system prompt, max tokens, tools.
+	if len(opts) != 3 {
+		t.Errorf("buildPromptOpts returned %d options, want 3", len(opts))
+	}
+}

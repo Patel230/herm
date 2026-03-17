@@ -167,6 +167,11 @@ type Agent struct {
 	mu       sync.Mutex
 	running  bool
 	cancelFn context.CancelFunc
+
+	// Session-level stats for token budget awareness (5b).
+	sessionInputTokens  int
+	sessionOutputTokens int
+	sessionAgentCalls   int
 }
 
 // AgentOption configures optional Agent parameters.
@@ -275,7 +280,8 @@ func (a *Agent) emit(e AgentEvent) {
 }
 
 // emitUsage fetches the node by ID, emits an EventUsage with token counts,
-// and returns the input token count (for context management decisions).
+// accumulates session stats, and returns the input token count (for context
+// management decisions).
 func (a *Agent) emitUsage(ctx context.Context, nodeID string) int {
 	if nodeID == "" {
 		return 0
@@ -295,7 +301,21 @@ func (a *Agent) emitUsage(ctx context.Context, nodeID string) int {
 			ReasoningTokens:          node.TokensReasoning,
 		},
 	})
+	// Accumulate session-level stats for budget awareness.
+	a.sessionInputTokens += node.TokensIn + node.TokensCacheRead
+	a.sessionOutputTokens += node.TokensOut
 	return node.TokensIn + node.TokensCacheRead
+}
+
+// systemPromptWithStats returns the system prompt with session usage stats
+// appended when non-zero. This gives the model visibility into cumulative
+// token consumption so it can self-regulate delegation decisions.
+func (a *Agent) systemPromptWithStats() string {
+	totalTokens := a.sessionInputTokens + a.sessionOutputTokens
+	if totalTokens == 0 && a.sessionAgentCalls == 0 {
+		return a.systemPrompt
+	}
+	return fmt.Sprintf("%s\n\n---\nSession: %d tokens used, %d agent calls", a.systemPrompt, totalTokens, a.sessionAgentCalls)
 }
 
 // clearThresholdFraction is the fraction of context window at which old tool
@@ -425,16 +445,23 @@ func (a *Agent) maybeCompact(ctx context.Context, nodeID string, inputTokens int
 	return result.NewNodeID
 }
 
-// runLoop is the core agent loop: call LLM, handle tool calls, repeat.
-func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID string) {
+// buildPromptOpts returns LLM call options with the current system prompt
+// (including session stats when available).
+func (a *Agent) buildPromptOpts() []langdag.PromptOption {
 	opts := []langdag.PromptOption{
-		langdag.WithSystemPrompt(a.systemPrompt),
+		langdag.WithSystemPrompt(a.systemPromptWithStats()),
 		langdag.WithMaxTokens(8192),
 		langdag.WithTools(a.toolDefs),
 	}
 	if a.model != "" {
 		opts = append(opts, langdag.WithModel(a.model))
 	}
+	return opts
+}
+
+// runLoop is the core agent loop: call LLM, handle tool calls, repeat.
+func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID string) {
+	opts := a.buildPromptOpts()
 
 	// Initial LLM call
 	var result *langdag.PromptResult
@@ -487,9 +514,19 @@ func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID st
 			break
 		}
 
-		// Execute each tool call
-		var toolResults []types.ContentBlock
+		// Partition tool calls: agent tools run in parallel, others sequentially.
+		var seqCalls, agentCalls []types.ContentBlock
 		for _, tc := range toolCalls {
+			if tc.Name == "agent" {
+				agentCalls = append(agentCalls, tc)
+			} else {
+				seqCalls = append(seqCalls, tc)
+			}
+		}
+
+		// Execute non-agent tools sequentially (may have side effects and need approval).
+		var toolResults []types.ContentBlock
+		for _, tc := range seqCalls {
 			a.emit(AgentEvent{
 				Type:      EventToolCallStart,
 				ToolName:  tc.Name,
@@ -587,9 +624,82 @@ func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID st
 			})
 		}
 
-		// Build tool results message and re-call LLM
-		// Use PromptFrom with the current nodeID to continue the conversation
-		// The tool results need to be sent as the next user message
+		// Execute agent tools in parallel (each sub-agent is independent).
+		if len(agentCalls) > 0 {
+			a.sessionAgentCalls += len(agentCalls)
+			agentResults := make([]types.ContentBlock, len(agentCalls))
+			var wg sync.WaitGroup
+			for i, tc := range agentCalls {
+				wg.Add(1)
+				go func(idx int, tc types.ContentBlock) {
+					defer wg.Done()
+
+					a.emit(AgentEvent{
+						Type:      EventToolCallStart,
+						ToolName:  tc.Name,
+						ToolID:    tc.ID,
+						ToolInput: tc.Input,
+					})
+
+					tool, ok := a.tools[tc.Name]
+					if !ok {
+						errResult := fmt.Sprintf("unknown tool: %s", tc.Name)
+						a.emit(AgentEvent{
+							Type:       EventToolResult,
+							ToolName:   tc.Name,
+							ToolID:     tc.ID,
+							ToolResult: errResult,
+							IsError:    true,
+						})
+						agentResults[idx] = types.ContentBlock{
+							Type:      "tool_result",
+							ToolUseID: tc.ID,
+							Content:   errResult,
+							IsError:   true,
+						}
+						return
+					}
+
+					toolStart := time.Now()
+					output, execErr := tool.Execute(ctx, tc.Input)
+					toolDur := time.Since(toolStart)
+					isErr := execErr != nil
+					if execErr != nil {
+						output = execErr.Error()
+					}
+
+					a.emit(AgentEvent{
+						Type:       EventToolCallDone,
+						ToolName:   tc.Name,
+						ToolID:     tc.ID,
+						ToolResult: output,
+						Duration:   toolDur,
+					})
+					a.emit(AgentEvent{
+						Type:       EventToolResult,
+						ToolName:   tc.Name,
+						ToolID:     tc.ID,
+						ToolResult: output,
+						IsError:    isErr,
+						Duration:   toolDur,
+					})
+
+					agentResults[idx] = types.ContentBlock{
+						Type:       "tool_result",
+						ToolUseID:  tc.ID,
+						Content:    output,
+						IsError:    isErr,
+						DurationMs: int(toolDur.Milliseconds()),
+					}
+				}(i, tc)
+			}
+			wg.Wait()
+			toolResults = append(toolResults, agentResults...)
+		}
+
+		// Build tool results message and re-call LLM.
+		// Rebuild opts so the system prompt includes updated session stats.
+		opts = a.buildPromptOpts()
 		toolResultJSON, _ := json.Marshal(toolResults)
 		result, err = a.client.PromptFrom(ctx, nodeID, string(toolResultJSON), opts...)
 		if err != nil {

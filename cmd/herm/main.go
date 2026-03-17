@@ -4481,6 +4481,7 @@ func (a *App) handleResult(result any) {
 		go func() { a.resultCh <- fetchStatusCmd(wtPath) }()
 		go func() { bootContainerCmd(wtPath, a.sessionID, a.resultCh) }()
 		go cleanupTmpDir(wtPath)
+		go cleanupAgentOutputDir(wtPath)
 
 	case containerReadyMsg:
 		a.container = msg.client

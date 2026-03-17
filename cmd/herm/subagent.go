@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"langdag.com/langdag"
 	"langdag.com/langdag/types"
@@ -154,9 +157,9 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 	// Build the sub-agent's tool set (may include nested agent tool if depth allows).
 	subTools := t.buildSubAgentTools()
 
-	// Build a sub-agent system prompt: reuse buildSystemPrompt with a preamble.
-	basePrompt := buildSystemPrompt(subTools, t.serverTools, nil, t.workDir, t.personality, t.containerImage, "")
-	systemPrompt := subAgentPreamble + "\n\n" + basePrompt
+	// Build a lean sub-agent system prompt: skips communication, personality,
+	// skills, and uses a compact role section instead of the full orchestrator framing.
+	systemPrompt := buildSubAgentSystemPrompt(subTools, t.serverTools, t.workDir, t.containerImage)
 
 	agent := NewAgent(t.client, subTools, t.serverTools, systemPrompt, t.model, 0)
 	agentID := agent.ID()
@@ -169,6 +172,9 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 		defer close(done)
 		agent.Run(ctx, in.Task, parentNodeID)
 	}()
+
+	// Track sub-agent token usage for reporting in the tool result.
+	var totalInputTokens, totalOutputTokens int
 
 	turns := 0
 	for event := range agent.Events() {
@@ -183,6 +189,10 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 			}
 			t.forward(AgentEvent{Type: EventSubAgentStatus, AgentID: agentID, Text: fmt.Sprintf("tool: %s", event.ToolName)})
 		case EventUsage:
+			if event.Usage != nil {
+				totalInputTokens += event.Usage.InputTokens + event.Usage.CacheReadInputTokens
+				totalOutputTokens += event.Usage.OutputTokens
+			}
 			// Forward usage events so sub-agent costs are tracked.
 			t.forward(event)
 		case EventDone:
@@ -197,7 +207,8 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 			if result == "" {
 				result = "(sub-agent produced no output)"
 			}
-			return formatSubAgentResult(agentID, truncateSubAgentOutput(result)), nil
+			outputPath := t.writeOutputFile(agentID, result)
+			return formatSubAgentResult(agentID, outputPath, summarizeOutput(result), totalInputTokens, totalOutputTokens), nil
 		case EventError:
 			if event.Error != nil && event.Error.Error() != "context canceled" {
 				// Continue — errors are informational in the event stream.
@@ -211,37 +222,80 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 	if result == "" {
 		result = "(sub-agent produced no output)"
 	}
-	return formatSubAgentResult(agentID, truncateSubAgentOutput(result)), nil
+	outputPath := t.writeOutputFile(agentID, result)
+	return formatSubAgentResult(agentID, outputPath, summarizeOutput(result), totalInputTokens, totalOutputTokens), nil
 }
 
-// formatSubAgentResult prepends the agent ID to the output so the caller
-// can reference it for resume.
-func formatSubAgentResult(agentID, output string) string {
-	return fmt.Sprintf("[agent_id: %s]\n\n%s", agentID, output)
+// formatSubAgentResult builds the tool result string with agent ID, output file
+// path, token usage, and a summary. The caller can use read_file on the output path
+// for full results and see token usage for cost awareness.
+func formatSubAgentResult(agentID, outputPath, summary string, inputTokens, outputTokens int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "[agent_id: %s]", agentID)
+	if outputPath != "" {
+		fmt.Fprintf(&b, " [output: %s]", outputPath)
+	}
+	if inputTokens > 0 || outputTokens > 0 {
+		fmt.Fprintf(&b, " [tokens: input=%d output=%d]", inputTokens, outputTokens)
+	}
+	fmt.Fprintf(&b, "\n\n%s", summary)
+	return b.String()
 }
 
-// subAgentMaxOutputBytes caps sub-agent output to prevent bloated tool results.
-// 30KB is enough for detailed summaries while keeping context manageable.
-const subAgentMaxOutputBytes = 30 * 1024
+// subAgentSummaryBytes is the max bytes for the inline summary in the tool result.
+const subAgentSummaryBytes = 500
 
-// truncateSubAgentOutput trims output to subAgentMaxOutputBytes, cutting at
-// a line boundary and appending a truncation note.
-func truncateSubAgentOutput(s string) string {
-	if len(s) <= subAgentMaxOutputBytes {
+// summarizeOutput returns the first ~500 bytes of the output, cutting at a line
+// boundary. If the output is longer, a note is appended.
+func summarizeOutput(s string) string {
+	if len(s) <= subAgentSummaryBytes {
 		return s
 	}
-	// Cut at the last newline before the limit.
-	cut := s[:subAgentMaxOutputBytes]
+	cut := s[:subAgentSummaryBytes]
 	if i := strings.LastIndex(cut, "\n"); i > 0 {
 		cut = cut[:i]
 	}
-	return cut + "\n[output truncated at 30KB]"
+	return cut + "\n[... full output in file above]"
 }
 
-const subAgentPreamble = `You are a sub-agent working on a specific task delegated by a parent orchestrator. Focus entirely on completing the assigned task. Be thorough but concise — your output will be returned to the parent agent as a tool result.
+// agentOutputDir returns the directory for sub-agent output files.
+func agentOutputDir(workDir string) string {
+	return filepath.Join(workDir, ".herm", "agents")
+}
 
-Key guidelines:
-- Complete the task fully, then provide a clear summary of what you did and found.
-- Use tools as needed to accomplish the task.
-- Do not ask questions — make reasonable decisions and note any assumptions.
-- Keep your final response focused on results, not process narration.`
+// writeOutputFile writes the full sub-agent output to .herm/agents/<agentID>.md.
+// Returns the file path on success, or empty string on failure (non-fatal).
+func (t *SubAgentTool) writeOutputFile(agentID, output string) string {
+	dir := agentOutputDir(t.workDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return ""
+	}
+	path := filepath.Join(dir, agentID+".md")
+	if err := os.WriteFile(path, []byte(output), 0o644); err != nil {
+		return ""
+	}
+	return path
+}
+
+// cleanupAgentOutputDir removes agent output files older than 24 hours.
+func cleanupAgentOutputDir(workDir string) {
+	dir := agentOutputDir(workDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-24 * time.Hour)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
+}
+

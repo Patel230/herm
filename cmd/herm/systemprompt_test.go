@@ -524,3 +524,117 @@ func TestBuildSystemPromptMultipleSkills(t *testing.T) {
 		t.Error("prompt missing normal skill content")
 	}
 }
+
+func TestBuildSubAgentSystemPrompt(t *testing.T) {
+	tools := []Tool{
+		stubTool{"bash"},
+		stubTool{"glob"},
+		stubTool{"grep"},
+		stubTool{"read_file"},
+	}
+	prompt := buildSubAgentSystemPrompt(tools, nil, "/work", "alpine:latest")
+
+	// Should contain the sub-agent role preamble.
+	if !strings.Contains(prompt, "You are a sub-agent") {
+		t.Error("sub-agent prompt missing preamble")
+	}
+
+	// Should contain tool instructions.
+	if !strings.Contains(prompt, "## Tools") {
+		t.Error("sub-agent prompt missing Tools section")
+	}
+	if !strings.Contains(prompt, "### bash") {
+		t.Error("sub-agent prompt missing bash section")
+	}
+
+	// Should contain practices and environment.
+	if !strings.Contains(prompt, "## Practices") {
+		t.Error("sub-agent prompt missing Practices section")
+	}
+	if !strings.Contains(prompt, "## Environment") {
+		t.Error("sub-agent prompt missing Environment section")
+	}
+
+	// Should NOT contain sections skipped for sub-agents.
+	if strings.Contains(prompt, "## Communication") {
+		t.Error("sub-agent prompt should not contain Communication section")
+	}
+	if strings.Contains(prompt, "## Personality") {
+		t.Error("sub-agent prompt should not contain Personality section")
+	}
+	if strings.Contains(prompt, "## Skills") {
+		t.Error("sub-agent prompt should not contain Skills section")
+	}
+
+	// Should NOT contain orchestrator framing.
+	if strings.Contains(prompt, "orchestrator") {
+		t.Error("sub-agent prompt should not contain orchestrator role")
+	}
+
+	// Should NOT contain delegation guidance.
+	if strings.Contains(prompt, "When to Delegate") {
+		t.Error("sub-agent prompt should not contain delegation guidance")
+	}
+}
+
+func TestBuildSubAgentSystemPromptNoAgentSection(t *testing.T) {
+	// When sub-agent has no agent tool (depth limit), the ### agent section should be absent.
+	tools := []Tool{stubTool{"bash"}, stubTool{"glob"}, stubTool{"grep"}, stubTool{"read_file"}}
+	prompt := buildSubAgentSystemPrompt(tools, nil, "/work", "alpine:latest")
+
+	if strings.Contains(prompt, "### agent") {
+		t.Error("sub-agent prompt should not contain agent tool section when agent tool is absent")
+	}
+}
+
+func TestBuildSubAgentSystemPromptWithAgentTool(t *testing.T) {
+	// When depth allows nesting, the agent tool section should be present
+	// but the role should still be sub-agent, not orchestrator.
+	tools := []Tool{stubTool{"bash"}, stubTool{"agent"}}
+	prompt := buildSubAgentSystemPrompt(tools, nil, "/work", "alpine:latest")
+
+	if !strings.Contains(prompt, "### agent") {
+		t.Error("sub-agent with agent tool should have agent tool section")
+	}
+	if !strings.Contains(prompt, "You are a sub-agent") {
+		t.Error("sub-agent with agent tool should still have sub-agent preamble")
+	}
+}
+
+func TestSubAgentPromptSmallerThanMain(t *testing.T) {
+	// The sub-agent prompt should be significantly smaller than the main agent prompt.
+	tools := []Tool{
+		stubTool{"bash"},
+		stubTool{"git"},
+		stubTool{"devenv"},
+		stubTool{"agent"},
+		stubTool{"glob"},
+		stubTool{"grep"},
+		stubTool{"read_file"},
+	}
+	serverTools := []types.ToolDefinition{WebSearchToolDef()}
+	skills := []Skill{
+		{Name: "Testing", Description: "How to test", Content: "Write table-driven tests."},
+		{Name: "Style", Description: "Code style", Content: "Use gofmt."},
+	}
+
+	mainPrompt := buildSystemPrompt(tools, serverTools, skills, "/work", "Be helpful.", "alpine:latest", "feature-branch")
+
+	// Sub-agent gets same tools minus agent (depth limited).
+	subTools := []Tool{
+		stubTool{"bash"},
+		stubTool{"git"},
+		stubTool{"devenv"},
+		stubTool{"glob"},
+		stubTool{"grep"},
+		stubTool{"read_file"},
+	}
+	subPrompt := buildSubAgentSystemPrompt(subTools, serverTools, "/work", "alpine:latest")
+
+	ratio := float64(len(subPrompt)) / float64(len(mainPrompt))
+	t.Logf("main prompt: %d bytes, sub-agent prompt: %d bytes, ratio: %.1f%%", len(mainPrompt), len(subPrompt), ratio*100)
+
+	if ratio > 0.60 {
+		t.Errorf("sub-agent prompt should be <60%% of main prompt, got %.1f%%", ratio*100)
+	}
+}

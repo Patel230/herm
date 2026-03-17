@@ -25,6 +25,7 @@ type PromptData struct {
 	HasGlob        bool
 	HasGrep        bool
 	HasReadFile    bool
+	IsSubAgent     bool   // true for sub-agent prompts: skips communication, personality, skills
 	ContainerImage string
 	WorkDir        string
 	WorktreeBranch string // current branch in the git worktree, if known
@@ -66,6 +67,42 @@ func buildSystemPrompt(tools []Tool, serverTools []types.ToolDefinition, skills 
 	var buf bytes.Buffer
 	if err := promptTemplates.ExecuteTemplate(&buf, "system", data); err != nil {
 		// Templates are embedded and tested; a failure here is a bug.
+		panic("systemprompt: " + err.Error())
+	}
+	return buf.String()
+}
+
+// buildSubAgentSystemPrompt constructs a leaner system prompt for sub-agents.
+// It reuses the same template infrastructure but sets IsSubAgent=true, which
+// replaces the orchestrator role with the sub-agent preamble and skips
+// communication, personality, and skills sections to reduce token overhead.
+func buildSubAgentSystemPrompt(tools []Tool, serverTools []types.ToolDefinition, workDir string, containerImage string) string {
+	toolNames := make(map[string]bool)
+	for _, t := range tools {
+		toolNames[t.Definition().Name] = true
+	}
+	for _, st := range serverTools {
+		toolNames[st.Name] = true
+	}
+
+	data := PromptData{
+		HasBash:        toolNames["bash"],
+		HasGit:         toolNames["git"],
+		HasDevenv:      toolNames["devenv"],
+		HasAgent:       toolNames["agent"],
+		HasWebSearch:   toolNames[types.ServerToolWebSearch],
+		HasGlob:        toolNames["glob"],
+		HasGrep:        toolNames["grep"],
+		HasReadFile:    toolNames["read_file"],
+		IsSubAgent:     true,
+		ContainerImage: containerImage,
+		WorkDir:        workDir,
+		Date:           time.Now().Format("2006-01-02 15:04 MST"),
+		// Personality, Skills, WorktreeBranch intentionally omitted for sub-agents.
+	}
+
+	var buf bytes.Buffer
+	if err := promptTemplates.ExecuteTemplate(&buf, "system", data); err != nil {
 		panic("systemprompt: " + err.Error())
 	}
 	return buf.String()

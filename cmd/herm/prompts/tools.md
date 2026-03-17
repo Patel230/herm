@@ -44,6 +44,7 @@ Runs git commands **on the host** in the project worktree — not inside the con
 - These MUST go through the git tool — they will fail inside the container due to missing credentials.
 - Push requires user approval — if denied, acknowledge and move on.
 - If a remote operation fails with SSH or auth errors, tell the user it's likely a credentials issue on the host.
+{{- if not .IsSubAgent}}
 
 **Merge conflict resolution:**
 1. Start the merge or rebase via the git tool (e.g. `git merge main` or `git rebase main`).
@@ -57,6 +58,7 @@ Runs git commands **on the host** in the project worktree — not inside the con
 - Never write long, multi-paragraph commit messages
 - Use lowercase, no trailing period
 - Review status/diff before committing
+{{- end}}
 
 **Rules:**
 - Never force-push unless the user explicitly asks.
@@ -71,6 +73,7 @@ Your primary tool for environment setup. Manages a single Dockerfile at .cpsl/Do
   - read: always do this first. See what base image and tools are already present.
   - write: provide the COMPLETE Dockerfile. Keep everything already there, add what's new.
   - build: apply the new image. The running container is hot-swapped.
+{{- if not .IsSubAgent}}
 - Build proactively. Before running code that requires tools not in the current image ({{.ContainerImage}}), use devenv first. Don't wait for errors.
 - Dockerfile rules that prevent build failures:
   - Use a clean base image: debian:bookworm-slim or alpine:3. Install languages and tools explicitly via the distro package manager (apt-get or apk). This gives full control over versions and avoids conflicts when combining multiple runtimes.
@@ -78,19 +81,28 @@ Your primary tool for environment setup. Manages a single Dockerfile at .cpsl/Do
   - Never use curl-pipe-to-bash third-party setup scripts (NodeSource setup_lts.x, rustup.sh, etc). They are fragile and break in non-interactive build environments.
   - Combine related RUN steps: apt-get update && apt-get install -y ... && rm -rf /var/lib/apt/lists/*. Never split update and install across layers.
   - Pin specific versions for reproducibility. Set WORKDIR /workspace.
+{{- end}}
 - If a build fails: read the error carefully, identify the specific failing RUN step, fix only that, then build again.
 {{- end}}
 {{- if .HasAgent}}
 
 ### agent
-Spawns a sub-agent to handle complex subtasks with its own context window.
-- Use for multi-step work: research, implementation, debugging, or exploration.
-- Each sub-agent runs independently — it won't consume your context. Communication is output-only: the sub-agent returns a result, and that's the only information you receive.
-- Provide a clear, self-contained task description. The sub-agent has the same tools you do.
-- Prefer sub-agents for tasks that require multiple tool calls or produce verbose output.
-- For simple one-shot operations (single command, quick file read), act directly.
-- You can resume a previous sub-agent by passing its agent_id with a new task. This continues the sub-agent's conversation from where it left off, preserving its full context.
-- After a sub-agent returns, you can: continue your own work, spawn a new sub-agent, or resume the same sub-agent with follow-up instructions.
+Spawns a sub-agent with its own context window. Each sub-agent has startup cost (system prompt tokens + LLM call latency), so only use when the benefit outweighs that overhead.
+
+**When to use:**
+- Tasks requiring deep exploration across many files (10+ tool calls)
+- Self-contained implementation work that would produce verbose output
+- Running multiple independent investigations in parallel (spawn several sub-agents)
+
+**When NOT to use — act directly instead:**
+- A single grep, glob, or file read
+- A small edit (even edit → test → fix cycles)
+- Running one command and interpreting the output
+- Any task completable in ~5 or fewer tool calls
+
+**Usage:**
+- Provide a clear, self-contained task description — the sub-agent has the same tools you do but no shared memory.
+- Resume a previous sub-agent by passing its agent_id with a new task — this continues from where it left off with full context preserved.
 {{- end}}
 {{- if .HasWebSearch}}
 

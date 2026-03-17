@@ -3,9 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"langdag.com/langdag"
 	"langdag.com/langdag/types"
@@ -185,7 +188,8 @@ func TestSubAgentToolNoApproval(t *testing.T) {
 
 func TestSubAgentToolEmptyTask(t *testing.T) {
 	client := newTestClient("hello")
-	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, "/workspace", "", "alpine:latest")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, tmpDir, "", "alpine:latest")
 
 	_, err := tool.Execute(context.Background(), json.RawMessage(`{"task":""}`))
 	if err == nil {
@@ -206,7 +210,8 @@ func TestSubAgentToolInvalidJSON(t *testing.T) {
 
 func TestSubAgentToolExecuteReturnsOutput(t *testing.T) {
 	client := newTestClient("Hello from the sub-agent!")
-	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, "/workspace", "", "alpine:latest")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, tmpDir, "", "alpine:latest")
 
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"say hello"}`))
 	if err != nil {
@@ -219,9 +224,10 @@ func TestSubAgentToolExecuteReturnsOutput(t *testing.T) {
 
 func TestSubAgentToolForwardsEventsWithAgentID(t *testing.T) {
 	client := newTestClient("Sub-agent result text")
+	tmpDir := t.TempDir()
 
 	parentEvents := make(chan AgentEvent, 64)
-	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, "/workspace", "", "alpine:latest")
+	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, tmpDir, "", "alpine:latest")
 	tool.parentEvents = parentEvents
 
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do work"}`))
@@ -288,7 +294,8 @@ func TestSubAgentToolForwardsEventsWithAgentID(t *testing.T) {
 
 func TestSubAgentToolResumeWithAgentID(t *testing.T) {
 	client := newTestClient("resumed output")
-	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, "/workspace", "", "alpine:latest")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, tmpDir, "", "alpine:latest")
 
 	// First call — establishes a sub-agent and saves its nodeID.
 	result1, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"initial work"}`))
@@ -312,7 +319,8 @@ func TestSubAgentToolResumeWithAgentID(t *testing.T) {
 
 func TestSubAgentToolUnknownAgentID(t *testing.T) {
 	client := newTestClient("ok")
-	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, "/workspace", "", "alpine:latest")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, tmpDir, "", "alpine:latest")
 
 	_, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"resume","agent_id":"nonexistent"}`))
 	if err == nil {
@@ -365,7 +373,8 @@ func TestSubAgentToolDepthAllowsNestedAgent(t *testing.T) {
 func TestSubAgentToolNoOutput(t *testing.T) {
 	// Provider returns empty text.
 	client := newTestClient("")
-	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, "/workspace", "", "alpine:latest")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, tmpDir, "", "alpine:latest")
 
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do nothing"}`))
 	if err != nil {
@@ -378,7 +387,8 @@ func TestSubAgentToolNoOutput(t *testing.T) {
 
 func TestSubAgentToolResultContainsAgentID(t *testing.T) {
 	client := newTestClient("some output")
-	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, "/workspace", "", "alpine:latest")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, tmpDir, "", "alpine:latest")
 
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do work"}`))
 	if err != nil {
@@ -390,9 +400,32 @@ func TestSubAgentToolResultContainsAgentID(t *testing.T) {
 }
 
 func TestFormatSubAgentResult(t *testing.T) {
-	got := formatSubAgentResult("abc123", "hello world")
-	if got != "[agent_id: abc123]\n\nhello world" {
-		t.Errorf("unexpected format: %q", got)
+	// With output path, no tokens
+	got := formatSubAgentResult("abc123", "/tmp/.herm/agents/abc123.md", "hello world", 0, 0)
+	want := "[agent_id: abc123] [output: /tmp/.herm/agents/abc123.md]\n\nhello world"
+	if got != want {
+		t.Errorf("with path, no tokens: got %q, want %q", got, want)
+	}
+
+	// Without output path (write failed)
+	got2 := formatSubAgentResult("abc123", "", "hello world", 0, 0)
+	want2 := "[agent_id: abc123]\n\nhello world"
+	if got2 != want2 {
+		t.Errorf("without path: got %q, want %q", got2, want2)
+	}
+
+	// With output path and token usage
+	got3 := formatSubAgentResult("abc123", "/tmp/out.md", "result", 5000, 1200)
+	want3 := "[agent_id: abc123] [output: /tmp/out.md] [tokens: input=5000 output=1200]\n\nresult"
+	if got3 != want3 {
+		t.Errorf("with tokens: got %q, want %q", got3, want3)
+	}
+
+	// Without output path but with tokens
+	got4 := formatSubAgentResult("abc123", "", "result", 100, 50)
+	want4 := "[agent_id: abc123] [tokens: input=100 output=50]\n\nresult"
+	if got4 != want4 {
+		t.Errorf("tokens without path: got %q, want %q", got4, want4)
 	}
 }
 
@@ -413,26 +446,167 @@ func extractAgentID(t *testing.T, result string) string {
 	return rest[:end]
 }
 
-func TestTruncateSubAgentOutput(t *testing.T) {
-	// Short output — no truncation.
+func TestSummarizeOutput(t *testing.T) {
+	// Short output — returned as-is.
 	short := "hello world"
-	if got := truncateSubAgentOutput(short); got != short {
-		t.Errorf("short output should not be truncated, got %q", got)
+	if got := summarizeOutput(short); got != short {
+		t.Errorf("short output should not be summarized, got %q", got)
 	}
 
-	// Output exactly at limit — no truncation.
-	exact := strings.Repeat("a", subAgentMaxOutputBytes)
-	if got := truncateSubAgentOutput(exact); got != exact {
-		t.Errorf("exact-limit output should not be truncated")
+	// Output exactly at limit — returned as-is.
+	exact := strings.Repeat("a", subAgentSummaryBytes)
+	if got := summarizeOutput(exact); got != exact {
+		t.Errorf("exact-limit output should not be summarized")
 	}
 
-	// Output over limit — should be truncated.
-	over := strings.Repeat("line\n", subAgentMaxOutputBytes/5+1)
-	got := truncateSubAgentOutput(over)
-	if len(got) > subAgentMaxOutputBytes+50 { // allow some margin for truncation note
-		t.Errorf("truncated output too large: %d bytes", len(got))
+	// Output over limit — should be summarized.
+	over := strings.Repeat("line\n", subAgentSummaryBytes/5+1)
+	got := summarizeOutput(over)
+	if len(got) > subAgentSummaryBytes+50 {
+		t.Errorf("summarized output too large: %d bytes", len(got))
 	}
-	if !strings.HasSuffix(got, "[output truncated at 30KB]") {
-		t.Errorf("truncated output should end with truncation note, got suffix: %q", got[len(got)-40:])
+	if !strings.HasSuffix(got, "[... full output in file above]") {
+		t.Errorf("summarized output should end with note, got suffix: %q", got[len(got)-40:])
+	}
+}
+
+// --- Phase 2 output file tests ---
+
+func TestSubAgentOutputFileWritten(t *testing.T) {
+	client := newTestClient("Full sub-agent output for file test")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, tmpDir, "", "alpine:latest")
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"write file"}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	// Result should contain [output: <path>]
+	if !strings.Contains(result, "[output:") {
+		t.Fatalf("result should contain output path, got: %q", result)
+	}
+
+	// Extract path from result
+	outputPath := extractOutputPath(t, result)
+
+	// File should exist and contain full output
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("reading output file: %v", err)
+	}
+	if string(data) != "Full sub-agent output for file test" {
+		t.Errorf("output file content = %q, want full output", string(data))
+	}
+}
+
+func TestSubAgentOutputFileLargeOutput(t *testing.T) {
+	// Output larger than summary limit — file should have full output, result should have summary.
+	largeOutput := strings.Repeat("This is a detailed line of output.\n", 50)
+	client := newTestClient(largeOutput)
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, tmpDir, "", "alpine:latest")
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"produce large output"}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	// Result should be summarized (shorter than full output)
+	if len(result) >= len(largeOutput) {
+		t.Errorf("result should be summarized, got %d bytes (full output is %d)", len(result), len(largeOutput))
+	}
+	if !strings.Contains(result, "[... full output in file above]") {
+		t.Errorf("result should contain summary note")
+	}
+
+	// File should contain full output
+	outputPath := extractOutputPath(t, result)
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("reading output file: %v", err)
+	}
+	if string(data) != strings.TrimSpace(largeOutput) {
+		t.Errorf("output file should contain full output, got %d bytes", len(data))
+	}
+}
+
+func TestCleanupAgentOutputDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	dir := filepath.Join(tmpDir, ".herm", "agents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create an old file (>24h)
+	oldFile := filepath.Join(dir, "old-agent.md")
+	if err := os.WriteFile(oldFile, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldTime := time.Now().Add(-25 * time.Hour)
+	os.Chtimes(oldFile, oldTime, oldTime)
+
+	// Create a recent file
+	newFile := filepath.Join(dir, "new-agent.md")
+	if err := os.WriteFile(newFile, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanupAgentOutputDir(tmpDir)
+
+	// Old file should be removed
+	if _, err := os.Stat(oldFile); !os.IsNotExist(err) {
+		t.Error("old file should have been removed")
+	}
+
+	// New file should remain
+	if _, err := os.Stat(newFile); err != nil {
+		t.Error("new file should still exist")
+	}
+}
+
+func TestCleanupAgentOutputDirNonexistent(t *testing.T) {
+	// Should not panic when directory doesn't exist.
+	cleanupAgentOutputDir("/nonexistent/path")
+}
+
+// extractOutputPath parses the output file path from a SubAgentTool result string.
+func extractOutputPath(t *testing.T, result string) string {
+	t.Helper()
+	prefix := "[output: "
+	idx := strings.Index(result, prefix)
+	if idx < 0 {
+		t.Fatalf("result does not contain output path: %q", result)
+	}
+	rest := result[idx+len(prefix):]
+	end := strings.Index(rest, "]")
+	if end < 0 {
+		t.Fatalf("result has no closing ] for output path: %q", result)
+	}
+	return rest[:end]
+}
+
+// --- Phase 5: Token budget awareness tests ---
+
+func TestSubAgentResultIncludesTokenUsage(t *testing.T) {
+	client := newTestClient("token test output")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", 10, 3, 0, tmpDir, "", "alpine:latest")
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"count tokens"}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	// The mock provider returns Usage{InputTokens: 100, OutputTokens: 50}.
+	// The result should include [tokens: input=100 output=50].
+	if !strings.Contains(result, "[tokens:") {
+		t.Errorf("result should contain token usage, got: %q", result)
+	}
+	if !strings.Contains(result, "input=100") {
+		t.Errorf("result should contain input=100, got: %q", result)
+	}
+	if !strings.Contains(result, "output=50") {
+		t.Errorf("result should contain output=50, got: %q", result)
 	}
 }
