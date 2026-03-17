@@ -1505,6 +1505,10 @@ type App struct {
 	agentDisplayInTok  float64       // lerped display value for input tokens
 	agentDisplayOutTok float64       // lerped display value for output tokens
 
+	// Approval timer pause
+	approvalPauseStart  time.Time     // when approval wait started
+	approvalPausedTotal time.Duration // total time spent waiting for approvals
+
 	// Menu state (for inline menus below input - Phase 3)
 	menuLines        []string
 	menuHeader       string // optional header row above scrollable items
@@ -1563,6 +1567,19 @@ func newApp() *App {
 }
 
 // ─── Rendering (from simple-chat, adapted) ───
+
+// agentElapsedTime returns elapsed agent time, excluding approval wait time.
+func (a *App) agentElapsedTime() time.Duration {
+	elapsed := time.Since(a.agentStartTime)
+	elapsed -= a.approvalPausedTotal
+	if a.awaitingApproval && !a.approvalPauseStart.IsZero() {
+		elapsed -= time.Since(a.approvalPauseStart)
+	}
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return elapsed
+}
 
 func (a *App) buildBlockRows() []string {
 	var rows []string
@@ -1691,7 +1708,7 @@ func (a *App) buildBlockRows() []string {
 	}
 	// Show animated status line while agent is running, or dim elapsed when done
 	if a.agentRunning {
-		elapsed := time.Since(a.agentStartTime)
+		elapsed := a.agentElapsedTime()
 		text := funnyTexts[a.agentTextIndex]
 		color := pastelColor(elapsed)
 		label := fmt.Sprintf("%s\033[3m%s %.2fs ↑%s ↓%s\033[0m",
@@ -1831,6 +1848,25 @@ func (a *App) refreshModelMenu() {
 
 func (a *App) buildInputRows() []string {
 	sep := strings.Repeat("─", a.width)
+
+	// Approval mode: yellow borders + centered message, hide normal input
+	if a.awaitingApproval {
+		yellowSep := fmt.Sprintf("\033[33;1m%s\033[0m", sep)
+		msg := fmt.Sprintf("Allow %s? [y/n]", a.approvalDesc)
+		if len(msg) > a.width {
+			msg = msg[:a.width]
+		}
+		pad := (a.width - len(msg)) / 2
+		if pad < 0 {
+			pad = 0
+		}
+		return []string{
+			yellowSep,
+			fmt.Sprintf("\033[33;1m%s%s\033[0m", strings.Repeat(" ", pad), msg),
+			yellowSep,
+		}
+	}
+
 	rows := []string{sep}
 
 	// Config editor mode replaces input area
@@ -1886,11 +1922,6 @@ func (a *App) buildInputRows() []string {
 			line = promptPrefix + line
 		}
 		rows = append(rows, line)
-	}
-
-	// Approval prompt inside input area
-	if a.awaitingApproval {
-		rows = append(rows, fmt.Sprintf("\033[33;1mAllow %s? [y/n]\033[0m", a.approvalDesc))
 	}
 
 	rows = append(rows, sep)
@@ -3164,6 +3195,10 @@ func (a *App) handleApprovalByte(ch byte) {
 	switch ch {
 	case 'y', 'Y':
 		a.awaitingApproval = false
+		if !a.approvalPauseStart.IsZero() {
+			a.approvalPausedTotal += time.Since(a.approvalPauseStart)
+			a.approvalPauseStart = time.Time{}
+		}
 		if a.agent != nil {
 			a.agent.Approve(ApprovalResponse{Approved: true})
 		}
@@ -3171,6 +3206,10 @@ func (a *App) handleApprovalByte(ch byte) {
 		a.render()
 	case 'n', 'N':
 		a.awaitingApproval = false
+		if !a.approvalPauseStart.IsZero() {
+			a.approvalPausedTotal += time.Since(a.approvalPauseStart)
+			a.approvalPauseStart = time.Time{}
+		}
 		if a.agent != nil {
 			a.agent.Approve(ApprovalResponse{Approved: false})
 		}
@@ -4355,6 +4394,7 @@ func (a *App) startAgent(userMessage string) {
 	a.needsTextSep = true
 	a.agentStartTime = time.Now()
 	a.agentElapsed = 0
+	a.approvalPausedTotal = 0
 	a.agentTextIndex = 0
 	a.agentDisplayInTok = float64(a.sessionInputTokens)
 	a.agentDisplayOutTok = float64(a.sessionOutputTokens)
@@ -4471,6 +4511,7 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 	case EventApprovalReq:
 		debugLog("approval_req: %s", event.ApprovalDesc)
 		a.awaitingApproval = true
+		a.approvalPauseStart = time.Now()
 		a.approvalDesc = event.ApprovalDesc
 		a.renderInput()
 
@@ -4489,7 +4530,7 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 			a.agentTicker.Stop()
 			a.agentTicker = nil
 		}
-		a.agentElapsed = time.Since(a.agentStartTime)
+		a.agentElapsed = a.agentElapsedTime()
 		a.agentDisplayInTok = float64(a.sessionInputTokens)
 		a.agentDisplayOutTok = float64(a.sessionOutputTokens)
 		if event.NodeID != "" {
@@ -4590,7 +4631,7 @@ func (a *App) handleResult(result any) {
 		return
 	case agentTickMsg:
 		if a.agentRunning {
-			elapsed := time.Since(a.agentStartTime)
+			elapsed := a.agentElapsedTime()
 			a.agentTextIndex = int(elapsed.Seconds()/3) % len(funnyTexts)
 			// Lerp displayed tokens toward actual totals
 			a.agentDisplayInTok += (float64(a.sessionInputTokens) - a.agentDisplayInTok) * 0.15
