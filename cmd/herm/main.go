@@ -965,6 +965,7 @@ type sweScoresMsg struct {
 }
 
 type ctrlCExpiredMsg struct{}
+type escExpiredMsg struct{}
 
 type containerReadyMsg struct {
 	client       *ContainerClient
@@ -1426,6 +1427,10 @@ type App struct {
 	ctrlCTime time.Time // when last Ctrl+C was pressed (for double-tap detection)
 	ctrlCHint bool      // show "Press Ctrl-C again to exit" hint
 
+	// ESC double-tap to stop agent
+	escTime time.Time
+	escHint bool
+
 	// CLI flags
 	displaySystemPrompts bool
 }
@@ -1782,9 +1787,16 @@ func (a *App) buildInputRows() []string {
 
 	rows = append(rows, sep)
 
-	// Ctrl+C exit hint (below separator, above status)
+	// Ctrl+C / ESC hint (below separator, above status)
 	if a.ctrlCHint {
-		rows = append(rows, fmt.Sprintf("\033[1;38;5;%dmPress Ctrl-C again to exit\033[0m", 4))
+		if a.agentRunning {
+			rows = append(rows, fmt.Sprintf("\033[1;38;5;%dmPress Ctrl-C again to stop the agent\033[0m", 4))
+		} else {
+			rows = append(rows, fmt.Sprintf("\033[1;38;5;%dmPress Ctrl-C again to exit\033[0m", 4))
+		}
+	}
+	if a.escHint {
+		rows = append(rows, fmt.Sprintf("\033[1;38;5;%dmPress ESC again to stop the agent\033[0m", 4))
 	}
 
 	// Autocomplete (shown below input)
@@ -2308,13 +2320,23 @@ func (a *App) handleByte(ch byte, stdinCh chan byte, readByte func() (byte, bool
 		return true
 	}
 
-	// Ctrl+C: double-tap to exit, also clears input text
+	// Ctrl+C: double-tap to stop agent (when running) or exit (when idle)
 	if ch == 3 {
-		// Second Ctrl+C within 2 seconds: quit
-		if a.ctrlCHint && time.Since(a.ctrlCTime) < 2*time.Second {
-			return true
+		if a.agentRunning {
+			// When agent is running, double-tap Ctrl+C stops the agent
+			if a.ctrlCHint && time.Since(a.ctrlCTime) < 2*time.Second {
+				a.agent.Cancel()
+				a.ctrlCHint = false
+				a.ctrlCTime = time.Time{}
+				return false
+			}
+		} else {
+			// Second Ctrl+C within 2 seconds: quit
+			if a.ctrlCHint && time.Since(a.ctrlCTime) < 2*time.Second {
+				return true
+			}
 		}
-		// First Ctrl+C: clear input if any, show exit hint
+		// First press: clear input if any, show hint
 		a.input = nil
 		a.cursor = 0
 		a.ctrlCHint = true
@@ -2329,10 +2351,14 @@ func (a *App) handleByte(ch byte, stdinCh chan byte, readByte func() (byte, bool
 		return false
 	}
 
-	// Any other key clears the Ctrl+C hint
+	// Any other key clears the Ctrl+C / ESC hints
 	if a.ctrlCHint {
 		a.ctrlCHint = false
 		a.ctrlCTime = time.Time{}
+	}
+	if a.escHint {
+		a.escHint = false
+		a.escTime = time.Time{}
 	}
 
 	// Handle approval mode
@@ -2459,6 +2485,24 @@ func (a *App) handleByte(ch byte, stdinCh chan byte, readByte func() (byte, bool
 
 func (a *App) handlePlainEscape() {
 	if a.awaitingApproval {
+		return
+	}
+	// When agent is running, double-tap ESC to stop it
+	if a.agentRunning {
+		if a.escHint && time.Since(a.escTime) < 2*time.Second {
+			a.agent.Cancel()
+			a.escHint = false
+			a.escTime = time.Time{}
+			return
+		}
+		a.escHint = true
+		a.escTime = time.Now()
+		a.renderInput()
+		ch := a.resultCh
+		go func() {
+			time.Sleep(2 * time.Second)
+			ch <- escExpiredMsg{}
+		}()
 		return
 	}
 	if a.menuActive {
@@ -4434,6 +4478,15 @@ func (a *App) handleResult(result any) {
 		if a.ctrlCHint {
 			a.ctrlCHint = false
 			a.ctrlCTime = time.Time{}
+			a.renderInput()
+		}
+		return
+
+	case escExpiredMsg:
+		_ = msg
+		if a.escHint {
+			a.escHint = false
+			a.escTime = time.Time{}
 			a.renderInput()
 		}
 		return
