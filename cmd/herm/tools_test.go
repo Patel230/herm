@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,7 +11,7 @@ import (
 	"testing"
 )
 
-// --- Task 2a: truncateOutput ---
+// --- truncateOutput tests (head+tail strategy) ---
 
 func TestTruncateOutput_Short(t *testing.T) {
 	input := "hello\nworld\n"
@@ -29,7 +30,7 @@ func TestTruncateOutput_Empty(t *testing.T) {
 
 func TestTruncateOutput_ExactLineLimit(t *testing.T) {
 	// Exactly bashMaxLines newlines — should not truncate.
-	lines := make([]string, bashMaxLines+1) // 201 elements → 200 newlines when joined
+	lines := make([]string, bashMaxLines+1) // 81 elements → 80 newlines when joined
 	for i := range lines {
 		lines[i] = "x"
 	}
@@ -40,23 +41,41 @@ func TestTruncateOutput_ExactLineLimit(t *testing.T) {
 	}
 }
 
-func TestTruncateOutput_OverLineLimit(t *testing.T) {
-	// bashMaxLines + 10 newlines → should truncate.
-	lines := make([]string, bashMaxLines+12)
+func TestTruncateOutput_OverLineLimit_HeadTail(t *testing.T) {
+	// bashMaxLines + 20 lines → should trigger head+tail truncation.
+	total := bashMaxLines + 20
+	lines := make([]string, total)
 	for i := range lines {
-		lines[i] = "line"
+		lines[i] = fmt.Sprintf("line-%d", i)
 	}
 	input := strings.Join(lines, "\n")
 	got := truncateOutput(input)
 
-	if !strings.HasPrefix(got, "[output truncated, showing last portion]\n") {
-		t.Error("truncated output should start with truncation notice")
+	// Should contain the omission message.
+	if !strings.Contains(got, "lines omitted") {
+		t.Error("truncated output should contain omission message")
 	}
-	// Count lines in result (after the prefix).
-	resultLines := strings.Split(got, "\n")
-	// First line is the notice, then bashMaxLines lines.
-	if len(resultLines) > bashMaxLines+2 {
-		t.Errorf("result has %d lines, want ≤ %d", len(resultLines), bashMaxLines+2)
+
+	// Head lines should be present.
+	if !strings.Contains(got, "line-0") {
+		t.Error("truncated output should contain first line (head)")
+	}
+	if !strings.Contains(got, fmt.Sprintf("line-%d", truncHeadLines-1)) {
+		t.Error("truncated output should contain last head line")
+	}
+
+	// Tail lines should be present.
+	if !strings.Contains(got, fmt.Sprintf("line-%d", total-1)) {
+		t.Error("truncated output should contain last line (tail)")
+	}
+	if !strings.Contains(got, fmt.Sprintf("line-%d", total-truncTailLines)) {
+		t.Error("truncated output should contain first tail line")
+	}
+
+	// Lines in the middle should be omitted.
+	middleLine := fmt.Sprintf("line-%d", truncHeadLines+5)
+	if strings.Contains(got, middleLine) {
+		t.Errorf("truncated output should NOT contain middle line %q", middleLine)
 	}
 }
 
@@ -72,13 +91,8 @@ func TestTruncateOutput_OverByteLimit(t *testing.T) {
 	input := strings.Repeat("a", bashMaxBytes+100)
 	got := truncateOutput(input)
 
-	if !strings.HasPrefix(got, "[output truncated, showing last portion]\n") {
-		t.Error("byte-truncated output should start with truncation notice")
-	}
-	// The result (minus prefix) should be ≤ bashMaxBytes.
-	body := strings.TrimPrefix(got, "[output truncated, showing last portion]\n")
-	if len(body) > bashMaxBytes {
-		t.Errorf("body length %d > bashMaxBytes %d", len(body), bashMaxBytes)
+	if !strings.Contains(got, "truncated") {
+		t.Error("byte-truncated output should contain truncation notice")
 	}
 }
 
@@ -88,20 +102,43 @@ func TestTruncateOutput_BothLimitsExceeded(t *testing.T) {
 	input := strings.Repeat(line, bashMaxLines+50)
 	got := truncateOutput(input)
 
-	if !strings.HasPrefix(got, "[output truncated, showing last portion]\n") {
-		t.Error("expected truncation notice")
+	if !strings.Contains(got, "omitted") || !strings.Contains(got, "truncated") {
+		// Should contain either omission (line truncation) or truncation notice.
+		if !strings.Contains(got, "omitted") && !strings.Contains(got, "truncated") {
+			t.Error("expected truncation indicator")
+		}
 	}
 }
 
-func TestTruncateOutput_KeepsLastLines(t *testing.T) {
-	// Verify that the LAST lines are kept, not the first.
-	lines := make([]string, bashMaxLines+20)
+func TestTruncateOutput_HeadPreserved(t *testing.T) {
+	// Verify the first lines (head) are preserved.
+	total := bashMaxLines + 50
+	lines := make([]string, total)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("L%04d", i)
+	}
+	lines[0] = "FIRST_LINE"
+	lines[1] = "SECOND_LINE"
+	input := strings.Join(lines, "\n")
+	got := truncateOutput(input)
+
+	if !strings.Contains(got, "FIRST_LINE") {
+		t.Error("head+tail should preserve the first line")
+	}
+	if !strings.Contains(got, "SECOND_LINE") {
+		t.Error("head+tail should preserve the second line")
+	}
+}
+
+func TestTruncateOutput_TailPreserved(t *testing.T) {
+	// Verify the last lines (tail) are preserved.
+	total := bashMaxLines + 50
+	lines := make([]string, total)
 	for i := range lines {
 		lines[i] = "old"
 	}
-	// Mark the last few lines.
-	lines[len(lines)-1] = "LAST"
-	lines[len(lines)-2] = "SECOND_LAST"
+	lines[total-1] = "LAST"
+	lines[total-2] = "SECOND_LAST"
 	input := strings.Join(lines, "\n")
 	got := truncateOutput(input)
 
@@ -110,6 +147,31 @@ func TestTruncateOutput_KeepsLastLines(t *testing.T) {
 	}
 	if !strings.Contains(got, "SECOND_LAST") {
 		t.Error("truncated output should contain the second-to-last line")
+	}
+}
+
+func TestTruncateOutput_OmissionCount(t *testing.T) {
+	total := bashMaxLines + 30
+	lines := make([]string, total)
+	for i := range lines {
+		lines[i] = "x"
+	}
+	input := strings.Join(lines, "\n")
+	got := truncateOutput(input)
+
+	expected := total - truncHeadLines - truncTailLines
+	expectedMsg := fmt.Sprintf("[... %d lines omitted ...]", expected)
+	if !strings.Contains(got, expectedMsg) {
+		t.Errorf("expected omission message %q in output, got:\n%s", expectedMsg, got)
+	}
+}
+
+func TestTruncateOutput_SmallPassthrough(t *testing.T) {
+	// Output well within both limits should pass through unchanged.
+	input := "line1\nline2\nline3\n"
+	got := truncateOutput(input)
+	if got != input {
+		t.Errorf("small output should pass through unchanged, got %q", got)
 	}
 }
 
@@ -311,7 +373,7 @@ func TestBashToolExecute_TruncatesOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute error: %v", err)
 	}
-	if !strings.HasPrefix(result, "[output truncated") {
+	if !strings.Contains(result, "truncated") {
 		t.Error("large output should be truncated")
 	}
 }

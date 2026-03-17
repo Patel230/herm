@@ -36,13 +36,14 @@ type SubAgentTool struct {
 	workDir        string
 	personality    string
 	containerImage string
+	snapshot       *projectSnapshot // project snapshot for sub-agent system prompts
 	parentEvents   chan<- AgentEvent // set after construction; forwards live events to TUI
 
 	mu         sync.Mutex
 	agentNodes map[string]string // agentID → last nodeID (for resume)
 }
 
-func NewSubAgentTool(client *langdag.Client, tools []Tool, serverTools []types.ToolDefinition, model string, maxTurns int, maxDepth int, currentDepth int, workDir string, personality string, containerImage string) *SubAgentTool {
+func NewSubAgentTool(client *langdag.Client, tools []Tool, serverTools []types.ToolDefinition, model string, maxTurns int, maxDepth int, currentDepth int, workDir string, personality string, containerImage string, snapshot *projectSnapshot) *SubAgentTool {
 	if maxTurns <= 0 {
 		maxTurns = defaultSubAgentMaxTurns
 	}
@@ -60,6 +61,7 @@ func NewSubAgentTool(client *langdag.Client, tools []Tool, serverTools []types.T
 		workDir:        workDir,
 		personality:    personality,
 		containerImage: containerImage,
+		snapshot:       snapshot,
 		agentNodes:     make(map[string]string),
 	}
 }
@@ -126,7 +128,7 @@ func (t *SubAgentTool) buildSubAgentTools() []Tool {
 	nextDepth := t.currentDepth + 1
 	if nextDepth < t.maxDepth {
 		// Sub-agent is allowed to spawn its own sub-agents.
-		child := NewSubAgentTool(t.client, t.tools, t.serverTools, t.model, t.maxTurns, t.maxDepth, nextDepth, t.workDir, t.personality, t.containerImage)
+		child := NewSubAgentTool(t.client, t.tools, t.serverTools, t.model, t.maxTurns, t.maxDepth, nextDepth, t.workDir, t.personality, t.containerImage, t.snapshot)
 		child.parentEvents = t.parentEvents
 		tools = append(tools, child)
 	}
@@ -159,7 +161,7 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 
 	// Build a lean sub-agent system prompt: skips communication, personality,
 	// skills, and uses a compact role section instead of the full orchestrator framing.
-	systemPrompt := buildSubAgentSystemPrompt(subTools, t.serverTools, t.workDir, t.containerImage)
+	systemPrompt := buildSubAgentSystemPrompt(subTools, t.serverTools, t.workDir, t.containerImage, t.snapshot)
 
 	agent := NewAgent(t.client, subTools, t.serverTools, systemPrompt, t.model, 0)
 	agentID := agent.ID()

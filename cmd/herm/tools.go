@@ -17,8 +17,10 @@ import (
 
 // Output truncation limits for BashTool.
 const (
-	bashMaxLines = 200
-	bashMaxBytes = 30 * 1024 // 30KB
+	bashMaxLines    = 80
+	bashMaxBytes    = 12 * 1024 // 12KB
+	truncHeadLines  = 20        // lines to keep from the beginning
+	truncTailLines  = 60        // lines to keep from the end
 )
 
 // BashTool executes commands inside the Docker container via ContainerClient.
@@ -38,7 +40,7 @@ func NewBashTool(container *ContainerClient, timeout int) *BashTool {
 func (t *BashTool) Definition() types.ToolDefinition {
 	return types.ToolDefinition{
 		Name:        "bash",
-		Description: "Run a shell command in the dev container (project mounted at /workspace). Use for: reading/editing files, running tests, installing packages, building code, and any shell task. Output is truncated to the last 200 lines / 30KB.",
+		Description: "Run a shell command in the dev container (project mounted at /workspace). Use for: reading/editing files, running tests, installing packages, building code, and any shell task. Output is truncated to 80 lines / 12KB (head+tail).",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -97,31 +99,31 @@ func (t *BashTool) RequiresApproval(_ json.RawMessage) bool {
 	return false
 }
 
-// truncateOutput trims output to the last bashMaxLines lines and bashMaxBytes bytes.
+// truncateOutput trims output to bashMaxLines lines and bashMaxBytes bytes using
+// a head+tail strategy: keep the first truncHeadLines and last truncTailLines,
+// inserting a "[... N lines omitted ...]" separator in between.
 func truncateOutput(s string) string {
 	if len(s) <= bashMaxBytes && strings.Count(s, "\n") <= bashMaxLines {
 		return s
 	}
 
-	// Truncate by bytes first.
-	truncated := false
+	// Byte-limit first: keep the last bashMaxBytes to avoid splitting mid-line
+	// at the beginning, then line-truncate the result.
 	if len(s) > bashMaxBytes {
 		s = s[len(s)-bashMaxBytes:]
-		truncated = true
 	}
 
-	// Truncate by lines.
 	lines := strings.Split(s, "\n")
-	if len(lines) > bashMaxLines {
-		lines = lines[len(lines)-bashMaxLines:]
-		truncated = true
+	if len(lines) <= bashMaxLines {
+		// Byte truncation alone was enough; we lost content from the front.
+		return fmt.Sprintf("[output truncated, showing last %d lines]\n%s", len(lines), s)
 	}
 
-	result := strings.Join(lines, "\n")
-	if truncated {
-		result = "[output truncated, showing last portion]\n" + result
-	}
-	return result
+	// Head+tail line truncation.
+	omitted := len(lines) - truncHeadLines - truncTailLines
+	head := strings.Join(lines[:truncHeadLines], "\n")
+	tail := strings.Join(lines[len(lines)-truncTailLines:], "\n")
+	return fmt.Sprintf("%s\n[... %d lines omitted ...]\n%s", head, omitted, tail)
 }
 
 // GitTool executes git commands on the host in the worktree directory.

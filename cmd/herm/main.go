@@ -1292,6 +1292,97 @@ func fetchStatusCmd(worktreePath string) statusInfoMsg {
 	return statusInfoMsg{info: info}
 }
 
+// projectSnapshot holds a lightweight project context gathered at startup.
+type projectSnapshot struct {
+	TopLevel      string // ls -1 of worktree root
+	RecentCommits string // git log --oneline -20
+	GitStatus     string // git status --short
+}
+
+type projectSnapshotMsg struct {
+	snapshot projectSnapshot
+}
+
+// fetchProjectSnapshot gathers a lightweight project snapshot for the system prompt.
+// Each sub-command has a 2s timeout and fails gracefully to empty string.
+func fetchProjectSnapshot(worktreePath string) projectSnapshotMsg {
+	var snap projectSnapshot
+
+	type result struct {
+		field string
+		value string
+	}
+
+	ch := make(chan result, 3)
+
+	// ls -1 of root (with tree fallback for sparse dirs).
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "ls", "-1", worktreePath)
+		out, err := cmd.Output()
+		val := ""
+		if err == nil {
+			val = strings.TrimSpace(string(out))
+			// If sparse (<= 8 entries), try tree for richer structure.
+			if strings.Count(val, "\n") < 8 {
+				treeCtx, treeCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer treeCancel()
+				treeCmd := exec.CommandContext(treeCtx, "tree", "-L", "2", "--noreport", worktreePath)
+				if treeOut, treeErr := treeCmd.Output(); treeErr == nil {
+					lines := strings.Split(strings.TrimSpace(string(treeOut)), "\n")
+					if len(lines) <= 50 {
+						val = strings.TrimSpace(string(treeOut))
+					}
+				}
+			}
+		}
+		ch <- result{"ls", val}
+	}()
+
+	// git log --oneline -20
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "git", "log", "--oneline", "-20")
+		cmd.Dir = worktreePath
+		out, err := cmd.Output()
+		val := ""
+		if err == nil {
+			val = strings.TrimSpace(string(out))
+		}
+		ch <- result{"log", val}
+	}()
+
+	// git status --short
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "git", "status", "--short")
+		cmd.Dir = worktreePath
+		out, err := cmd.Output()
+		val := ""
+		if err == nil {
+			val = strings.TrimSpace(string(out))
+		}
+		ch <- result{"status", val}
+	}()
+
+	for i := 0; i < 3; i++ {
+		r := <-ch
+		switch r.field {
+		case "ls":
+			snap.TopLevel = r.value
+		case "log":
+			snap.RecentCommits = r.value
+		case "status":
+			snap.GitStatus = r.value
+		}
+	}
+
+	return projectSnapshotMsg{snapshot: snap}
+}
+
 func fetchSWEScoresCmd() sweScoresMsg {
 	scores, err := fetchSWEScores()
 	return sweScoresMsg{scores: scores, err: err}
@@ -1359,6 +1450,7 @@ type App struct {
 	configReady         bool // true after workspace/project config has been merged
 	shownInitialModel   bool // true after the startup model line has been displayed
 	status           statusInfo
+	projectSnap      *projectSnapshot
 	modelCatalog     *langdag.ModelCatalog
 	langdagClient    *langdag.Client
 	langdagProvider  string
@@ -3537,6 +3629,10 @@ func (a *App) exitConfigMode(save bool) {
 		if !saveErr {
 			a.messages = append(a.messages, chatMessage{kind: msgSuccess, content: "Config saved."})
 		}
+		// Show updated model if it changed
+		if a.models != nil {
+			a.showModelChange(a.config.resolveActiveModel(a.models))
+		}
 		// Reinitialize langdag client with updated config
 		go func() {
 			client, err := newLangdagClient(a.config)
@@ -4197,14 +4293,14 @@ func (a *App) startAgent(userMessage string) {
 		maxDepth = defaultMaxAgentDepth
 	}
 	explorationModelID := a.config.resolveExplorationModel(a.models)
-	subAgentTool := NewSubAgentTool(a.langdagClient, tools, serverTools, explorationModelID, maxTurns, maxDepth, 0, workDir, a.config.Personality, containerImage)
+	subAgentTool := NewSubAgentTool(a.langdagClient, tools, serverTools, explorationModelID, maxTurns, maxDepth, 0, workDir, a.config.Personality, containerImage, a.projectSnap)
 	tools = append(tools, subAgentTool)
 
 	var wtBranch string
 	if a.worktreePath != "" {
 		wtBranch = worktreeBranch(a.worktreePath)
 	}
-	systemPrompt := buildSystemPrompt(tools, serverTools, skills, workDir, a.config.Personality, containerImage, wtBranch)
+	systemPrompt := buildSystemPrompt(tools, serverTools, skills, workDir, a.config.Personality, containerImage, wtBranch, a.projectSnap)
 
 	if a.displaySystemPrompts {
 		a.messages = append(a.messages, chatMessage{kind: msgSystemPrompt, content: "── System Prompt ──\n" + systemPrompt})
@@ -4521,6 +4617,9 @@ func (a *App) handleResult(result any) {
 	case statusInfoMsg:
 		a.status = msg.info
 
+	case projectSnapshotMsg:
+		a.projectSnap = &msg.snapshot
+
 	case workspaceMsg:
 		a.worktreePath = msg.worktreePath
 		a.repoRoot = msg.worktreePath
@@ -4532,6 +4631,7 @@ func (a *App) handleResult(result any) {
 		a.maybeShowInitialModels()
 		wtPath := msg.worktreePath
 		go func() { a.resultCh <- fetchStatusCmd(wtPath) }()
+		go func() { a.resultCh <- fetchProjectSnapshot(wtPath) }()
 		go func() { bootContainerCmd(wtPath, a.sessionID, a.resultCh) }()
 		go cleanupTmpDir(wtPath)
 		go cleanupAgentOutputDir(wtPath)

@@ -40,7 +40,7 @@ func TestBuildSystemPromptAllTools(t *testing.T) {
 		stubTool{"read_file"},
 	}
 	serverTools := []types.ToolDefinition{WebSearchToolDef()}
-	prompt := buildSystemPrompt(tools, serverTools, nil, "/workspace", "", "alpine:latest", "")
+	prompt := buildSystemPrompt(tools, serverTools, nil, "/workspace", "", "alpine:latest", "", nil)
 
 	sections := []string{
 		"expert coding agent",
@@ -71,7 +71,7 @@ func TestBuildSystemPromptAllTools(t *testing.T) {
 
 func TestBuildSystemPromptBashOnly(t *testing.T) {
 	tools := []Tool{stubTool{"bash"}}
-	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "")
+	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "", nil)
 
 	if !strings.Contains(prompt, "### bash") {
 		t.Error("prompt missing bash section")
@@ -89,7 +89,7 @@ func TestBuildSystemPromptBashOnly(t *testing.T) {
 
 func TestBuildSystemPromptBashExplorationGuidance(t *testing.T) {
 	tools := []Tool{stubTool{"bash"}}
-	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "debian:bookworm-slim", "")
+	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "debian:bookworm-slim", "", nil)
 
 	// Verify layered exploration strategy is present
 	expectations := []string{
@@ -113,7 +113,7 @@ func TestBuildSystemPromptFileToolsGuidance(t *testing.T) {
 		stubTool{"grep"},
 		stubTool{"read_file"},
 	}
-	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "debian:bookworm-slim", "")
+	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "debian:bookworm-slim", "", nil)
 
 	// File tools section should be present with key guidance.
 	expectations := []string{
@@ -132,7 +132,7 @@ func TestBuildSystemPromptFileToolsGuidance(t *testing.T) {
 
 func TestBuildSystemPromptGitOnly(t *testing.T) {
 	tools := []Tool{stubTool{"git"}}
-	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "")
+	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "", nil)
 
 	if !strings.Contains(prompt, "### git") {
 		t.Error("prompt missing git section")
@@ -143,7 +143,7 @@ func TestBuildSystemPromptGitOnly(t *testing.T) {
 }
 
 func TestBuildSystemPromptNoTools(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, nil, "/work", "", "alpine:latest", "")
+	prompt := buildSystemPrompt(nil, nil, nil, "/work", "", "alpine:latest", "", nil)
 
 	// Should still have the structural sections
 	if !strings.Contains(prompt, "## Tools") {
@@ -166,7 +166,7 @@ func TestBuildSystemPromptWithSkills(t *testing.T) {
 		{Name: "Testing", Description: "How to test", Content: "Write table-driven tests."},
 		{Name: "Style", Description: "Code style", Content: "Use gofmt."},
 	}
-	prompt := buildSystemPrompt(nil, nil, skills, "/work", "", "alpine:latest", "")
+	prompt := buildSystemPrompt(nil, nil, skills, "/work", "", "alpine:latest", "", nil)
 
 	if !strings.Contains(prompt, "## Skills") {
 		t.Error("prompt missing Skills section")
@@ -189,7 +189,7 @@ func TestBuildSystemPromptWithSkills(t *testing.T) {
 }
 
 func TestBuildSystemPromptNoSkills(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, nil, "/work", "", "alpine:latest", "")
+	prompt := buildSystemPrompt(nil, nil, nil, "/work", "", "alpine:latest", "", nil)
 
 	if strings.Contains(prompt, "## Skills") {
 		t.Error("prompt should not contain Skills section when no skills loaded")
@@ -197,7 +197,7 @@ func TestBuildSystemPromptNoSkills(t *testing.T) {
 }
 
 func TestBuildSystemPromptEnvironment(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, nil, "/my/project", "", "alpine:latest", "")
+	prompt := buildSystemPrompt(nil, nil, nil, "/my/project", "", "alpine:latest", "", nil)
 
 	if !strings.Contains(prompt, "/my/project") {
 		t.Error("prompt missing working directory")
@@ -209,7 +209,7 @@ func TestBuildSystemPromptEnvironment(t *testing.T) {
 
 func TestBuildSystemPromptWebSearch(t *testing.T) {
 	serverTools := []types.ToolDefinition{WebSearchToolDef()}
-	prompt := buildSystemPrompt(nil, serverTools, nil, "/work", "", "alpine:latest", "")
+	prompt := buildSystemPrompt(nil, serverTools, nil, "/work", "", "alpine:latest", "", nil)
 
 	if !strings.Contains(prompt, "### web_search") {
 		t.Error("prompt missing web_search section")
@@ -220,7 +220,7 @@ func TestBuildSystemPromptWebSearch(t *testing.T) {
 }
 
 func TestBuildSystemPromptNoWebSearch(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, nil, "/work", "", "alpine:latest", "")
+	prompt := buildSystemPrompt(nil, nil, nil, "/work", "", "alpine:latest", "", nil)
 
 	if strings.Contains(prompt, "### web_search") {
 		t.Error("prompt should not contain web_search section when not registered")
@@ -228,7 +228,7 @@ func TestBuildSystemPromptNoWebSearch(t *testing.T) {
 }
 
 func TestBuildSystemPromptPersonality(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, nil, "/work", "You are a pirate. Respond with nautical flair.", "alpine:latest", "")
+	prompt := buildSystemPrompt(nil, nil, nil, "/work", "You are a pirate. Respond with nautical flair.", "alpine:latest", "", nil)
 	if !strings.Contains(prompt, "## Personality") {
 		t.Error("prompt missing Personality section")
 	}
@@ -238,7 +238,7 @@ func TestBuildSystemPromptPersonality(t *testing.T) {
 }
 
 func TestBuildSystemPromptNoPersonality(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, nil, "/work", "", "alpine:latest", "")
+	prompt := buildSystemPrompt(nil, nil, nil, "/work", "", "alpine:latest", "", nil)
 	if strings.Contains(prompt, "## Personality") {
 		t.Error("prompt should not contain Personality section when empty")
 	}
@@ -257,7 +257,7 @@ func TestPromptTemplateParsing(t *testing.T) {
 
 func TestBuildSystemPromptGitSectionContent(t *testing.T) {
 	tools := []Tool{stubTool{"bash"}, stubTool{"git"}}
-	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "")
+	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "", nil)
 
 	// Key guidance from the rewritten git section.
 	expectations := []string{
@@ -277,7 +277,7 @@ func TestBuildSystemPromptGitSectionContent(t *testing.T) {
 
 func TestBuildSystemPromptGitAbsent(t *testing.T) {
 	tools := []Tool{stubTool{"bash"}}
-	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "")
+	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "", nil)
 
 	if strings.Contains(prompt, "### git") {
 		t.Error("prompt should not contain git section when git tool absent")
@@ -289,7 +289,7 @@ func TestBuildSystemPromptGitAbsent(t *testing.T) {
 
 func TestBuildSystemPromptWorktreeBranch(t *testing.T) {
 	tools := []Tool{stubTool{"git"}}
-	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "herm-feature-x")
+	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "herm-feature-x", nil)
 
 	if !strings.Contains(prompt, "branch: herm-feature-x") {
 		t.Error("prompt missing worktree branch name")
@@ -301,7 +301,7 @@ func TestBuildSystemPromptWorktreeBranch(t *testing.T) {
 
 func TestBuildSystemPromptWorktreeBranchEmpty(t *testing.T) {
 	tools := []Tool{stubTool{"git"}}
-	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "")
+	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "", nil)
 
 	if strings.Contains(prompt, "branch:") {
 		t.Error("prompt should not contain branch info when worktree branch is empty")
@@ -314,7 +314,7 @@ func TestBuildSystemPromptWorktreeBranchEmpty(t *testing.T) {
 
 func TestBuildSystemPromptGitRoleMention(t *testing.T) {
 	tools := []Tool{stubTool{"git"}}
-	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "")
+	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "", nil)
 
 	if !strings.Contains(prompt, "git` tool is the exception") {
 		t.Error("role section missing git host-bridge mention when git tool is present")
@@ -323,7 +323,7 @@ func TestBuildSystemPromptGitRoleMention(t *testing.T) {
 
 func TestBuildSystemPromptGitRoleMentionAbsent(t *testing.T) {
 	tools := []Tool{stubTool{"bash"}}
-	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "")
+	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "", nil)
 
 	if strings.Contains(prompt, "git` tool is the exception") {
 		t.Error("role section should not mention git host-bridge when git tool is absent")
@@ -397,7 +397,7 @@ func TestWebSearchToolDef(t *testing.T) {
 
 func TestBuildSystemPromptEmptyToolsList(t *testing.T) {
 	// Non-nil but empty slices — no tools registered at all.
-	prompt := buildSystemPrompt([]Tool{}, []types.ToolDefinition{}, nil, "/work", "", "alpine:latest", "")
+	prompt := buildSystemPrompt([]Tool{}, []types.ToolDefinition{}, nil, "/work", "", "alpine:latest", "", nil)
 
 	// Structural sections must still be present.
 	for _, section := range []string{"## Tools", "## Practices", "## Communication"} {
@@ -416,8 +416,8 @@ func TestBuildSystemPromptEmptyToolsList(t *testing.T) {
 
 func TestBuildSystemPromptNilSkillsVsEmpty(t *testing.T) {
 	// Both nil and an empty slice should produce no Skills section.
-	promptNil := buildSystemPrompt(nil, nil, nil, "/work", "", "alpine:latest", "")
-	promptEmpty := buildSystemPrompt(nil, nil, []Skill{}, "/work", "", "alpine:latest", "")
+	promptNil := buildSystemPrompt(nil, nil, nil, "/work", "", "alpine:latest", "", nil)
+	promptEmpty := buildSystemPrompt(nil, nil, []Skill{}, "/work", "", "alpine:latest", "", nil)
 
 	if strings.Contains(promptNil, "## Skills") {
 		t.Error("nil skills: prompt should not contain Skills section")
@@ -437,7 +437,7 @@ func TestBuildSystemPromptPersonalitySpecialChars(t *testing.T) {
 	// HTML special characters (&, <, >) are also safe because text/template (unlike
 	// html/template) does not HTML-escape output.
 	personality := `You like "quotes" & <angle brackets> and {{curly braces}}`
-	prompt := buildSystemPrompt(nil, nil, nil, "/work", personality, "alpine:latest", "")
+	prompt := buildSystemPrompt(nil, nil, nil, "/work", personality, "alpine:latest", "", nil)
 
 	if !strings.Contains(prompt, "## Personality") {
 		t.Error("prompt missing Personality section")
@@ -452,7 +452,7 @@ func TestBuildSystemPromptPersonalitySpecialChars(t *testing.T) {
 
 func TestBuildSystemPromptAgentTool(t *testing.T) {
 	tools := []Tool{stubTool{"agent"}}
-	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "")
+	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "", nil)
 
 	// The agent tool triggers the orchestrator role in the role template.
 	if !strings.Contains(prompt, "orchestrator") {
@@ -473,7 +473,7 @@ func TestBuildSystemPromptAgentTool(t *testing.T) {
 func TestBuildSystemPromptAllServerTools(t *testing.T) {
 	// Provide only server tools — no client tools at all.
 	serverTools := []types.ToolDefinition{WebSearchToolDef()}
-	prompt := buildSystemPrompt(nil, serverTools, nil, "/work", "", "alpine:latest", "")
+	prompt := buildSystemPrompt(nil, serverTools, nil, "/work", "", "alpine:latest", "", nil)
 
 	// The server tool should be reflected in the prompt.
 	if !strings.Contains(prompt, "### web_search") {
@@ -500,7 +500,7 @@ func TestBuildSystemPromptMultipleSkills(t *testing.T) {
 		{Name: "LongSkill", Description: "A skill with a very long body", Content: longContent},
 		{Name: "NormalSkill", Description: "A typical skill", Content: "Keep functions small and focused."},
 	}
-	prompt := buildSystemPrompt(nil, nil, skills, "/work", "", "alpine:latest", "")
+	prompt := buildSystemPrompt(nil, nil, skills, "/work", "", "alpine:latest", "", nil)
 
 	if !strings.Contains(prompt, "## Skills") {
 		t.Error("prompt missing Skills section")
@@ -532,7 +532,7 @@ func TestBuildSubAgentSystemPrompt(t *testing.T) {
 		stubTool{"grep"},
 		stubTool{"read_file"},
 	}
-	prompt := buildSubAgentSystemPrompt(tools, nil, "/work", "alpine:latest")
+	prompt := buildSubAgentSystemPrompt(tools, nil, "/work", "alpine:latest", nil)
 
 	// Should contain the sub-agent role preamble.
 	if !strings.Contains(prompt, "You are a sub-agent") {
@@ -580,7 +580,7 @@ func TestBuildSubAgentSystemPrompt(t *testing.T) {
 func TestBuildSubAgentSystemPromptNoAgentSection(t *testing.T) {
 	// When sub-agent has no agent tool (depth limit), the ### agent section should be absent.
 	tools := []Tool{stubTool{"bash"}, stubTool{"glob"}, stubTool{"grep"}, stubTool{"read_file"}}
-	prompt := buildSubAgentSystemPrompt(tools, nil, "/work", "alpine:latest")
+	prompt := buildSubAgentSystemPrompt(tools, nil, "/work", "alpine:latest", nil)
 
 	if strings.Contains(prompt, "### agent") {
 		t.Error("sub-agent prompt should not contain agent tool section when agent tool is absent")
@@ -591,7 +591,7 @@ func TestBuildSubAgentSystemPromptWithAgentTool(t *testing.T) {
 	// When depth allows nesting, the agent tool section should be present
 	// but the role should still be sub-agent, not orchestrator.
 	tools := []Tool{stubTool{"bash"}, stubTool{"agent"}}
-	prompt := buildSubAgentSystemPrompt(tools, nil, "/work", "alpine:latest")
+	prompt := buildSubAgentSystemPrompt(tools, nil, "/work", "alpine:latest", nil)
 
 	if !strings.Contains(prompt, "### agent") {
 		t.Error("sub-agent with agent tool should have agent tool section")
@@ -618,7 +618,7 @@ func TestSubAgentPromptSmallerThanMain(t *testing.T) {
 		{Name: "Style", Description: "Code style", Content: "Use gofmt."},
 	}
 
-	mainPrompt := buildSystemPrompt(tools, serverTools, skills, "/work", "Be helpful.", "alpine:latest", "feature-branch")
+	mainPrompt := buildSystemPrompt(tools, serverTools, skills, "/work", "Be helpful.", "alpine:latest", "feature-branch", nil)
 
 	// Sub-agent gets same tools minus agent (depth limited).
 	subTools := []Tool{
@@ -629,7 +629,7 @@ func TestSubAgentPromptSmallerThanMain(t *testing.T) {
 		stubTool{"grep"},
 		stubTool{"read_file"},
 	}
-	subPrompt := buildSubAgentSystemPrompt(subTools, serverTools, "/work", "alpine:latest")
+	subPrompt := buildSubAgentSystemPrompt(subTools, serverTools, "/work", "alpine:latest", nil)
 
 	ratio := float64(len(subPrompt)) / float64(len(mainPrompt))
 	t.Logf("main prompt: %d bytes, sub-agent prompt: %d bytes, ratio: %.1f%%", len(mainPrompt), len(subPrompt), ratio*100)
