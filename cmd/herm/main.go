@@ -740,6 +740,39 @@ func toolCallSummary(toolName string, input json.RawMessage) string {
 	return fmt.Sprintf("~ %s", toolName)
 }
 
+// approvalShortDesc creates a short summary of a tool call for approval prompts.
+// It extracts key info from the tool name and input (similar to toolCallSummary).
+func approvalShortDesc(toolName string, input json.RawMessage) string {
+	switch toolName {
+	case "bash":
+		var in struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.Command != "" {
+			cmd := in.Command
+			if len(cmd) > 80 {
+				cmd = cmd[:80] + "..."
+			}
+			return fmt.Sprintf("bash: %s", cmd)
+		}
+	case "git":
+		var in struct {
+			Subcommand string   `json:"subcommand"`
+			Args       []string `json:"args,omitempty"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.Subcommand != "" {
+			parts := append([]string{"git", in.Subcommand}, in.Args...)
+			cmd := strings.Join(parts, " ")
+			if len(cmd) > 80 {
+				cmd = cmd[:80] + "..."
+			}
+			return cmd
+		}
+	}
+	return toolName
+}
+
+
 func collapseToolResult(result string) string {
 	lines := strings.Split(result, "\n")
 	if len(lines) <= 4 {
@@ -1474,6 +1507,7 @@ type App struct {
 	agentRunning     bool
 	awaitingApproval bool
 	approvalDesc     string
+	approvalSummary  string
 	autocompleteIdx  int
 	streamingText    string
 	pendingToolCall  string
@@ -1850,21 +1884,36 @@ func (a *App) buildInputRows() []string {
 	sep := strings.Repeat("─", a.width)
 
 	// Approval mode: yellow borders + centered message, hide normal input
+	// Approval mode: yellow borders + centered message, hide normal input
 	if a.awaitingApproval {
-		yellowSep := fmt.Sprintf("\033[33;1m%s\033[0m", sep)
-		msg := fmt.Sprintf("Allow %s? [y/n]", a.approvalDesc)
-		if len(msg) > a.width {
-			msg = msg[:a.width]
+		yellowSep := fmt.Sprintf("[33;1m%s[0m", sep)
+		shortMsg := fmt.Sprintf("Allow %s? [y/n]", a.approvalSummary)
+		if len(shortMsg) > a.width {
+			shortMsg = shortMsg[:a.width]
 		}
-		pad := (a.width - len(msg)) / 2
-		if pad < 0 {
-			pad = 0
+		shortPad := (a.width - len(shortMsg)) / 2
+		if shortPad < 0 {
+			shortPad = 0
 		}
-		return []string{
-			yellowSep,
-			fmt.Sprintf("\033[33;1m%s%s\033[0m", strings.Repeat(" ", pad), msg),
-			yellowSep,
+		// Line 2: full command details, dim — only show if it adds info beyond the summary
+		detail := a.approvalDesc
+		if detail == a.approvalSummary {
+			detail = ""
 		}
+		approvalRows := []string{yellowSep}
+		approvalRows = append(approvalRows, fmt.Sprintf("[33;1m%s%s[0m", strings.Repeat(" ", shortPad), shortMsg))
+		if detail != "" {
+			if len(detail) > a.width {
+				detail = detail[:a.width]
+			}
+			detailPad := (a.width - len(detail)) / 2
+			if detailPad < 0 {
+				detailPad = 0
+			}
+			approvalRows = append(approvalRows, fmt.Sprintf("[2m%s%s[0m", strings.Repeat(" ", detailPad), detail))
+		}
+		approvalRows = append(approvalRows, yellowSep)
+		return approvalRows
 	}
 
 	rows := []string{sep}
@@ -2624,7 +2673,7 @@ func (a *App) handleByte(ch byte, stdinCh chan byte, readByte func() (byte, bool
 
 func (a *App) handlePlainEscape() {
 	if a.awaitingApproval {
-		return
+		a.handleApprovalByte('n')
 	}
 	// When agent is running, double-tap ESC to stop it
 	if a.agentRunning {
@@ -4512,6 +4561,7 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 		debugLog("approval_req: %s", event.ApprovalDesc)
 		a.awaitingApproval = true
 		a.approvalPauseStart = time.Now()
+		a.approvalSummary = approvalShortDesc(event.ToolName, event.ToolInput)
 		a.approvalDesc = event.ApprovalDesc
 		a.renderInput()
 
