@@ -560,7 +560,7 @@ func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID st
 					ToolName:     tc.Name,
 					ToolID:       tc.ID,
 					ToolInput:    tc.Input,
-					ApprovalDesc: fmt.Sprintf("%s: %s", tc.Name, string(tc.Input)),
+					ApprovalDesc: approvalCmdDesc(tc.Name, tc.Input),
 				})
 
 				// Wait for approval

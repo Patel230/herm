@@ -740,6 +740,39 @@ func toolCallSummary(toolName string, input json.RawMessage) string {
 	return fmt.Sprintf("~ %s", toolName)
 }
 
+// approvalCmdDesc formats a tool call as a terminal command string for the
+// approval detail line. For known tools (bash, git) it reconstructs the
+// command; for unknown tools it falls back to "name: {json}".
+func approvalCmdDesc(toolName string, input json.RawMessage) string {
+	switch toolName {
+	case "bash":
+		var in struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.Command != "" {
+			cmd := in.Command
+			if len(cmd) > 80 {
+				cmd = cmd[:80] + "..."
+			}
+			return cmd
+		}
+	case "git":
+		var in struct {
+			Subcommand string   `json:"subcommand"`
+			Args       []string `json:"args,omitempty"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.Subcommand != "" {
+			parts := append([]string{"git", in.Subcommand}, in.Args...)
+			cmd := strings.Join(parts, " ")
+			if len(cmd) > 80 {
+				cmd = cmd[:80] + "..."
+			}
+			return cmd
+		}
+	}
+	return fmt.Sprintf("%s: %s", toolName, string(input))
+}
+
 // approvalShortDesc creates a short summary of a tool call for approval prompts.
 // It extracts key info from the tool name and input (similar to toolCallSummary).
 func approvalShortDesc(toolName string, input json.RawMessage) string {
@@ -757,16 +790,10 @@ func approvalShortDesc(toolName string, input json.RawMessage) string {
 		}
 	case "git":
 		var in struct {
-			Subcommand string   `json:"subcommand"`
-			Args       []string `json:"args,omitempty"`
+			Subcommand string `json:"subcommand"`
 		}
 		if json.Unmarshal(input, &in) == nil && in.Subcommand != "" {
-			parts := append([]string{"git", in.Subcommand}, in.Args...)
-			cmd := strings.Join(parts, " ")
-			if len(cmd) > 80 {
-				cmd = cmd[:80] + "..."
-			}
-			return cmd
+			return "git " + in.Subcommand
 		}
 	}
 	return toolName
