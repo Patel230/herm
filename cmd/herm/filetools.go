@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,49 @@ import (
 
 	"langdag.com/langdag/types"
 )
+
+// sanitizeToolJSON escapes literal control characters (U+0000–U+001F) inside
+// JSON string values. LLMs sometimes emit raw tabs or newlines in tool_use
+// input, which violates the JSON spec and causes Go's json.Unmarshal to fail.
+func sanitizeToolJSON(raw json.RawMessage) json.RawMessage {
+	// Quick scan: skip allocation if no control chars are present.
+	needsFix := false
+	for _, b := range raw {
+		if b < 0x20 && b != '\n' && b != '\r' {
+			needsFix = true
+			break
+		}
+	}
+	if !needsFix {
+		return raw
+	}
+
+	var buf bytes.Buffer
+	buf.Grow(len(raw))
+	inString := false
+	escaped := false
+	for _, b := range raw {
+		if escaped {
+			buf.WriteByte(b)
+			escaped = false
+			continue
+		}
+		if inString && b == '\\' {
+			buf.WriteByte(b)
+			escaped = true
+			continue
+		}
+		if b == '"' {
+			inString = !inString
+		}
+		if inString && b < 0x20 {
+			fmt.Fprintf(&buf, "\\u%04x", b)
+		} else {
+			buf.WriteByte(b)
+		}
+	}
+	return json.RawMessage(buf.Bytes())
+}
 
 // shellQuote wraps s in single quotes, escaping embedded single quotes.
 // Used to safely pass arguments in shell commands executed inside the container.
@@ -422,7 +466,7 @@ type editFileResponse struct {
 
 func (t *EditFileTool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
 	var in editFileInput
-	if err := json.Unmarshal(input, &in); err != nil {
+	if err := json.Unmarshal(sanitizeToolJSON(input), &in); err != nil {
 		return "", fmt.Errorf("invalid edit_file input: %w", err)
 	}
 	if in.FilePath == "" {
@@ -522,7 +566,7 @@ type writeFileResponse struct {
 
 func (t *WriteFileTool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
 	var in writeFileInput
-	if err := json.Unmarshal(input, &in); err != nil {
+	if err := json.Unmarshal(sanitizeToolJSON(input), &in); err != nil {
 		return "", fmt.Errorf("invalid write_file input: %w", err)
 	}
 	if in.FilePath == "" {

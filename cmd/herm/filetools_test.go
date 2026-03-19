@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"strings"
@@ -777,6 +778,132 @@ func TestWriteFileTool_Execute_RelativePath(t *testing.T) {
 
 	if !strings.Contains(result, "Created") {
 		t.Errorf("expected success, got: %q", result)
+	}
+}
+
+// --- sanitizeToolJSON tests ---
+
+func TestSanitizeToolJSON_NoControlChars(t *testing.T) {
+	input := json.RawMessage(`{"old_string":"hello world","new_string":"goodbye"}`)
+	got := sanitizeToolJSON(input)
+	if !bytes.Equal(got, input) {
+		t.Errorf("expected no change, got %s", got)
+	}
+}
+
+func TestSanitizeToolJSON_LiteralTab(t *testing.T) {
+	// Simulate what LLMs produce: literal 0x09 inside a JSON string value.
+	input := json.RawMessage("{\"old_string\":\"before\tafter\"}")
+	got := sanitizeToolJSON(input)
+
+	// Should now be valid JSON with the tab escaped as \u0009.
+	var parsed map[string]string
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("sanitized JSON should be valid, got error: %v\nJSON: %s", err, got)
+	}
+	if parsed["old_string"] != "before\tafter" {
+		t.Errorf("expected 'before\\tafter', got %q", parsed["old_string"])
+	}
+}
+
+func TestSanitizeToolJSON_MultipleTabs(t *testing.T) {
+	input := json.RawMessage("{\"a\":\"\t\t\",\"b\":\"x\ty\"}")
+	got := sanitizeToolJSON(input)
+
+	var parsed map[string]string
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("sanitized JSON should be valid: %v", err)
+	}
+	if parsed["a"] != "\t\t" {
+		t.Errorf("a = %q, want two tabs", parsed["a"])
+	}
+	if parsed["b"] != "x\ty" {
+		t.Errorf("b = %q, want 'x\\ty'", parsed["b"])
+	}
+}
+
+func TestSanitizeToolJSON_PreservesEscapedBackslash(t *testing.T) {
+	// A properly escaped \" inside a string should not confuse the parser.
+	input := json.RawMessage(`{"a":"say \"hello\"","b":"ok"}`)
+	got := sanitizeToolJSON(input)
+
+	var parsed map[string]string
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("parse error: %v\nJSON: %s", err, got)
+	}
+	if parsed["a"] != `say "hello"` {
+		t.Errorf("a = %q, want 'say \"hello\"'", parsed["a"])
+	}
+}
+
+func TestSanitizeToolJSON_ControlCharOutsideString(t *testing.T) {
+	// Newlines/CRs between keys are common formatting — should be left alone.
+	input := json.RawMessage("{\n\"a\": \"b\"\n}")
+	got := sanitizeToolJSON(input)
+	if !bytes.Equal(got, input) {
+		t.Errorf("should not modify newlines outside strings, got %s", got)
+	}
+}
+
+func TestSanitizeToolJSON_AllControlChars(t *testing.T) {
+	// Test all control chars 0x00-0x1F except \n and \r inside a string.
+	var raw bytes.Buffer
+	raw.WriteString(`{"v":"`)
+	for b := byte(0); b < 0x20; b++ {
+		if b == '\n' || b == '\r' || b == '"' || b == '\\' {
+			continue
+		}
+		raw.WriteByte(b)
+	}
+	raw.WriteString(`"}`)
+
+	got := sanitizeToolJSON(json.RawMessage(raw.Bytes()))
+	var parsed map[string]string
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("sanitized JSON with all control chars should be valid: %v\nJSON: %s", err, got)
+	}
+}
+
+func TestEditFileTool_Execute_LiteralTabInInput(t *testing.T) {
+	container := newFakeContainer(t, func(cmd string) (string, string, int) {
+		if !strings.Contains(cmd, "edit-file") {
+			return "", "unexpected command", 1
+		}
+		return `{"ok":true,"diff":"--- a/main.go\n+++ b/main.go\n@@ ok @@"}`, "", 0
+	})
+
+	tool := NewEditFileTool(container)
+	// Simulate LLM sending literal tab bytes in JSON (invalid JSON per spec).
+	input := json.RawMessage("{\"file_path\":\"main.go\",\"old_string\":\"before\tafter\",\"new_string\":\"fixed\"}")
+
+	// Without sanitization this would fail with "invalid character '\t'"
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute should succeed with literal tabs, got: %v", err)
+	}
+	if !strings.Contains(result, "--- a/main.go") {
+		t.Errorf("expected diff output, got: %q", result)
+	}
+}
+
+func TestWriteFileTool_Execute_LiteralTabInInput(t *testing.T) {
+	container := newFakeContainer(t, func(cmd string) (string, string, int) {
+		if !strings.Contains(cmd, "write-file") {
+			return "", "unexpected command", 1
+		}
+		return `{"ok":true,"created":true,"summary":"Created test.go (3 lines, 50 bytes)"}`, "", 0
+	})
+
+	tool := NewWriteFileTool(container)
+	// Simulate LLM sending literal tab bytes in content.
+	input := json.RawMessage("{\"file_path\":\"test.go\",\"content\":\"func main() {\t\n\treturn\n}\"}")
+
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute should succeed with literal tabs, got: %v", err)
+	}
+	if !strings.Contains(result, "Created") {
+		t.Errorf("expected creation summary, got: %q", result)
 	}
 }
 
