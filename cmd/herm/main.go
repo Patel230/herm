@@ -736,6 +736,28 @@ func toolCallSummary(toolName string, input json.RawMessage) string {
 			}
 			return fmt.Sprintf("~ %s", cmd)
 		}
+	case "edit_file":
+		var in struct {
+			FilePath string `json:"file_path"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.FilePath != "" {
+			p := in.FilePath
+			if len(p) > 100 {
+				p = "..." + p[len(p)-97:]
+			}
+			return fmt.Sprintf("~ edit %s", p)
+		}
+	case "write_file":
+		var in struct {
+			FilePath string `json:"file_path"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.FilePath != "" {
+			p := in.FilePath
+			if len(p) > 100 {
+				p = "..." + p[len(p)-97:]
+			}
+			return fmt.Sprintf("~ write %s", p)
+		}
 	}
 	return fmt.Sprintf("~ %s", toolName)
 }
