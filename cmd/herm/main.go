@@ -1757,8 +1757,9 @@ type App struct {
 	updateAvailable string   // version tag if update is available
 
 	// Tool timer (live elapsed display)
-	toolStartTime time.Time
-	toolTimer     *time.Ticker
+	toolStartTime  time.Time
+	toolTimer      *time.Ticker
+	toolFrozenDur  string // snapshot of formatted duration frozen during approval
 
 	// Agent status timer (animated label while agent is running)
 	agentStartTime     time.Time
@@ -1884,7 +1885,9 @@ func (a *App) buildBlockRows() []string {
 				rows = append(rows, "")
 			}
 			var liveDur string
-			if !a.toolStartTime.IsZero() {
+			if a.toolFrozenDur != "" {
+				liveDur = a.toolFrozenDur
+			} else if !a.toolStartTime.IsZero() {
 				liveDur = formatDuration(time.Since(a.toolStartTime))
 			}
 			box := renderToolBox(title, "", a.width, false, liveDur)
@@ -3506,7 +3509,8 @@ func (a *App) handleApprovalByte(ch byte) {
 			a.approvalPausedTotal += time.Since(a.approvalPauseStart)
 			a.approvalPauseStart = time.Time{}
 		}
-		// Restart tool timer ticker (frozen during approval).
+		// Unfreeze and restart tool timer ticker.
+		a.toolFrozenDur = ""
 		if !a.toolStartTime.IsZero() && a.toolTimer == nil {
 			a.toolTimer = time.NewTicker(100 * time.Millisecond)
 			go func(ticker *time.Ticker, ch chan any) {
@@ -3522,6 +3526,7 @@ func (a *App) handleApprovalByte(ch byte) {
 		a.render()
 	case 'n', 'N':
 		a.awaitingApproval = false
+		a.toolFrozenDur = ""
 		if !a.approvalPauseStart.IsZero() {
 			a.approvalPausedTotal += time.Since(a.approvalPauseStart)
 			a.approvalPauseStart = time.Time{}
@@ -4832,7 +4837,10 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 		a.approvalPauseStart = time.Now()
 		a.approvalSummary = approvalShortDesc(event.ToolName, event.ToolInput)
 		a.approvalDesc = event.ApprovalDesc
-		// Stop tool timer ticker so the tool box timer freezes during approval.
+		// Freeze tool timer: snapshot the displayed duration and stop the ticker.
+		if !a.toolStartTime.IsZero() {
+			a.toolFrozenDur = formatDuration(time.Since(a.toolStartTime))
+		}
 		if a.toolTimer != nil {
 			a.toolTimer.Stop()
 			a.toolTimer = nil
