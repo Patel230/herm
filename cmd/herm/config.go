@@ -194,7 +194,8 @@ func mergeConfigs(global Config, project ProjectConfig) Config {
 	return merged
 }
 
-const defaultContainerImage = "debian:bookworm-slim"
+const hermImageTag = "0.1"
+const defaultContainerImage = "aduermael/herm:" + hermImageTag
 
 func defaultConfig() Config {
 	return Config{

@@ -72,17 +72,18 @@ Runs git commands **on the host** in the project worktree — not inside the con
 {{- if .HasDevenv}}
 
 ### devenv
-Your primary tool for environment setup. Manages a single Dockerfile at .cpsl/Dockerfile. The built image replaces the running container and persists across sessions — this is how you install languages, tools, compilers, and system deps permanently.
+Your primary tool for environment setup. Manages a single Dockerfile at .herm/Dockerfile. The built image replaces the running container and persists across sessions — this is how you install languages, tools, compilers, and system deps permanently.
 - ONE environment per project. There is exactly one Dockerfile. When adding new tools, extend it — never create a parallel one.
 - This is the ONLY way to install tools persistently. Ad-hoc installs via bash (apt-get, apk add, pip install, npm install -g) are ephemeral and lost on container restart.
+- **All Dockerfiles MUST use `FROM aduermael/herm:0.1` as the base image.** This image includes git, ripgrep, tree, python3, and the herm file tools. Do NOT use other base images — builds will be rejected.
 - Mandatory workflow: read → write → build. Never skip read.
-  - read: always do this first. See what base image and tools are already present.
-  - write: provide the COMPLETE Dockerfile. Keep everything already there, add what's new.
+  - read: always do this first. See what's already installed.
+  - write: provide the COMPLETE Dockerfile starting with `FROM aduermael/herm:0.1`. Keep everything already there, add what's new.
   - build: apply the new image. The running container is hot-swapped.
 {{- if not .IsSubAgent}}
 - Build proactively. Before running code that requires tools not in the current image ({{.ContainerImage}}), use devenv first. Don't wait for errors.
 - Dockerfile rules that prevent build failures:
-  - Use a clean base image: debian:bookworm-slim or alpine:3. Install languages and tools explicitly via the distro package manager (apt-get or apk). This gives full control over versions and avoids conflicts when combining multiple runtimes.
+  - Always extend the herm base image. Add languages and tools on top of it via apt-get.
   - Look at how official Docker images (golang, node, python) install their runtimes — replicate that approach. Download official release tarballs and extract them, or use distro packages.
   - Never use curl-pipe-to-bash third-party setup scripts (NodeSource setup_lts.x, rustup.sh, etc). They are fragile and break in non-interactive build environments.
   - Combine related RUN steps: apt-get update && apt-get install -y ... && rm -rf /var/lib/apt/lists/*. Never split update and install across layers.

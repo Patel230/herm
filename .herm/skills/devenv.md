@@ -3,9 +3,11 @@ name: Dev Environment
 description: Guidelines for setting up and extending the single project dev container
 ---
 
-There is ONE dev environment per project: .cpsl/Dockerfile. Every tool installation goes here. Never create a second Dockerfile for a different purpose.
+There is ONE dev environment per project: .herm/Dockerfile. Every tool installation goes here. Never create a second Dockerfile for a different purpose.
 
-The default base image is `debian:bookworm-slim` with exploration tools pre-installed: git, ripgrep (`rg`), tree, GNU grep, and findutils. On first startup, if no `.cpsl/Dockerfile` exists, the embedded base template is written and built automatically — so new projects get these tools out of the box. If you need Alpine, create your own `.cpsl/Dockerfile` with `alpine:3` as the base.
+The default base image is `aduermael/herm:0.1` — a Debian bookworm-slim image with essential tools pre-installed: git, ripgrep (`rg`), tree, python3, and the herm file tools (edit-file, write-file). On first startup, if no `.herm/Dockerfile` exists, the base image is pulled directly — no build step needed. New projects get all tools out of the box.
+
+**All custom Dockerfiles MUST use `FROM aduermael/herm:0.1` as the base.** This ensures the file editing tools and core utilities are always available. Builds will be rejected if a different base image is used.
 
 ## The invariant
 
@@ -15,21 +17,35 @@ The Dockerfile grows over time. It never shrinks (unless you're removing somethi
 
 Every time you need to change the environment:
 
-1. `devenv read` — always start here. Note the current base image and what's already installed.
-2. `devenv write` — write the complete new Dockerfile. Include everything from step 1 plus your additions.
+1. `devenv read` — always start here. Note what's already installed.
+2. `devenv write` — write the complete new Dockerfile. Include everything from step 1 plus your additions. Must use `FROM aduermael/herm:0.1`.
 3. `devenv build` — build and hot-swap. If it fails, read the error and fix the specific failing step.
 
 Never skip step 1. The most common mistake is writing a Dockerfile without reading first, then accidentally removing tools that were already there.
 
-## Choosing a base image
+## Base image
 
-Always start from a clean base: `debian:bookworm-slim` or `alpine:3`. Install languages and tools yourself via the distro package manager. This gives you full control over versions and makes it easy to combine multiple runtimes without conflicts.
+Always extend `aduermael/herm:0.1`. This image includes:
+- Debian bookworm-slim
+- git, tree, ca-certificates, ripgrep, python3
+- edit-file, write-file (herm CLI tools)
 
-Avoid:
-- Official language images (`golang:`, `node:`, `python:`) as base — they work for single-language projects but conflict when combining runtimes, and you lose control over versions
-- `:latest` tags — unpredictable, breaks cached builds
-- Mixing package managers (apt-get on alpine, apk on debian)
-- Third-party curl-pipe-to-bash setup scripts (NodeSource setup_lts.x, rustup.sh, etc.) — they're fragile and break in non-interactive builds
+Add languages and tools on top of it:
+
+```dockerfile
+FROM aduermael/herm:0.1
+WORKDIR /workspace
+
+# Add Go
+ENV GOLANG_VERSION=1.22.5
+RUN apt-get update && apt-get install -y --no-install-recommends wget \
+    && wget -qO go.tar.gz "https://go.dev/dl/go${GOLANG_VERSION}.linux-amd64.tar.gz" \
+    && tar -C /usr/local -xzf go.tar.gz && rm go.tar.gz \
+    && rm -rf /var/lib/apt/lists/*
+ENV PATH="/usr/local/go/bin:/root/go/bin:$PATH"
+```
+
+Do NOT use other base images (debian:bookworm-slim, alpine:3, node:22, golang:1.22, etc.). The devenv tool will reject them.
 
 ## How to install runtimes
 
@@ -54,24 +70,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm -rf /var/lib/apt/lists/*
 ```
 
-**Python** (distro package — simpler when exact version doesn't matter):
+**Python** (already in the base image — only add pip/venv if needed):
 ```dockerfile
-RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip python3-venv \
+RUN apt-get update && apt-get install -y --no-install-recommends python3-pip python3-venv \
     && rm -rf /var/lib/apt/lists/*
 ```
 
 ## Multi-language example
 
-Go + TypeScript on a clean base:
+Go + TypeScript on the herm base:
 
 ```dockerfile
-FROM debian:bookworm-slim
+FROM aduermael/herm:0.1
 WORKDIR /workspace
 
 # Go
 ENV GOLANG_VERSION=1.22.5
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates wget git xz-utils \
+        ca-certificates wget xz-utils \
     && wget -qO go.tar.gz "https://go.dev/dl/go${GOLANG_VERSION}.linux-amd64.tar.gz" \
     && tar -C /usr/local -xzf go.tar.gz && rm go.tar.gz \
     && rm -rf /var/lib/apt/lists/*
@@ -107,4 +123,3 @@ Read the full error output. Docker reports the exact failing step and the error 
 - "unknown instruction" or syntax error → typo in Dockerfile syntax
 - "executable not found" → the binary isn't on PATH, add an ENV PATH line
 - Script exits non-zero → the script requires interactive input; use flags like `-y`, `--yes`, `-q`
-- NodeSource setup error → remove it, use `FROM node:22` as base instead

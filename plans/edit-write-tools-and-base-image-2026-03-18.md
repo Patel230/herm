@@ -152,11 +152,11 @@ This guarantees that edit-file, write-file, ripgrep, git, and python3 are always
 - [x] 1c: Unit tests for both CLI tools covering: successful edit, not-found, not-unique, replace_all, write new file, overwrite existing file, empty content, binary-safe paths with spaces
 
 ## Phase 2: Herm base Docker image
-- [ ] 2a: Create top-level `Dockerfile` for the herm base image: multi-stage build compiling edit-file and write-file from `tools/`, then debian:bookworm-slim with git, tree, ca-certificates, ripgrep, python3, and the compiled binaries
-- [ ] 2b: Add `const hermImageTag = "0.1"` to config.go. Update `defaultContainerImage` to `"aduermael/herm:" + hermImageTag`. Update `dockerfiles/base.Dockerfile` to `FROM aduermael/herm:0.1` + `WORKDIR /workspace`
-- [ ] 2c: Update `buildContainerImage()` in main.go: when no `.herm/Dockerfile` exists or when it matches the embedded template, skip the build — pull and run the default image directly. Only build when a custom Dockerfile is present
-- [ ] 2d: Add base image enforcement in devenv tool: validate that any `.herm/Dockerfile` uses `FROM aduermael/herm:<tag>` as its base. Reject builds with wrong base and return actionable error. Also validate at startup in `buildContainerImage()`
-- [ ] 2e: Update devenv skill doc and prompts/tools.md devenv section to require `FROM aduermael/herm:<tag>` as the base for all custom Dockerfiles, removing alpine references and `debian:bookworm-slim` recommendations
+- [x] 2a: Create top-level `Dockerfile` for the herm base image: multi-stage build compiling edit-file and write-file from `tools/`, then debian:bookworm-slim with git, tree, ca-certificates, ripgrep, python3, and the compiled binaries
+- [x] 2b: Add `const hermImageTag = "0.1"` to config.go. Update `defaultContainerImage` to `"aduermael/herm:" + hermImageTag`. Update `dockerfiles/base.Dockerfile` to `FROM aduermael/herm:0.1` + `WORKDIR /workspace`
+- [x] 2c: Update `buildContainerImage()` in main.go: when no `.herm/Dockerfile` exists or when it matches the embedded template, skip the build — pull and run the default image directly. Only build when a custom Dockerfile is present
+- [x] 2d: Add base image enforcement in devenv tool: validate that any `.herm/Dockerfile` uses `FROM aduermael/herm:<tag>` as its base. Reject builds with wrong base and return actionable error. Also validate at startup in `buildContainerImage()`
+- [x] 2e: Update devenv skill doc and prompts/tools.md devenv section to require `FROM aduermael/herm:<tag>` as the base for all custom Dockerfiles, removing alpine references and `debian:bookworm-slim` recommendations
 
 ## Phase 3: EditFileTool and WriteFileTool
 - [ ] 3a: Add `EditFileTool` struct in filetools.go following existing pattern — pipes JSON input to `edit-file` CLI in container via `container.Exec()`, parses JSON output, returns diff string. Schema: file_path (required), old_string (required), new_string (required), replace_all (optional bool)

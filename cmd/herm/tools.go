@@ -404,6 +404,13 @@ func (t *DevEnvTool) writeDockerfile(content string) (string, error) {
 		return "", fmt.Errorf("content is required for write action")
 	}
 
+	// Validate that the Dockerfile uses the herm base image.
+	if !dockerfileUsesHermBase(content) {
+		return "", fmt.Errorf(
+			"Dockerfile must use FROM aduermael/herm:%s as the base image. "+
+				"Add your custom tools on top of it.", hermImageTag)
+	}
+
 	// Ensure .herm/ directory exists.
 	if err := os.MkdirAll(t.hermDir, 0o755); err != nil {
 		return "", fmt.Errorf("creating .herm directory: %w", err)
@@ -426,6 +433,13 @@ func (t *DevEnvTool) buildAndReplace() (string, error) {
 	content, err := os.ReadFile(dfPath)
 	if err != nil {
 		return "", fmt.Errorf("reading Dockerfile: %w", err)
+	}
+
+	// Validate that the Dockerfile uses the herm base image.
+	if !dockerfileUsesHermBase(string(content)) {
+		return "", fmt.Errorf(
+			"Dockerfile must use FROM aduermael/herm:%s as the base image. "+
+				"Add your custom tools on top of it.", hermImageTag)
 	}
 	hash := sha256.Sum256(content)
 	hashStr := hex.EncodeToString(hash[:])[:12]

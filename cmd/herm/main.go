@@ -1247,7 +1247,8 @@ func bootContainerCmd(workspace string, sessionID string, ch chan<- any) {
 }
 
 // buildContainerImage builds a Docker image from .herm/Dockerfile in the workspace.
-// If no Dockerfile exists, it writes the embedded base template first.
+// If no Dockerfile exists, or it matches the embedded base template, the build is
+// skipped and the caller uses the default image (aduermael/herm:<tag>) directly.
 // Image tag is deterministic: herm-<projectID[:8]>:<sha256[:12]> based on Dockerfile content.
 // If the image already exists (docker image inspect), the build is skipped.
 // Returns the built image name, or empty string on failure (caller falls back to raw image).
@@ -1255,19 +1256,33 @@ func buildContainerImage(workspace string, ch chan<- any) string {
 	hermDir := filepath.Join(workspace, ".herm")
 	dockerfilePath := filepath.Join(hermDir, "Dockerfile")
 
-	// Write the embedded base template if no Dockerfile exists.
+	// No .herm/Dockerfile — use the default image directly. No build needed.
 	if _, err := os.Stat(dockerfilePath); os.IsNotExist(err) {
-		_ = os.MkdirAll(hermDir, 0o755)
-		if err := os.WriteFile(dockerfilePath, []byte(BaseDockerfile), 0o644); err != nil {
-			return ""
-		}
+		return ""
 	}
 
-	// Read Dockerfile content and compute hash for deterministic tag.
+	// Read Dockerfile content.
 	content, err := os.ReadFile(dockerfilePath)
 	if err != nil {
 		return ""
 	}
+
+	// If the Dockerfile matches the embedded base template, skip the build.
+	// The default image already has everything.
+	if string(content) == BaseDockerfile {
+		return ""
+	}
+
+	// Validate that custom Dockerfiles use the herm base image.
+	if !dockerfileUsesHermBase(string(content)) {
+		ch <- containerStatusMsg{text: "invalid Dockerfile base"}
+		ch <- containerErrMsg{err: fmt.Errorf(
+			".herm/Dockerfile must use FROM aduermael/herm:%s as the base image. "+
+				"Add your custom tools on top of it.", hermImageTag)}
+		return ""
+	}
+
+	// Compute hash for deterministic tag.
 	hash := sha256.Sum256(content)
 	hashStr := hex.EncodeToString(hash[:])[:12]
 
@@ -1307,6 +1322,24 @@ func buildContainerImage(workspace string, ch chan<- any) string {
 	}
 
 	return imageName
+}
+
+// dockerfileUsesHermBase checks if a Dockerfile's first FROM instruction uses
+// aduermael/herm: as the base image.
+func dockerfileUsesHermBase(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		upper := strings.ToUpper(line)
+		if strings.HasPrefix(upper, "FROM ") {
+			return strings.Contains(line, "aduermael/herm:")
+		}
+		// First non-comment, non-empty line isn't FROM — invalid but not our problem.
+		break
+	}
+	return false
 }
 
 func fetchStatusCmd(worktreePath string) statusInfoMsg {
