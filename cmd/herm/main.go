@@ -4405,6 +4405,8 @@ func (a *App) startAgent(userMessage string) {
 		tools = append(tools, NewGlobTool(a.container))
 		tools = append(tools, NewGrepTool(a.container))
 		tools = append(tools, NewReadFileTool(a.container))
+		tools = append(tools, NewEditFileTool(a.container))
+		tools = append(tools, NewWriteFileTool(a.container))
 		if a.worktreePath != "" {
 			hermDir := filepath.Join(a.worktreePath, ".herm")
 			mounts := []MountSpec{

@@ -161,7 +161,7 @@ This guarantees that edit-file, write-file, ripgrep, git, and python3 are always
 ## Phase 3: EditFileTool and WriteFileTool
 - [x] 3a: Add `EditFileTool` struct in filetools.go following existing pattern — pipes JSON input to `edit-file` CLI in container via `container.Exec()`, parses JSON output, returns diff string. Schema: file_path (required), old_string (required), new_string (required), replace_all (optional bool)
 - [x] 3b: Add `WriteFileTool` struct in filetools.go — pipes JSON input to `write-file` CLI in container, returns creation summary or diff. Schema: file_path (required), content (required)
-- [ ] 3c: Register EditFileTool and WriteFileTool in `handleStartAgent()` alongside the other container tools (no probing needed — the herm base image always has them)
+- [x] 3c: Register EditFileTool and WriteFileTool in `handleStartAgent()` alongside the other container tools (no probing needed — the herm base image always has them)
 
 ## Phase 4: TUI rendering for diffs
 - [ ] 4a: Add diff colorization in tool result rendering — detect unified diff format in edit_file/write_file results and apply ANSI colors (green for +, red for -, cyan for @@, bold for ---/+++ headers)
