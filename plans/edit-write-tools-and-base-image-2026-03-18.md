@@ -147,9 +147,9 @@ This guarantees that edit-file, write-file, ripgrep, git, and python3 are always
 ---
 
 ## Phase 1: CLI tools — edit-file and write-file
-- [ ] 1a: Create `tools/edit-file/` Go module with main.go — reads JSON from stdin, performs exact string replacement on the target file, writes JSON result with unified diff to stdout. Handle errors: file not found, string not found, string not unique, no-op (old == new)
-- [ ] 1b: Create `tools/write-file/` Go module with main.go — reads JSON from stdin, writes file content (creating parent dirs), outputs JSON result with diff (if overwrite) or creation summary
-- [ ] 1c: Unit tests for both CLI tools covering: successful edit, not-found, not-unique, replace_all, write new file, overwrite existing file, empty content, binary-safe paths with spaces
+- [x] 1a: Create `tools/edit-file/` Go module with main.go — reads JSON from stdin, performs exact string replacement on the target file, writes JSON result with unified diff to stdout. Handle errors: file not found, string not found, string not unique, no-op (old == new)
+- [x] 1b: Create `tools/write-file/` Go module with main.go — reads JSON from stdin, writes file content (creating parent dirs), outputs JSON result with diff (if overwrite) or creation summary
+- [x] 1c: Unit tests for both CLI tools covering: successful edit, not-found, not-unique, replace_all, write new file, overwrite existing file, empty content, binary-safe paths with spaces
 
 ## Phase 2: Herm base Docker image
 - [ ] 2a: Create top-level `Dockerfile` for the herm base image: multi-stage build compiling edit-file and write-file from `tools/`, then debian:bookworm-slim with git, tree, ca-certificates, ripgrep, python3, and the compiled binaries
