@@ -371,7 +371,7 @@ func (t *DevEnvTool) readDockerfile() (string, error) {
 			backupPath := filepath.Join(t.hermDir, "Dockerfile.old")
 			if oldData, readErr := os.ReadFile(backupPath); readErr == nil {
 				msg += fmt.Sprintf("\n\nA previous Dockerfile was backed up during base image migration. "+
-					"Replicate its customizations on top of the herm base image (FROM aduermael/herm:%s):\n\n```\n%s```", hermImageTag, string(oldData))
+					"Replicate its customizations on top of the herm base image (FROM aduermael/herm:__HERM_VERSION__):\n\n```\n%s```", string(oldData))
 			}
 
 			// Surface any named .herm/*.Dockerfile files so they can be consolidated.
@@ -411,11 +411,11 @@ func (t *DevEnvTool) writeDockerfile(content string) (string, error) {
 		return "", fmt.Errorf("content is required for write action")
 	}
 
-	// Validate that the Dockerfile uses the herm base image.
+	// Validate that the Dockerfile uses the herm base image with version placeholder.
 	if !dockerfileUsesHermBase(content) {
 		return "", fmt.Errorf(
-			"Dockerfile must use FROM aduermael/herm:%s as the base image. "+
-				"Add your custom tools on top of it.", hermImageTag)
+			"Dockerfile must use FROM aduermael/herm:__HERM_VERSION__ as the base image. " +
+				"Add your custom tools on top of it.")
 	}
 
 	// Ensure .herm/ directory exists.
@@ -442,13 +442,16 @@ func (t *DevEnvTool) buildAndReplace() (string, error) {
 		return "", fmt.Errorf("reading Dockerfile: %w", err)
 	}
 
-	// Validate that the Dockerfile uses the herm base image.
+	// Validate that the Dockerfile uses the herm base image with version placeholder.
 	if !dockerfileUsesHermBase(string(content)) {
 		return "", fmt.Errorf(
-			"Dockerfile must use FROM aduermael/herm:%s as the base image. "+
-				"Add your custom tools on top of it.", hermImageTag)
+			"Dockerfile must use FROM aduermael/herm:__HERM_VERSION__ as the base image. " +
+				"Add your custom tools on top of it.")
 	}
-	hash := sha256.Sum256(content)
+
+	// Resolve __HERM_VERSION__ placeholder to actual version.
+	resolved := resolveDockerfile(string(content))
+	hash := sha256.Sum256([]byte(resolved))
 	hashStr := hex.EncodeToString(hash[:])[:12]
 
 	imageName := "herm-local:" + hashStr
@@ -456,10 +459,22 @@ func (t *DevEnvTool) buildAndReplace() (string, error) {
 		imageName = "herm-" + t.projectID[:8] + ":" + hashStr
 	}
 
+	// Write resolved Dockerfile to a temp file for docker build.
+	tmpFile, tmpErr := os.CreateTemp("", "herm-dockerfile-*")
+	if tmpErr != nil {
+		return "", fmt.Errorf("creating temp file: %w", tmpErr)
+	}
+	defer os.Remove(tmpFile.Name())
+	if _, writeErr := tmpFile.WriteString(resolved); writeErr != nil {
+		tmpFile.Close()
+		return "", fmt.Errorf("writing resolved Dockerfile: %w", writeErr)
+	}
+	tmpFile.Close()
+
 	if t.onStatus != nil {
 		t.onStatus("rebuilding…")
 	}
-	if err := t.container.Rebuild(imageName, t.dockerfilePath(), t.workspace, t.mounts); err != nil {
+	if err := t.container.Rebuild(imageName, tmpFile.Name(), t.workspace, t.mounts); err != nil {
 		if t.onStatus != nil {
 			t.onStatus("rebuild failed")
 		}

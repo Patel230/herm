@@ -1416,8 +1416,11 @@ func buildContainerImage(workspace string, ch chan<- any) string {
 		return ""
 	}
 
-	// Compute hash for deterministic tag.
-	hash := sha256.Sum256(content)
+	// Resolve __HERM_VERSION__ placeholder to actual version.
+	resolved := resolveDockerfile(string(content))
+
+	// Hash the resolved content so version bumps trigger rebuilds.
+	hash := sha256.Sum256([]byte(resolved))
 	hashStr := hex.EncodeToString(hash[:])[:12]
 
 	// Derive image name from project ID + content hash.
@@ -1438,12 +1441,24 @@ func buildContainerImage(workspace string, ch chan<- any) string {
 
 	ch <- containerStatusMsg{text: "building image…"}
 
+	// Write resolved Dockerfile to a temp file for docker build.
+	tmpFile, tmpErr := os.CreateTemp("", "herm-dockerfile-*")
+	if tmpErr != nil {
+		return ""
+	}
+	defer os.Remove(tmpFile.Name())
+	if _, writeErr := tmpFile.WriteString(resolved); writeErr != nil {
+		tmpFile.Close()
+		return ""
+	}
+	tmpFile.Close()
+
 	buildCtx, buildCancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer buildCancel()
 
 	buildCmd := dockerCommand(buildCtx, "docker", "build",
 		"-t", imageName,
-		"-f", dockerfilePath,
+		"-f", tmpFile.Name(),
 		workspace,
 	)
 	var buildStderr bytes.Buffer
@@ -1459,7 +1474,9 @@ func buildContainerImage(workspace string, ch chan<- any) string {
 }
 
 // dockerfileUsesHermBase checks if a Dockerfile's first FROM instruction uses
-// aduermael/herm: as the base image.
+// aduermael/herm:__HERM_VERSION__ as the base image. Dockerfiles with hardcoded
+// version tags (e.g. aduermael/herm:0.1) are rejected so the migration flow
+// backs them up and the user can re-create with the placeholder.
 func dockerfileUsesHermBase(content string) bool {
 	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(line)
@@ -1468,7 +1485,7 @@ func dockerfileUsesHermBase(content string) bool {
 		}
 		upper := strings.ToUpper(line)
 		if strings.HasPrefix(upper, "FROM ") {
-			return strings.Contains(line, "aduermael/herm:")
+			return strings.Contains(line, "aduermael/herm:__HERM_VERSION__")
 		}
 		// First non-comment, non-empty line isn't FROM — invalid but not our problem.
 		break

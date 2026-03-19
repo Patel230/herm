@@ -116,7 +116,7 @@ func TestDevEnvTool_WriteDockerfile(t *testing.T) {
 	hermDir := filepath.Join(dir, ".herm")
 
 	tool := NewDevEnvTool(nil, hermDir, dir, nil, "", nil, nil)
-	content := "FROM aduermael/herm:0.1\nRUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*\n"
+	content := "FROM aduermael/herm:__HERM_VERSION__\nRUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*\n"
 	input, _ := json.Marshal(devenvInput{Action: "write", Content: content})
 
 	result, err := tool.Execute(context.Background(), input)
@@ -193,7 +193,7 @@ func TestDevEnvTool_BuildCallsRebuild(t *testing.T) {
 	dir := t.TempDir()
 	hermDir := filepath.Join(dir, ".herm")
 	os.MkdirAll(hermDir, 0o755)
-	os.WriteFile(filepath.Join(hermDir, "Dockerfile"), []byte("FROM aduermael/herm:0.1\nRUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*\n"), 0o644)
+	os.WriteFile(filepath.Join(hermDir, "Dockerfile"), []byte("FROM aduermael/herm:__HERM_VERSION__\nRUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*\n"), 0o644)
 
 	dockerCommand = fakeDockerCommand(func(args []string) (string, string, int) {
 		if len(args) >= 2 {
@@ -266,7 +266,7 @@ func TestDevEnvTool_OnRebuildCallback(t *testing.T) {
 	dir := t.TempDir()
 	hermDir := filepath.Join(dir, ".herm")
 	os.MkdirAll(hermDir, 0o755)
-	dfContent := "FROM aduermael/herm:0.1\nRUN apt-get update && apt-get install -y golang && rm -rf /var/lib/apt/lists/*\n"
+	dfContent := "FROM aduermael/herm:__HERM_VERSION__\nRUN apt-get update && apt-get install -y golang && rm -rf /var/lib/apt/lists/*\n"
 	os.WriteFile(filepath.Join(hermDir, "Dockerfile"), []byte(dfContent), 0o644)
 
 	dockerCommand = fakeDockerCommand(func(args []string) (string, string, int) {
@@ -314,6 +314,48 @@ func TestDevEnvTool_OnRebuildCallback(t *testing.T) {
 	}
 }
 
+func TestResolveDockerfile(t *testing.T) {
+	input := "FROM aduermael/herm:__HERM_VERSION__\nRUN apt-get update\n"
+	got := resolveDockerfile(input)
+	want := "FROM aduermael/herm:" + hermImageTag + "\nRUN apt-get update\n"
+	if got != want {
+		t.Errorf("resolveDockerfile() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveDockerfile_NoPlaceholder(t *testing.T) {
+	input := "FROM debian:bookworm\nRUN echo hello\n"
+	got := resolveDockerfile(input)
+	if got != input {
+		t.Errorf("expected no change, got %q", got)
+	}
+}
+
+func TestDockerfileUsesHermBase_Placeholder(t *testing.T) {
+	if !dockerfileUsesHermBase("FROM aduermael/herm:__HERM_VERSION__\nRUN echo\n") {
+		t.Error("should accept __HERM_VERSION__ placeholder")
+	}
+}
+
+func TestDockerfileUsesHermBase_HardcodedVersion(t *testing.T) {
+	if dockerfileUsesHermBase("FROM aduermael/herm:0.1\nRUN echo\n") {
+		t.Error("should reject hardcoded version tag")
+	}
+}
+
+func TestDockerfileUsesHermBase_WrongBase(t *testing.T) {
+	if dockerfileUsesHermBase("FROM ubuntu:22.04\n") {
+		t.Error("should reject non-herm base")
+	}
+}
+
+func TestDockerfileUsesHermBase_CommentBeforeFROM(t *testing.T) {
+	content := "# my comment\nFROM aduermael/herm:__HERM_VERSION__\n"
+	if !dockerfileUsesHermBase(content) {
+		t.Error("should accept placeholder after comment lines")
+	}
+}
+
 // TestDevEnvTool_NameParamIgnored verifies that passing a 'name' field (from
 // old callers) is silently accepted without error and still uses the canonical path.
 func TestDevEnvTool_NameParamIgnored(t *testing.T) {
@@ -321,7 +363,7 @@ func TestDevEnvTool_NameParamIgnored(t *testing.T) {
 	hermDir := filepath.Join(dir, ".herm")
 
 	tool := NewDevEnvTool(nil, hermDir, dir, nil, "", nil, nil)
-	content := "FROM aduermael/herm:0.1\nRUN apt-get update && apt-get install -y golang && rm -rf /var/lib/apt/lists/*\n"
+	content := "FROM aduermael/herm:__HERM_VERSION__\nRUN apt-get update && apt-get install -y golang && rm -rf /var/lib/apt/lists/*\n"
 	// Pass name:"go" — it should be ignored.
 	input, _ := json.Marshal(devenvInput{Action: "write", Name: "go", Content: content})
 
