@@ -831,10 +831,29 @@ func collapseToolResult(result string) string {
 		// Show first 2 + last 3 (all 5, no ellipsis needed)
 		return compactLineNumbers(strings.Join(lines[:2], "\n") + "\n" + strings.Join(lines[2:], "\n"))
 	}
+	// For unified diffs: show header + first hunk preview.
+	if isDiffContent(result) {
+		return collapseDiff(lines)
+	}
 	// >5: first 2 + ... + last 2
 	head := strings.Join(lines[:2], "\n")
 	tail := strings.Join(lines[len(lines)-2:], "\n")
 	return compactLineNumbers(fmt.Sprintf("%s\n...\n%s", head, tail))
+}
+
+// collapseDiff collapses a unified diff to show the header and first hunk.
+// Typically shows: --- a/file, +++ b/file, @@ ... @@, and the first change line.
+func collapseDiff(lines []string) string {
+	show := 4
+	if len(lines) < show {
+		show = len(lines)
+	}
+	head := strings.Join(lines[:show], "\n")
+	remaining := len(lines) - show
+	if remaining > 0 {
+		return fmt.Sprintf("%s\n... (%d more lines)", head, remaining)
+	}
+	return head
 }
 
 // catNPadRe matches cat-n style line numbers with leading whitespace (e.g. "     1\t").

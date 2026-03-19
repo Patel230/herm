@@ -166,7 +166,7 @@ This guarantees that edit-file, write-file, ripgrep, git, and python3 are always
 ## Phase 4: TUI rendering for diffs
 - [x] 4a: Add diff colorization in tool result rendering — detect unified diff format in edit_file/write_file results and apply ANSI colors (green for +, red for -, cyan for @@, bold for ---/+++ headers)
 - [x] 4b: Add `toolCallSummary()` cases for edit_file (`"~ edit <path>"`) and write_file (`"~ write <path>"`)
-- [ ] 4c: Improve `collapseToolResult()` for diff output — show hunk headers and a balanced sample of changes rather than arbitrary first/last lines
+- [x] 4c: Improve `collapseToolResult()` for diff output — show hunk headers and a balanced sample of changes rather than arbitrary first/last lines
 
 ## Phase 5: System prompt and guidance
 - [ ] 5a: Add `HasEditFile` and `HasWriteFile` flags to `PromptData`, set them in `buildSystemPrompt()` based on tool presence
