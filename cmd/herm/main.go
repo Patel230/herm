@@ -1757,8 +1757,9 @@ type App struct {
 	updateAvailable string   // version tag if update is available
 
 	// Tool timer (live elapsed display)
-	toolStartTime time.Time
-	toolTimer     *time.Ticker
+	toolStartTime   time.Time
+	toolTimer       *time.Ticker
+	toolPausedTotal time.Duration // approval pause time within current tool call
 
 	// Agent status timer (animated label while agent is running)
 	agentStartTime     time.Time
@@ -1885,7 +1886,14 @@ func (a *App) buildBlockRows() []string {
 			}
 			var liveDur string
 			if !a.toolStartTime.IsZero() {
-				liveDur = formatDuration(time.Since(a.toolStartTime))
+				toolElapsed := time.Since(a.toolStartTime) - a.toolPausedTotal
+				if a.awaitingApproval && !a.approvalPauseStart.IsZero() {
+					toolElapsed -= time.Since(a.approvalPauseStart)
+				}
+				if toolElapsed < 0 {
+					toolElapsed = 0
+				}
+				liveDur = formatDuration(toolElapsed)
 			}
 			box := renderToolBox(title, "", a.width, false, liveDur)
 			if liveDur == "" {
@@ -2130,7 +2138,6 @@ func (a *App) buildInputRows() []string {
 	// Approval mode: animated yellow gradient borders + centered message
 	if a.awaitingApproval {
 		t := time.Since(a.approvalPauseStart)
-		gradSep := approvalGradientSep(a.width, t)
 		color := approvalGradientColor(t)
 		shortMsg := fmt.Sprintf("Allow %s? [y/n]", a.approvalSummary)
 		if len(shortMsg) > a.width {
@@ -2144,7 +2151,7 @@ func (a *App) buildInputRows() []string {
 		if detail == a.approvalSummary {
 			detail = ""
 		}
-		approvalRows := []string{gradSep}
+		approvalRows := []string{sep}
 		approvalRows = append(approvalRows, fmt.Sprintf("%s%s%s[0m", color, strings.Repeat(" ", shortPad), shortMsg))
 		if detail != "" {
 			if len(detail) > a.width {
@@ -2156,7 +2163,7 @@ func (a *App) buildInputRows() []string {
 			}
 			approvalRows = append(approvalRows, fmt.Sprintf("[2m%s%s[0m", strings.Repeat(" ", detailPad), detail))
 		}
-		approvalRows = append(approvalRows, gradSep)
+		approvalRows = append(approvalRows, sep)
 		return approvalRows
 	}
 
@@ -3504,7 +3511,9 @@ func (a *App) handleApprovalByte(ch byte) {
 	case 'y', 'Y':
 		a.awaitingApproval = false
 		if !a.approvalPauseStart.IsZero() {
-			a.approvalPausedTotal += time.Since(a.approvalPauseStart)
+			paused := time.Since(a.approvalPauseStart)
+			a.approvalPausedTotal += paused
+			a.toolPausedTotal += paused
 			a.approvalPauseStart = time.Time{}
 		}
 		if a.agent != nil {
@@ -3515,7 +3524,9 @@ func (a *App) handleApprovalByte(ch byte) {
 	case 'n', 'N':
 		a.awaitingApproval = false
 		if !a.approvalPauseStart.IsZero() {
-			a.approvalPausedTotal += time.Since(a.approvalPauseStart)
+			paused := time.Since(a.approvalPauseStart)
+			a.approvalPausedTotal += paused
+			a.toolPausedTotal += paused
 			a.approvalPauseStart = time.Time{}
 		}
 		if a.agent != nil {
@@ -4770,6 +4781,7 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 		}
 		a.messages = append(a.messages, chatMessage{kind: msgToolCall, content: toolCallSummary(event.ToolName, event.ToolInput), leadBlank: true})
 		a.toolStartTime = time.Now()
+		a.toolPausedTotal = 0
 		if a.toolTimer != nil {
 			a.toolTimer.Stop()
 		}
