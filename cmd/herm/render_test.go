@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -863,4 +866,77 @@ func TestCompactLineNumbers(t *testing.T) {
 			t.Errorf("expected compacted line 1: %q", got)
 		}
 	})
+}
+
+func TestWriteRowsEscapeSequences(t *testing.T) {
+	t.Run("each row gets clear-line prefix", func(t *testing.T) {
+		var buf strings.Builder
+		rows := []string{"row one", "row two", "row three"}
+		writeRows(&buf, rows, 1)
+		output := buf.String()
+
+		// Should start by positioning at row 1
+		if !strings.HasPrefix(output, "\033[1;1H") {
+			t.Errorf("expected CUP(1,1) prefix, got %q", output[:min(20, len(output))])
+		}
+
+		// Each row should be preceded by \033[0m\033[2K (reset + clear line)
+		count := strings.Count(output, "\033[0m\033[2K")
+		if count != 3 {
+			t.Errorf("expected 3 clear-line sequences, got %d", count)
+		}
+
+		// Rows separated by \r\n
+		if strings.Count(output, "\r\n") != 2 {
+			t.Errorf("expected 2 \\r\\n separators between 3 rows")
+		}
+	})
+
+	t.Run("custom start row", func(t *testing.T) {
+		var buf strings.Builder
+		writeRows(&buf, []string{"hello"}, 5)
+		output := buf.String()
+
+		if !strings.HasPrefix(output, "\033[5;1H") {
+			t.Errorf("expected CUP(5,1) prefix, got %q", output[:min(20, len(output))])
+		}
+	})
+
+	t.Run("empty rows no output", func(t *testing.T) {
+		var buf strings.Builder
+		writeRows(&buf, nil, 1)
+		if buf.Len() != 0 {
+			t.Errorf("expected no output for empty rows, got %q", buf.String())
+		}
+	})
+}
+
+func TestRenderFullClearSequence(t *testing.T) {
+	// Capture stdout to verify renderFull emits the correct escape sequences.
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+
+	app := &App{width: 40}
+	app.renderFull()
+
+	w.Close()
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+	output := buf.String()
+
+	// Should contain: hide cursor + home + clear screen + clear scrollback
+	if !strings.Contains(output, "\033[?25l\033[H\033[2J\033[3J") {
+		t.Errorf("renderFull should emit hide-cursor + home + clear-screen + clear-scrollback sequence")
+	}
+
+	// Should contain clear-to-end-of-screen after rows
+	if !strings.Contains(output, "\033[0m\033[J") {
+		t.Errorf("render should emit clear-to-end-of-screen (\\033[J) after rows")
+	}
 }
