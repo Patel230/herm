@@ -623,3 +623,142 @@ func (t *WriteFileTool) Execute(ctx context.Context, input json.RawMessage) (str
 func (t *WriteFileTool) RequiresApproval(_ json.RawMessage) bool {
 	return false
 }
+
+// OutlineTool extracts function/type signatures from a file without reading
+// the full content. Returns a compact outline with line numbers (~50-100 tokens
+// instead of ~2000-5000 for a full read).
+type OutlineTool struct {
+	container *ContainerClient
+}
+
+// NewOutlineTool creates an OutlineTool with the given container client.
+func NewOutlineTool(container *ContainerClient) *OutlineTool {
+	return &OutlineTool{container: container}
+}
+
+func (t *OutlineTool) Definition() types.ToolDefinition {
+	return types.ToolDefinition{
+		Name:        "outline",
+		Description: "Extract function/type/class signatures from a file. Returns a compact outline with line numbers — much cheaper than reading the full file. Use to understand a file's structure before deciding which sections to read in detail.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"file_path": {
+					"type": "string",
+					"description": "Path to the file, relative to /workspace (e.g. 'src/main.go')"
+				}
+			},
+			"required": ["file_path"]
+		}`),
+	}
+}
+
+type outlineInput struct {
+	FilePath string `json:"file_path"`
+}
+
+// outlineMaxLines is the maximum number of signature lines returned.
+const outlineMaxLines = 100
+
+// outlinePatterns maps file extensions to grep patterns for extracting signatures.
+var outlinePatterns = map[string]string{
+	// Go: top-level declarations
+	".go": `^(func |type |var |const |package )`,
+	// Python: classes, functions, async functions
+	".py": `^(class |def |async def |\s+def |\s+async def )`,
+	// JavaScript/TypeScript: exports, functions, classes, interfaces, types
+	".js":  `^(export |function |class |const |let |var |async function )`,
+	".jsx": `^(export |function |class |const |let |var |async function )`,
+	".ts":  `^(export |function |class |const |let |var |interface |type |enum |async function )`,
+	".tsx": `^(export |function |class |const |let |var |interface |type |enum |async function )`,
+	// Rust: public/private declarations
+	".rs": `^(pub |fn |struct |enum |trait |impl |mod |type |use )`,
+	// Ruby: classes, modules, methods
+	".rb": `^(class |module |def |  def )`,
+	// Java/Kotlin: classes, interfaces, methods
+	".java":  `^(public |private |protected |class |interface |enum |abstract |static |  public |  private |  protected )`,
+	".kt":    `^(fun |class |interface |object |data class |sealed |val |var |  fun |  val |  var )`,
+	// C/C++: functions, structs, classes, typedefs
+	".c":   `^([a-zA-Z_].*\(|struct |typedef |enum |#define )`,
+	".h":   `^([a-zA-Z_].*\(|struct |typedef |enum |#define |class )`,
+	".cpp": `^([a-zA-Z_].*\(|struct |typedef |enum |#define |class |namespace )`,
+	".hpp": `^([a-zA-Z_].*\(|struct |typedef |enum |#define |class |namespace )`,
+}
+
+func (t *OutlineTool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+	var in outlineInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return "", fmt.Errorf("invalid outline input: %w", err)
+	}
+	if in.FilePath == "" {
+		return "", fmt.Errorf("file_path is required")
+	}
+
+	filePath := in.FilePath
+	if !strings.HasPrefix(filePath, "/") {
+		filePath = "/workspace/" + filePath
+	}
+
+	// Check if file exists and is not binary.
+	checkCmd := fmt.Sprintf("file --brief --mime %s 2>&1", shellQuote(filePath))
+	checkResult, err := t.container.Exec(checkCmd, 5)
+	if err != nil {
+		return "", err
+	}
+	if checkResult.ExitCode != 0 {
+		return fmt.Sprintf("error: cannot read %s", in.FilePath), nil
+	}
+	mime := strings.TrimSpace(checkResult.Stdout)
+	if strings.Contains(mime, "binary") || strings.Contains(mime, "application/octet-stream") {
+		return "binary file, cannot outline", nil
+	}
+
+	// Detect language from extension and pick a pattern.
+	ext := ""
+	if dot := strings.LastIndex(in.FilePath, "."); dot >= 0 {
+		ext = in.FilePath[dot:]
+	}
+
+	pattern, ok := outlinePatterns[ext]
+	if ok {
+		// Use grep -n -E with the language-specific pattern.
+		cmd := fmt.Sprintf("grep -n -E %s %s 2>&1 | head -n %d",
+			shellQuote(pattern), shellQuote(filePath), outlineMaxLines+1)
+		result, err := t.container.Exec(cmd, 15)
+		if err != nil {
+			return "", err
+		}
+		output := strings.TrimRight(result.Stdout+result.Stderr, "\n")
+		if result.ExitCode == 1 || output == "" {
+			return "(no declarations found)", nil
+		}
+
+		lines := strings.Split(output, "\n")
+		if len(lines) > outlineMaxLines {
+			remaining := len(lines) - outlineMaxLines
+			output = strings.Join(lines[:outlineMaxLines], "\n") +
+				fmt.Sprintf("\n[... %d more declarations]", remaining)
+		}
+		return output, nil
+	}
+
+	// Fallback: head + tail for unknown languages.
+	cmd := fmt.Sprintf("wc -l < %s 2>&1", shellQuote(filePath))
+	wcResult, err := t.container.Exec(cmd, 5)
+	if err != nil {
+		return "", err
+	}
+	totalLines := strings.TrimSpace(wcResult.Stdout)
+
+	cmd = fmt.Sprintf("(head -n 20 %s && echo '---' && tail -n 20 %s) 2>&1", shellQuote(filePath), shellQuote(filePath))
+	result, err := t.container.Exec(cmd, 10)
+	if err != nil {
+		return "", err
+	}
+	output := strings.TrimRight(result.Stdout+result.Stderr, "\n")
+	return fmt.Sprintf("[%s lines total — showing first 20 + last 20]\n%s", totalLines, output), nil
+}
+
+func (t *OutlineTool) RequiresApproval(_ json.RawMessage) bool {
+	return false
+}

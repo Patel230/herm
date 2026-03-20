@@ -8,7 +8,10 @@ Dedicated file exploration tools — use these instead of bash for all file disc
 - **glob**: Find files by pattern (e.g. '**/*.go'). Fast, .gitignore-aware. Use first to discover project structure.
 - **grep**: Search file contents by regex. Modes: files_with_matches (default), content (with line numbers), count. Supports glob filters and context lines.
 - **read_file**: Read file contents with line numbers. Supports offset/limit for partial reads — avoid loading entire large files.
-- Explore in layers: glob (structure) → grep (search) → read_file (examine). Each step narrows focus.
+{{- if $.HasOutline}}
+- **outline**: Extract function/type/class signatures from a file (~50-100 tokens). Use before read_file when exploring unfamiliar files — understand the structure first, then read only the sections you need.
+{{- end}}
+- Explore in layers: glob (structure) → grep (search){{if $.HasOutline}} → outline (signatures){{end}} → read_file (examine). Each step narrows focus.
 - **Quick decision guide:** Know the file name/pattern? → glob first. Know the code pattern? → grep first. Exploring unfamiliar project? → Start from the project snapshot, then glob to narrow.
 - Do NOT use bash for file operations (find, rg, cat, head, tail, grep) — the dedicated tools produce structured, compact output that saves tokens.
 {{- end}}

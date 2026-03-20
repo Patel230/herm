@@ -97,13 +97,13 @@ The outline tool should:
 - Rust: `^(pub )?(fn|struct|enum|trait|impl|mod|type) `
 - Fallback: `grep -n` for common patterns or just return first 20 + last 20 lines
 
-- [ ] 2a: **Implement `OutlineTool`** — New tool in `filetools.go`. Input schema: `file_path` (required). Detects language from extension, runs appropriate `grep -n` or `awk` command in container to extract signatures. Returns compact output with line numbers. Falls back to head+tail for unsupported languages.
+- [x] 2a: **Implement `OutlineTool`** — New tool in `filetools.go`. Input schema: `file_path` (required). Detects language from extension, runs appropriate `grep -n` or `awk` command in container to extract signatures. Returns compact output with line numbers. Falls back to head+tail for unsupported languages.
 
-- [ ] 2b: **Add outline guidance to system prompt** — In the tools section, add guidance: "Use `outline` before `read_file` when exploring unfamiliar files. `outline` returns function/type signatures (~50-100 tokens) — read the full file only when you need implementation details." Place this near the existing Read tool guidance.
+- [x] 2b: **Add outline guidance to system prompt** — In the tools section, add guidance: "Use `outline` before `read_file` when exploring unfamiliar files. `outline` returns function/type signatures (~50-100 tokens) — read the full file only when you need implementation details." Place this near the existing Read tool guidance.
 
-- [ ] 2c: **Add outline to sub-agent tool set** — Ensure the outline tool is included in the sub-agent's tool list. Sub-agents doing exploration will benefit the most from this.
+- [x] 2c: **Add outline to sub-agent tool set** — Ensure the outline tool is included in the sub-agent's tool list. Sub-agents doing exploration will benefit the most from this.
 
-- [ ] 2d: **Test outline tool** — Test with Go files (the herm codebase itself), Python, JS/TS. Verify: correct signature extraction, line numbers present, output capped, fallback works for unknown extensions, binary files handled gracefully.
+- [x] 2d: **Test outline tool** — Test with Go files (the herm codebase itself), Python, JS/TS. Verify: correct signature extraction, line numbers present, output capped, fallback works for unknown extensions, binary files handled gracefully.
 
 **Failure modes:**
 - File doesn't exist → return error like ReadFileTool

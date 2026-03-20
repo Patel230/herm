@@ -25,6 +25,7 @@ type PromptData struct {
 	HasGlob        bool
 	HasGrep        bool
 	HasReadFile    bool
+	HasOutline     bool
 	HasEditFile    bool
 	HasWriteFile   bool
 	IsSubAgent     bool   // true for sub-agent prompts: skips communication, personality, skills
@@ -63,6 +64,7 @@ func buildSystemPrompt(tools []Tool, serverTools []types.ToolDefinition, skills 
 		HasGlob:        toolNames["glob"],
 		HasGrep:        toolNames["grep"],
 		HasReadFile:    toolNames["read_file"],
+		HasOutline:     toolNames["outline"],
 		HasEditFile:    toolNames["edit_file"],
 		HasWriteFile:   toolNames["write_file"],
 		ContainerImage: containerImage,
@@ -109,6 +111,7 @@ func buildSubAgentSystemPrompt(tools []Tool, serverTools []types.ToolDefinition,
 		HasGlob:        toolNames["glob"],
 		HasGrep:        toolNames["grep"],
 		HasReadFile:    toolNames["read_file"],
+		HasOutline:     toolNames["outline"],
 		HasEditFile:    toolNames["edit_file"],
 		HasWriteFile:   toolNames["write_file"],
 		IsSubAgent:     true,
