@@ -270,9 +270,9 @@ Replace the grep-based outline tool with a dedicated compiled binary, matching t
 
 **What needs to change:**
 
-- [ ] 8a: **Create `tools/outline/main.go`** — Compiled Go binary that takes a file path as its only argument. Detects language from extension. For `.go` files, uses `go/parser.ParseFile` + `go/ast` to extract function signatures (with receivers, params, returns), type declarations, interface methods, and const/var blocks. For Python/JS/TS/Rust/Ruby/Java/C, uses the existing regex patterns from `outlinePatterns` but applied with Go's `regexp` package (more capable than grep -E). Falls back to head+tail for unknown extensions. Outputs line-numbered signatures to stdout, capped at 100 lines. Exits 0 on success, 1 on error (with error message to stderr).
+- [x] 8a: **Create `tools/outline/main.go`** — Compiled Go binary that takes a file path as its only argument. Detects language from extension. For `.go` files, uses `go/parser.ParseFile` + `go/ast` to extract function signatures (with receivers, params, returns), type declarations, interface methods, and const/var blocks. For Python/JS/TS/Rust/Ruby/Java/C, uses the existing regex patterns from `outlinePatterns` but applied with Go's `regexp` package (more capable than grep -E). Falls back to head+tail for unknown extensions. Outputs line-numbered signatures to stdout, capped at 100 lines. Exits 0 on success, 1 on error (with error message to stderr).
 
-- [ ] 8b: **Add Go AST extraction** — The main value-add: for `.go` files, parse the full AST and extract:
+- [x] 8b: **Add Go AST extraction** — The main value-add: for `.go` files, parse the full AST and extract:
   - `package` declaration
   - `func` with full signature: `func (r *Receiver) Name(params) (returns)`
   - `type` declarations: `type Name struct/interface/alias`
