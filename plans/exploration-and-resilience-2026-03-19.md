@@ -64,7 +64,7 @@ Fix the confusing merged sub-agent display. Each active sub-agent should show it
 
 - [x] 1f: **Show per-agent token usage in completion messages** — When a sub-agent completes, the completion message in the conversation should include its token usage: `[agent <short-id>] completed: <task label> (↑Nk ↓Nk, M tool calls)`. The sub-agent already tracks `totalInputTokens`/`totalOutputTokens` in `Execute()` — include them in the `EventSubAgentStatus` "done" event or in a new field on the completion message. Tool call count can be derived from `turns` counter already in `Execute()`.
 
-- [ ] 1g: **Test per-agent display** — Verify: single agent shows labeled status, parallel agents show separate lines, agent completion shows structured summary with token counts, status line shows only main-agent tokens, `/stats` shows both main and total, display handles rapid event interleaving correctly.
+- [x] 1g: **Test per-agent display** — Verify: single agent shows labeled status, parallel agents show separate lines, agent completion shows structured summary with token counts, status line shows only main-agent tokens, `/stats` shows both main and total, display handles rapid event interleaving correctly.
 
 **Failure modes:**
 - AgentID mismatch: events without matching start event → create entry on first event with "unknown task" label
