@@ -4984,6 +4984,17 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 		}
 		a.render()
 
+	case EventRetry:
+		errMsg := "unknown error"
+		if event.Error != nil {
+			errMsg = event.Error.Error()
+		}
+		retryMsg := fmt.Sprintf("API error, retrying in %s (attempt %d/%d): %s",
+			event.Duration.Truncate(time.Second), event.Attempt, event.MaxRetry, errMsg)
+		debugLog("retry: %s", retryMsg)
+		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: retryMsg})
+		a.render()
+
 	case EventError:
 		errMsg := "Agent error"
 		if event.Error != nil {

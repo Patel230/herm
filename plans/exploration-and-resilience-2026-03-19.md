@@ -133,17 +133,17 @@ Ensure transient API failures (rate limits, network blips, server errors) never 
 - Show retry status to user via events so they know the agent is retrying, not stuck
 - Cap retries (3 attempts with 2s/4s/8s backoff)
 
-- [ ] 3a: **Add `retryablePrompt()` helper** — New function in `agent.go` that wraps `client.Prompt()` / `client.PromptFrom()` with retry logic. Takes the same arguments plus a retry config (max attempts, base delay, retryable error classifier). Returns the stream or final error after exhausting retries. Emits `EventInfo` with "retrying in Ns..." on each retry so the TUI can show status.
+- [x] 3a: **Add `retryablePrompt()` helper** — New function in `agent.go` that wraps `client.Prompt()` / `client.PromptFrom()` with retry logic. Takes the same arguments plus a retry config (max attempts, base delay, retryable error classifier). Returns the stream or final error after exhausting retries. Emits `EventInfo` with "retrying in Ns..." on each retry so the TUI can show status.
 
-- [ ] 3b: **Add error classification** — Function `isRetryableError(err error) bool` that checks for: HTTP 429/500/502/503/529, network timeout errors, connection reset, EOF during stream. Non-retryable: 400 (bad request), 401 (auth), 403 (forbidden), context canceled.
+- [x] 3b: **Add error classification** — Function `isRetryableError(err error) bool` that checks for: HTTP 429/500/502/503/529, network timeout errors, connection reset, EOF during stream. Non-retryable: 400 (bad request), 401 (auth), 403 (forbidden), context canceled.
 
-- [ ] 3c: **Replace direct API calls with retryable wrapper** — In `runLoop()`, replace the two `client.Prompt()`/`client.PromptFrom()` call sites with `retryablePrompt()`. Both the initial prompt and the follow-up (after tool execution) should retry.
+- [x] 3c: **Replace direct API calls with retryable wrapper** — In `runLoop()`, replace the two `client.Prompt()`/`client.PromptFrom()` call sites with `retryablePrompt()`. Both the initial prompt and the follow-up (after tool execution) should retry.
 
-- [ ] 3d: **Add `EventRetry` event type** — New event that carries: attempt number, delay, error message. The TUI shows this as a transient status line: `"⟳ API error, retrying in 4s (attempt 2/3)..."`. This replaces the current silent failure.
+- [x] 3d: **Add `EventRetry` event type** — New event that carries: attempt number, delay, error message. The TUI shows this as a transient status line: `"⟳ API error, retrying in 4s (attempt 2/3)..."`. This replaces the current silent failure.
 
-- [ ] 3e: **Handle stream interruption with retry** — When a stream closes without `chunk.Done`, instead of immediately emitting EventError and breaking, attempt to retry the same prompt (from the same node). This handles network blips mid-response. Limit stream retries to 1 attempt since partial responses may have already been processed.
+- [x] 3e: **Handle stream interruption with retry** — When a stream closes without `chunk.Done`, instead of immediately emitting EventError and breaking, attempt to retry the same prompt (from the same node). This handles network blips mid-response. Limit stream retries to 1 attempt since partial responses may have already been processed.
 
-- [ ] 3f: **Test retry behavior** — Test: retryable error triggers retry with correct delays, permanent error fails immediately, max retries exhausted emits final error, stream interruption retries once, EventRetry events are emitted correctly. Use a mock langdag client that returns errors on demand.
+- [x] 3f: **Test retry behavior** — Test: retryable error triggers retry with correct delays, permanent error fails immediately, max retries exhausted emits final error, stream interruption retries once, EventRetry events are emitted correctly. Use a mock langdag client that returns errors on demand.
 
 **Failure modes:**
 - Retry succeeds but response is different from what would have been → fine, LLM responses are non-deterministic anyway

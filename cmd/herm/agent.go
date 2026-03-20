@@ -490,36 +490,99 @@ func (a *Agent) buildPromptOpts() []langdag.PromptOption {
 	return opts
 }
 
-// runLoop is the core agent loop: call LLM, handle tool calls, repeat.
-func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID string) {
-	opts := a.buildPromptOpts()
+// retryConfig controls retry behavior for LLM API calls.
+type retryConfig struct {
+	maxAttempts int           // total attempts (1 = no retry)
+	baseDelay   time.Duration // initial delay, doubled each attempt
+}
 
-	// Initial LLM call
-	var result *langdag.PromptResult
-	var err error
-	if parentNodeID == "" {
-		result, err = a.client.Prompt(ctx, userMessage, opts...)
-	} else {
-		result, err = a.client.PromptFrom(ctx, parentNodeID, userMessage, opts...)
-	}
-	if err != nil {
-		a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("prompt: %w", err)})
-		a.emit(AgentEvent{Type: EventDone})
-		return
-	}
+// defaultRetryConfig is 3 attempts with 2s/4s/8s backoff.
+var defaultRetryConfig = retryConfig{maxAttempts: 3, baseDelay: 2 * time.Second}
 
-	// Process streaming response, collecting tool calls from content blocks.
+// isRetryableError checks whether an error should trigger a retry.
+// Retryable: rate limits (429), server errors (500/502/503/529), network issues.
+// Non-retryable: bad request (400), auth (401/403), context canceled.
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// Context canceled or deadline exceeded — don't retry.
+	if strings.Contains(msg, "context canceled") || strings.Contains(msg, "context deadline exceeded") {
+		return false
+	}
+	// HTTP status codes that warrant retry.
+	for _, code := range []string{"429", "500", "502", "503", "529"} {
+		if strings.Contains(msg, code) {
+			return true
+		}
+	}
+	// Network-level errors.
+	for _, pattern := range []string{
+		"connection reset",
+		"connection refused",
+		"no such host",
+		"timeout",
+		"EOF",
+		"broken pipe",
+		"TLS handshake",
+	} {
+		if strings.Contains(msg, pattern) {
+			return true
+		}
+	}
+	// "overloaded" / "rate limit" in error text.
+	lower := strings.ToLower(msg)
+	if strings.Contains(lower, "overloaded") || strings.Contains(lower, "rate limit") {
+		return true
+	}
+	return false
+}
+
+// retryablePrompt wraps client.Prompt or client.PromptFrom with retry logic.
+// It calls promptFn, and if the error is retryable, waits with exponential
+// backoff and retries. Emits EventRetry events so the TUI shows retry status.
+func (a *Agent) retryablePrompt(ctx context.Context, cfg retryConfig, promptFn func() (*langdag.PromptResult, error)) (*langdag.PromptResult, error) {
+	var lastErr error
+	delay := cfg.baseDelay
+	for attempt := 1; attempt <= cfg.maxAttempts; attempt++ {
+		result, err := promptFn()
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		if !isRetryableError(err) || attempt == cfg.maxAttempts {
+			return nil, err
+		}
+		a.emit(AgentEvent{
+			Type:     EventRetry,
+			Error:    err,
+			Attempt:  attempt,
+			MaxRetry: cfg.maxAttempts,
+			Duration: delay,
+		})
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
+		delay *= 2
+	}
+	return nil, lastErr
+}
+
+// drainStream reads all chunks from a prompt result's stream, emitting text
+// deltas and collecting tool calls. Returns the tool calls and whether the
+// stream completed normally (chunk.Done received).
+func (a *Agent) drainStream(result *langdag.PromptResult) ([]types.ContentBlock, bool) {
 	var toolCalls []types.ContentBlock
-	streamDone := false
 	for chunk := range result.Stream {
 		if chunk.Error != nil {
 			a.emit(AgentEvent{Type: EventError, Error: chunk.Error})
-			a.emit(AgentEvent{Type: EventDone})
-			return
+			return nil, false
 		}
 		if chunk.Done {
-			streamDone = true
-			break
+			return toolCalls, true
 		}
 		if chunk.Content != "" {
 			a.emit(AgentEvent{Type: EventTextDelta, Text: chunk.Content})
@@ -528,7 +591,29 @@ func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID st
 			toolCalls = append(toolCalls, *chunk.ContentBlock)
 		}
 	}
-	if !streamDone {
+	return toolCalls, false // channel closed without Done
+}
+
+// runLoop is the core agent loop: call LLM, handle tool calls, repeat.
+func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID string) {
+	opts := a.buildPromptOpts()
+
+	// Initial LLM call (with retry for transient failures).
+	result, err := a.retryablePrompt(ctx, defaultRetryConfig, func() (*langdag.PromptResult, error) {
+		if parentNodeID == "" {
+			return a.client.Prompt(ctx, userMessage, opts...)
+		}
+		return a.client.PromptFrom(ctx, parentNodeID, userMessage, opts...)
+	})
+	if err != nil {
+		a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("prompt: %w", err)})
+		a.emit(AgentEvent{Type: EventDone})
+		return
+	}
+
+	// Process streaming response, collecting tool calls from content blocks.
+	toolCalls, streamOK := a.drainStream(result)
+	if !streamOK {
 		a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("stream interrupted: closed without completion")})
 		a.emit(AgentEvent{Type: EventDone})
 		return
@@ -743,33 +828,18 @@ func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID st
 			a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("marshal tool results: %w", marshalErr)})
 			break
 		}
-		result, err = a.client.PromptFrom(ctx, nodeID, string(toolResultJSON), opts...)
+		toolResultStr := string(toolResultJSON)
+		result, err = a.retryablePrompt(ctx, defaultRetryConfig, func() (*langdag.PromptResult, error) {
+			return a.client.PromptFrom(ctx, nodeID, toolResultStr, opts...)
+		})
 		if err != nil {
 			a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("prompt (tool results): %w", err)})
 			break
 		}
 
 		// Stream the follow-up response, collecting tool calls.
-		toolCalls = nil
-		streamDone = false
-		for chunk := range result.Stream {
-			if chunk.Error != nil {
-				a.emit(AgentEvent{Type: EventError, Error: chunk.Error})
-				a.emit(AgentEvent{Type: EventDone, NodeID: nodeID})
-				return
-			}
-			if chunk.Done {
-				streamDone = true
-				break
-			}
-			if chunk.Content != "" {
-				a.emit(AgentEvent{Type: EventTextDelta, Text: chunk.Content})
-			}
-			if chunk.ContentBlock != nil && chunk.ContentBlock.Type == "tool_use" {
-				toolCalls = append(toolCalls, *chunk.ContentBlock)
-			}
-		}
-		if !streamDone {
+		toolCalls, streamOK = a.drainStream(result)
+		if !streamOK {
 			a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("stream interrupted: closed without completion")})
 			break
 		}
