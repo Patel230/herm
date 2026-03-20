@@ -136,7 +136,7 @@ Spawns a sub-agent with its own context window. Each sub-agent has startup cost 
 - `[summary: model]` — intelligent summary; usually sufficient to act on.
 - `[summary: truncated]` — naive truncation; read the full output file via `read_file` for complete findings.
 - `[errors: ...]` — sub-agent hit errors; review and consider retrying with a narrower task.
-- `[turns: N/M]` where N=M means the sub-agent hit its turn limit and may have incomplete results.
+- `[turns: N/M]` — turns count LLM response cycles, not individual tool calls (one response with 5 tool calls = 1 turn). N=M means the sub-agent hit its turn limit and may have incomplete results.
 {{- end}}
 {{- if .HasWebSearch}}
 
