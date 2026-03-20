@@ -655,34 +655,6 @@ type outlineInput struct {
 	FilePath string `json:"file_path"`
 }
 
-// outlineMaxLines is the maximum number of signature lines returned.
-const outlineMaxLines = 100
-
-// outlinePatterns maps file extensions to grep patterns for extracting signatures.
-var outlinePatterns = map[string]string{
-	// Go: top-level declarations
-	".go": `^(func |type |var |const |package )`,
-	// Python: classes, functions, async functions
-	".py": `^(class |def |async def |\s+def |\s+async def )`,
-	// JavaScript/TypeScript: exports, functions, classes, interfaces, types
-	".js":  `^(export |function |class |const |let |var |async function )`,
-	".jsx": `^(export |function |class |const |let |var |async function )`,
-	".ts":  `^(export |function |class |const |let |var |interface |type |enum |async function )`,
-	".tsx": `^(export |function |class |const |let |var |interface |type |enum |async function )`,
-	// Rust: public/private declarations
-	".rs": `^(pub |fn |struct |enum |trait |impl |mod |type |use )`,
-	// Ruby: classes, modules, methods
-	".rb": `^(class |module |def |  def )`,
-	// Java/Kotlin: classes, interfaces, methods
-	".java":  `^(public |private |protected |class |interface |enum |abstract |static |  public |  private |  protected )`,
-	".kt":    `^(fun |class |interface |object |data class |sealed |val |var |  fun |  val |  var )`,
-	// C/C++: functions, structs, classes, typedefs
-	".c":   `^([a-zA-Z_].*\(|struct |typedef |enum |#define )`,
-	".h":   `^([a-zA-Z_].*\(|struct |typedef |enum |#define |class )`,
-	".cpp": `^([a-zA-Z_].*\(|struct |typedef |enum |#define |class |namespace )`,
-	".hpp": `^([a-zA-Z_].*\(|struct |typedef |enum |#define |class |namespace )`,
-}
-
 func (t *OutlineTool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
 	var in outlineInput
 	if err := json.Unmarshal(input, &in); err != nil {
@@ -697,31 +669,58 @@ func (t *OutlineTool) Execute(ctx context.Context, input json.RawMessage) (strin
 		filePath = "/workspace/" + filePath
 	}
 
-	// Check if file exists and is not binary.
-	checkCmd := fmt.Sprintf("file --brief --mime %s 2>&1", shellQuote(filePath))
-	checkResult, err := t.container.Exec(checkCmd, 5)
+	// Call the outline binary directly — no shell, no quoting.
+	result, err := t.container.Exec(fmt.Sprintf("outline %s", shellQuote(filePath)), 15)
 	if err != nil {
 		return "", err
 	}
-	if checkResult.ExitCode != 0 {
+
+	output := strings.TrimRight(result.Stdout, "\n")
+	stderr := strings.TrimSpace(result.Stderr)
+
+	// Binary not found (old container image) — fall back to grep.
+	if result.ExitCode == 127 || (result.ExitCode != 0 && strings.Contains(stderr, "not found")) {
+		return t.outlineFallback(filePath, in.FilePath)
+	}
+
+	if result.ExitCode != 0 {
+		if stderr != "" {
+			return fmt.Sprintf("error: %s", stderr), nil
+		}
 		return fmt.Sprintf("error: cannot read %s", in.FilePath), nil
 	}
-	mime := strings.TrimSpace(checkResult.Stdout)
-	if strings.Contains(mime, "binary") || strings.Contains(mime, "application/octet-stream") {
-		return "binary file, cannot outline", nil
+
+	if output == "" {
+		return "(no declarations found)", nil
 	}
 
-	// Detect language from extension and pick a pattern.
+	return output, nil
+}
+
+// outlineFallback uses grep when the outline binary is missing (old container image).
+func (t *OutlineTool) outlineFallback(filePath, displayPath string) (string, error) {
 	ext := ""
-	if dot := strings.LastIndex(in.FilePath, "."); dot >= 0 {
-		ext = in.FilePath[dot:]
+	if dot := strings.LastIndex(displayPath, "."); dot >= 0 {
+		ext = displayPath[dot:]
 	}
 
-	pattern, ok := outlinePatterns[ext]
-	if ok {
-		// Use grep -n -E with the language-specific pattern.
-		cmd := fmt.Sprintf("grep -n -E %s %s 2>&1 | head -n %d",
-			shellQuote(pattern), shellQuote(filePath), outlineMaxLines+1)
+	// Try a basic grep for common patterns.
+	pattern := ""
+	switch ext {
+	case ".go":
+		pattern = `^(func |type |var |const |package )`
+	case ".py":
+		pattern = `^(class |def |async def |\s+def |\s+async def )`
+	case ".js", ".jsx":
+		pattern = `^(export |function |class |const |let |var |async function )`
+	case ".ts", ".tsx":
+		pattern = `^(export |function |class |const |let |var |interface |type |enum |async function )`
+	case ".rs":
+		pattern = `^(pub |fn |struct |enum |trait |impl |mod |type |use )`
+	}
+
+	if pattern != "" {
+		cmd := fmt.Sprintf("grep -n -E %s %s 2>&1 | head -n 101", shellQuote(pattern), shellQuote(filePath))
 		result, err := t.container.Exec(cmd, 15)
 		if err != nil {
 			return "", err
@@ -730,31 +729,16 @@ func (t *OutlineTool) Execute(ctx context.Context, input json.RawMessage) (strin
 		if result.ExitCode == 1 || output == "" {
 			return "(no declarations found)", nil
 		}
-
-		lines := strings.Split(output, "\n")
-		if len(lines) > outlineMaxLines {
-			remaining := len(lines) - outlineMaxLines
-			output = strings.Join(lines[:outlineMaxLines], "\n") +
-				fmt.Sprintf("\n[... %d more declarations]", remaining)
-		}
 		return output, nil
 	}
 
-	// Fallback: head + tail for unknown languages.
-	cmd := fmt.Sprintf("wc -l < %s 2>&1", shellQuote(filePath))
-	wcResult, err := t.container.Exec(cmd, 5)
-	if err != nil {
-		return "", err
-	}
-	totalLines := strings.TrimSpace(wcResult.Stdout)
-
-	cmd = fmt.Sprintf("(head -n 20 %s && echo '---' && tail -n 20 %s) 2>&1", shellQuote(filePath), shellQuote(filePath))
+	// Unknown language — head + tail.
+	cmd := fmt.Sprintf("(head -n 20 %s && echo '---' && tail -n 20 %s) 2>&1", shellQuote(filePath), shellQuote(filePath))
 	result, err := t.container.Exec(cmd, 10)
 	if err != nil {
 		return "", err
 	}
-	output := strings.TrimRight(result.Stdout+result.Stderr, "\n")
-	return fmt.Sprintf("[%s lines total — showing first 20 + last 20]\n%s", totalLines, output), nil
+	return strings.TrimRight(result.Stdout+result.Stderr, "\n"), nil
 }
 
 func (t *OutlineTool) RequiresApproval(_ json.RawMessage) bool {
