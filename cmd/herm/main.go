@@ -1522,7 +1522,7 @@ func fetchStatusCmd(worktreePath string) statusInfoMsg {
 		}
 	}
 
-	diffCmd := exec.Command("git", "diff", "--shortstat", "main")
+	diffCmd := exec.Command("git", "diff", "--shortstat", "HEAD")
 	diffCmd.Dir = worktreePath
 	if out, err := diffCmd.Output(); err == nil {
 		line := strings.TrimSpace(string(out))
@@ -2291,26 +2291,35 @@ func (a *App) buildInputRows() []string {
 
 	// Status indicators (only when no action is active)
 	if !hasAction {
-		// Line 1: branch: <name> + cost + progress bar on right
+		// Line 1: branch: <name> -del/+add ↓behind↑ahead $cost [progress]
 		branchLabel := ""
 		branchTextWidth := 0
 		if a.status.Branch != "" {
 			branchLabel = "\033[2mbranch: " + a.status.Branch + "\033[0m"
 			branchTextWidth = 8 + len(a.status.Branch) // "branch: " + name
 		}
+		diffLabel := ""
+		diffTextWidth := 0
+		if a.status.DiffDel > 0 || a.status.DiffAdd > 0 {
+			delStr := fmt.Sprintf("-%d", a.status.DiffDel)
+			addStr := fmt.Sprintf("+%d", a.status.DiffAdd)
+			// red for deletions, green for additions, dim
+			diffLabel = " \033[2;31m" + delStr + "\033[0m\033[2m/\033[0m\033[2;32m" + addStr + "\033[0m"
+			diffTextWidth = 1 + len(delStr) + 1 + len(addStr) // space + del + "/" + add
+		}
 		commitLabel := ""
 		commitTextWidth := 0
 		if a.status.HasUpstream {
-			commitStr := fmt.Sprintf("↓%d ↑%d", a.status.Behind, a.status.Ahead)
-			commitLabel = "  \033[2m" + commitStr + "\033[0m"
-			commitTextWidth = 2 + uniseg.StringWidth(commitStr)
+			commitStr := fmt.Sprintf(" ↓%d↑%d", a.status.Behind, a.status.Ahead)
+			commitLabel = "\033[2m" + commitStr + "\033[0m"
+			commitTextWidth = uniseg.StringWidth(commitStr)
 		}
 		costLabel := ""
 		costTextWidth := 0
 		if a.sessionCostUSD > 0 {
 			costStr := formatCost(a.sessionCostUSD)
-			costLabel = "  \033[2m" + costStr + "\033[0m"
-			costTextWidth = 2 + len(costStr)
+			costLabel = " \033[2m" + costStr + "\033[0m"
+			costTextWidth = 1 + len(costStr)
 		}
 		contextTokens := a.lastInputTokens + len(a.input)/charsPerToken
 		contextWindow := 200000
@@ -2319,11 +2328,11 @@ func (a *App) buildInputRows() []string {
 		}
 		bar := progressBar(contextTokens, contextWindow)
 		barWidth := 3
-		padding := a.width - branchTextWidth - commitTextWidth - costTextWidth - barWidth - 1
+		padding := a.width - branchTextWidth - diffTextWidth - commitTextWidth - costTextWidth - barWidth - 1
 		if padding < 0 {
 			padding = 0
 		}
-		rows = append(rows, branchLabel+commitLabel+costLabel+strings.Repeat(" ", padding)+bar+" ")
+		rows = append(rows, branchLabel+diffLabel+commitLabel+costLabel+strings.Repeat(" ", padding)+bar+" ")
 
 		// Line 2: container status (always shown when we have status text)
 		if a.containerStatusText != "" {
