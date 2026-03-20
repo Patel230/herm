@@ -221,3 +221,28 @@ func TestIsFilePath_DoubleQuotedMultiline(t *testing.T) {
 		t.Fatalf("expected resolved=%q, got %q", tmp, resolved)
 	}
 }
+
+func TestIsFilePath_QuotedWithSpaces(t *testing.T) {
+	// Some terminals drop paths as: ` "/path/to/img.png " `
+	// (double quotes AND spaces on both sides).
+	tmp := filepath.Join(t.TempDir(), "img.png")
+	if err := os.WriteFile(tmp, []byte("png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []string{
+		` "` + tmp + `" `,   // spaces outside quotes
+		`" ` + tmp + ` "`,   // spaces inside quotes
+		` " ` + tmp + ` " `, // spaces both inside and outside
+		`  ` + tmp + `  `,   // just spaces, no quotes
+		` '` + tmp + `' `,   // single quotes with spaces outside
+		`' ` + tmp + ` '`,   // single quotes with spaces inside
+	} {
+		resolved, ok := isFilePath(input)
+		if !ok {
+			t.Fatalf("expected isFilePath to accept %q", input)
+		}
+		if resolved != tmp {
+			t.Fatalf("input %q: expected resolved=%q, got %q", input, tmp, resolved)
+		}
+	}
+}

@@ -592,6 +592,8 @@ func expandPastes(s string, store map[int]string) string {
 // single quotes), shell-escaped paths (backslash-spaces from terminal drag-drop),
 // and tilde-prefixed home-dir paths.
 func isFilePath(s string) (string, bool) {
+	// Trim surrounding whitespace first — some terminals pad dropped paths with spaces.
+	s = strings.TrimSpace(s)
 	// Strip surrounding double-quotes (some terminals wrap dropped paths in quotes).
 	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
 		s = s[1 : len(s)-1]
@@ -600,6 +602,8 @@ func isFilePath(s string) (string, bool) {
 	if len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'' {
 		s = s[1 : len(s)-1]
 	}
+	// Trim again — spaces may appear inside the quotes (e.g. `" /path/to/file "`)
+	s = strings.TrimSpace(s)
 	// Unescape backslash-spaces (common in terminal drag-drop).
 	p := strings.ReplaceAll(s, "\\ ", " ")
 	// Expand tilde.
