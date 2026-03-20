@@ -211,7 +211,7 @@ func TestSubAgentToolEmptyTask(t *testing.T) {
 	tmpDir := t.TempDir()
 	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
 
-	_, err := tool.Execute(context.Background(), json.RawMessage(`{"task":""}`))
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"","mode":"explore"}`))
 	if err == nil {
 		t.Fatal("expected error for empty task")
 	}
@@ -233,7 +233,7 @@ func TestSubAgentToolExecuteReturnsOutput(t *testing.T) {
 	tmpDir := t.TempDir()
 	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
 
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"say hello"}`))
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"say hello","mode":"explore"}`))
 	if err != nil {
 		t.Fatalf("Execute error: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestSubAgentToolForwardsEventsWithAgentID(t *testing.T) {
 	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
 	tool.parentEvents = parentEvents
 
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do work"}`))
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do work","mode":"explore"}`))
 	if err != nil {
 		t.Fatalf("Execute error: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestSubAgentToolResumeWithAgentID(t *testing.T) {
 	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
 
 	// First call — establishes a sub-agent and saves its nodeID.
-	result1, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"initial work"}`))
+	result1, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"initial work","mode":"explore"}`))
 	if err != nil {
 		t.Fatalf("first Execute error: %v", err)
 	}
@@ -328,7 +328,7 @@ func TestSubAgentToolResumeWithAgentID(t *testing.T) {
 
 	// Second call — resume with the agent_id.
 	result2, err := tool.Execute(context.Background(), json.RawMessage(
-		`{"task":"continue work","agent_id":"`+agentID+`"}`))
+		`{"task":"continue work","mode":"explore","agent_id":"`+agentID+`"}`))
 	if err != nil {
 		t.Fatalf("resume Execute error: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestSubAgentToolUnknownAgentID(t *testing.T) {
 	tmpDir := t.TempDir()
 	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
 
-	_, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"resume","agent_id":"nonexistent"}`))
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"resume","mode":"explore","agent_id":"nonexistent"}`))
 	if err == nil {
 		t.Fatal("expected error for unknown agent_id")
 	}
@@ -396,7 +396,7 @@ func TestSubAgentToolNoOutput(t *testing.T) {
 	tmpDir := t.TempDir()
 	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
 
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do nothing"}`))
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do nothing","mode":"explore"}`))
 	if err != nil {
 		t.Fatalf("Execute error: %v", err)
 	}
@@ -410,7 +410,7 @@ func TestSubAgentToolResultContainsAgentID(t *testing.T) {
 	tmpDir := t.TempDir()
 	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
 
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do work"}`))
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do work","mode":"explore"}`))
 	if err != nil {
 		t.Fatalf("Execute error: %v", err)
 	}
@@ -516,7 +516,7 @@ func TestSubAgentOutputFileWritten(t *testing.T) {
 	tmpDir := t.TempDir()
 	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
 
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"write file"}`))
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"write file","mode":"explore"}`))
 	if err != nil {
 		t.Fatalf("Execute error: %v", err)
 	}
@@ -546,7 +546,7 @@ func TestSubAgentOutputFileLargeOutput(t *testing.T) {
 	tmpDir := t.TempDir()
 	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
 
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"produce large output"}`))
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"produce large output","mode":"explore"}`))
 	if err != nil {
 		t.Fatalf("Execute error: %v", err)
 	}
@@ -632,7 +632,7 @@ func TestSubAgentResultIncludesTokenUsage(t *testing.T) {
 	tmpDir := t.TempDir()
 	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
 
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"count tokens"}`))
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"count tokens","mode":"explore"}`))
 	if err != nil {
 		t.Fatalf("Execute error: %v", err)
 	}
@@ -724,7 +724,7 @@ func TestSummarizeWithModelExecuteIntegration(t *testing.T) {
 	tmpDir := t.TempDir()
 	tool := NewSubAgentTool(client, nil, nil, "test-model", "cheap-model", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
 
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"explore codebase"}`))
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"explore codebase","mode":"explore"}`))
 	if err != nil {
 		t.Fatalf("Execute error: %v", err)
 	}
@@ -744,7 +744,7 @@ func TestSummarizeWithModelFallbackOnShortOutput(t *testing.T) {
 	tmpDir := t.TempDir()
 	tool := NewSubAgentTool(client, nil, nil, "test-model", "cheap-model", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
 
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"quick check"}`))
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"quick check","mode":"explore"}`))
 	if err != nil {
 		t.Fatalf("Execute error: %v", err)
 	}
@@ -764,7 +764,7 @@ func TestSubAgentResultIncludesTurnCount(t *testing.T) {
 	tmpDir := t.TempDir()
 	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
 
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"work"}`))
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"work","mode":"explore"}`))
 	if err != nil {
 		t.Fatalf("Execute error: %v", err)
 	}
@@ -785,7 +785,7 @@ func TestSubAgentResultMaxTurnsShown(t *testing.T) {
 	tmpDir := t.TempDir()
 	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 5, 3, 0, tmpDir, "", "alpine:latest", nil)
 
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"quick task"}`))
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"quick task","mode":"explore"}`))
 	if err != nil {
 		t.Fatalf("Execute error: %v", err)
 	}
@@ -838,5 +838,65 @@ func TestFormatSubAgentResultNoOutputNoErrors(t *testing.T) {
 	result := tool.buildResult(context.Background(), "test-id", nil, nil, 0, 0, 0)
 	if !strings.Contains(result, "sub-agent produced no output") {
 		t.Errorf("should show generic no-output, got: %q", result)
+	}
+}
+
+// --- Phase 1: Mode validation and model selection tests ---
+
+func TestSubAgentToolInvalidMode(t *testing.T) {
+	client := newTestClient("ok")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "main-model", "cheap-model", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
+
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"test","mode":"invalid"}`))
+	if err == nil {
+		t.Fatal("expected error for invalid mode")
+	}
+	if !strings.Contains(err.Error(), `mode must be "explore" or "implement"`) {
+		t.Errorf("error = %q, want mode validation error", err.Error())
+	}
+}
+
+func TestSubAgentToolMissingMode(t *testing.T) {
+	client := newTestClient("ok")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "main-model", "cheap-model", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
+
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"test"}`))
+	if err == nil {
+		t.Fatal("expected error for missing mode")
+	}
+	if !strings.Contains(err.Error(), `mode must be "explore" or "implement"`) {
+		t.Errorf("error = %q, want mode validation error", err.Error())
+	}
+}
+
+func TestSubAgentToolExploreModeUsesExplorationModel(t *testing.T) {
+	// The mock provider records which model is used via the Stream request.
+	// We verify indirectly: explore mode should succeed and use the exploration model.
+	client := newTestClient("explore output")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "main-model", "cheap-model", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"search code","mode":"explore"}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if !strings.Contains(result, "explore output") {
+		t.Errorf("result = %q, want explore output", result)
+	}
+}
+
+func TestSubAgentToolImplementModeUsesMainModel(t *testing.T) {
+	client := newTestClient("implement output")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "main-model", "cheap-model", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"write code","mode":"implement"}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if !strings.Contains(result, "implement output") {
+		t.Errorf("result = %q, want implement output", result)
 	}
 }

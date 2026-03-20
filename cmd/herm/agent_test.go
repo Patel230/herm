@@ -960,9 +960,9 @@ func TestRunParallelAgentCalls(t *testing.T) {
 			{
 				text: "Spawning agents",
 				toolCalls: []types.ContentBlock{
-					{Type: "tool_use", ID: "a1", Name: "agent", Input: json.RawMessage(`{"task":"t1"}`)},
-					{Type: "tool_use", ID: "a2", Name: "agent", Input: json.RawMessage(`{"task":"t2"}`)},
-					{Type: "tool_use", ID: "a3", Name: "agent", Input: json.RawMessage(`{"task":"t3"}`)},
+					{Type: "tool_use", ID: "a1", Name: "agent", Input: json.RawMessage(`{"task":"t1","mode":"explore"}`)},
+					{Type: "tool_use", ID: "a2", Name: "agent", Input: json.RawMessage(`{"task":"t2","mode":"explore"}`)},
+					{Type: "tool_use", ID: "a3", Name: "agent", Input: json.RawMessage(`{"task":"t3","mode":"explore"}`)},
 				},
 				tokensIn: 100, tokensOut: 50,
 			},
@@ -1034,8 +1034,8 @@ func TestRunMixedSequentialAndParallelCalls(t *testing.T) {
 				text: "",
 				toolCalls: []types.ContentBlock{
 					{Type: "tool_use", ID: "bash_1", Name: "bash", Input: json.RawMessage(`{}`)},
-					{Type: "tool_use", ID: "agent_1", Name: "agent", Input: json.RawMessage(`{"task":"t1"}`)},
-					{Type: "tool_use", ID: "agent_2", Name: "agent", Input: json.RawMessage(`{"task":"t2"}`)},
+					{Type: "tool_use", ID: "agent_1", Name: "agent", Input: json.RawMessage(`{"task":"t1","mode":"explore"}`)},
+					{Type: "tool_use", ID: "agent_2", Name: "agent", Input: json.RawMessage(`{"task":"t2","mode":"explore"}`)},
 				},
 				tokensIn: 100, tokensOut: 50,
 			},
@@ -1078,8 +1078,8 @@ func TestRunParallelAgentCancellation(t *testing.T) {
 			{
 				text: "",
 				toolCalls: []types.ContentBlock{
-					{Type: "tool_use", ID: "a1", Name: "agent", Input: json.RawMessage(`{"task":"t1"}`)},
-					{Type: "tool_use", ID: "a2", Name: "agent", Input: json.RawMessage(`{"task":"t2"}`)},
+					{Type: "tool_use", ID: "a1", Name: "agent", Input: json.RawMessage(`{"task":"t1","mode":"explore"}`)},
+					{Type: "tool_use", ID: "a2", Name: "agent", Input: json.RawMessage(`{"task":"t2","mode":"explore"}`)},
 				},
 				tokensIn: 100, tokensOut: 50,
 			},
@@ -1138,8 +1138,8 @@ func TestRunParallelAgentEventIDs(t *testing.T) {
 			{
 				text: "",
 				toolCalls: []types.ContentBlock{
-					{Type: "tool_use", ID: "a1", Name: "agent", Input: json.RawMessage(`{"task":"t1"}`)},
-					{Type: "tool_use", ID: "a2", Name: "agent", Input: json.RawMessage(`{"task":"t2"}`)},
+					{Type: "tool_use", ID: "a1", Name: "agent", Input: json.RawMessage(`{"task":"t1","mode":"explore"}`)},
+					{Type: "tool_use", ID: "a2", Name: "agent", Input: json.RawMessage(`{"task":"t2","mode":"explore"}`)},
 				},
 				tokensIn: 100, tokensOut: 50,
 			},
@@ -1248,8 +1248,8 @@ func TestSessionAgentCallsTracked(t *testing.T) {
 			{
 				text: "",
 				toolCalls: []types.ContentBlock{
-					{Type: "tool_use", ID: "a1", Name: "agent", Input: json.RawMessage(`{"task":"t1"}`)},
-					{Type: "tool_use", ID: "a2", Name: "agent", Input: json.RawMessage(`{"task":"t2"}`)},
+					{Type: "tool_use", ID: "a1", Name: "agent", Input: json.RawMessage(`{"task":"t1","mode":"explore"}`)},
+					{Type: "tool_use", ID: "a2", Name: "agent", Input: json.RawMessage(`{"task":"t2","mode":"explore"}`)},
 				},
 				tokensIn: 100, tokensOut: 50,
 			},
@@ -1387,7 +1387,7 @@ func TestSubAgentManyEventsNoDeadlock(t *testing.T) {
 	var execErr error
 	go func() {
 		defer close(done)
-		result, execErr = tool.Execute(context.Background(), json.RawMessage(`{"task":"generate events"}`))
+		result, execErr = tool.Execute(context.Background(), json.RawMessage(`{"task":"generate events","mode":"explore"}`))
 	}()
 
 	// Do NOT drain parent events — test that forward() drops rather than blocks.
@@ -1436,7 +1436,7 @@ func TestExplorationFlowOutlineThenReadThenAgent(t *testing.T) {
 			{
 				text: "I'll delegate deep analysis.",
 				toolCalls: []types.ContentBlock{
-					{Type: "tool_use", ID: "c3", Name: "agent", Input: json.RawMessage(`{"task":"analyze error handling"}`)},
+					{Type: "tool_use", ID: "c3", Name: "agent", Input: json.RawMessage(`{"task":"analyze error handling","mode":"explore"}`)},
 				},
 				tokensIn: 400, tokensOut: 50,
 			},
@@ -1520,8 +1520,8 @@ func TestExplorationFlowParallelSubAgents(t *testing.T) {
 			{
 				text: "Spawning parallel investigations.",
 				toolCalls: []types.ContentBlock{
-					{Type: "tool_use", ID: "a1", Name: "agent", Input: json.RawMessage(`{"task":"analyze module A"}`)},
-					{Type: "tool_use", ID: "a2", Name: "agent", Input: json.RawMessage(`{"task":"analyze module B"}`)},
+					{Type: "tool_use", ID: "a1", Name: "agent", Input: json.RawMessage(`{"task":"analyze module A","mode":"explore"}`)},
+					{Type: "tool_use", ID: "a2", Name: "agent", Input: json.RawMessage(`{"task":"analyze module B","mode":"explore"}`)},
 				},
 				tokensIn: 200, tokensOut: 50,
 			},
@@ -1832,8 +1832,8 @@ func TestResilienceNoDeadlockOnMultipleFailures(t *testing.T) {
 			{
 				text: "",
 				toolCalls: []types.ContentBlock{
-					{Type: "tool_use", ID: "a1", Name: "agent", Input: json.RawMessage(`{"task":"t1"}`)},
-					{Type: "tool_use", ID: "a2", Name: "agent", Input: json.RawMessage(`{"task":"t2"}`)},
+					{Type: "tool_use", ID: "a1", Name: "agent", Input: json.RawMessage(`{"task":"t1","mode":"explore"}`)},
+					{Type: "tool_use", ID: "a2", Name: "agent", Input: json.RawMessage(`{"task":"t2","mode":"explore"}`)},
 				},
 				tokensIn: 100, tokensOut: 50,
 			},
