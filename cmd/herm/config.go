@@ -194,7 +194,7 @@ func mergeConfigs(global Config, project ProjectConfig) Config {
 	return merged
 }
 
-const hermImageTag = "0.2"
+const hermImageTag = "0.3"
 const defaultContainerImage = "aduermael/herm:" + hermImageTag
 
 func defaultConfig() Config {

@@ -281,7 +281,7 @@ Replace the grep-based outline tool with a dedicated compiled binary, matching t
   - Nesting shown via indentation (interface methods indented under the interface)
   This gives precise output that grep-based patterns can't match. For a 700-line Go file, the AST approach produces ~30-50 accurate signature lines vs grep's ~40-80 noisier lines.
 
-- [ ] 8c: **Add to Dockerfile and bump container version** — Add `RUN cd /build/tools/outline && go build -o /out/outline .` to the builder stage. Copy the binary alongside edit-file and write-file. Bump `hermImageTag` in `config.go` from `"0.2"` to `"0.3"`.
+- [x] 8c: **Add to Dockerfile and bump container version** — Add `RUN cd /build/tools/outline && go build -o /out/outline .` to the builder stage. Copy the binary alongside edit-file and write-file. Bump `hermImageTag` in `config.go` from `"0.2"` to `"0.3"`.
 
 - [ ] 8d: **Update OutlineTool to call binary** — Replace the grep-based `Execute()` in `filetools.go` with `t.container.ExecWithStdin(nil, 15, "outline", filePath)`. The file path is a direct CLI argument — no shell, no quoting, no escaping. Remove the `outlinePatterns` map and grep command construction. The tool's input parsing (JSON from LLM) stays on the host side; only the file path is sent to the container. Falls back to old grep approach if the binary is missing (exit code 127) for backward compatibility with `0.2` images.
 
