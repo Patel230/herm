@@ -1758,12 +1758,15 @@ type App struct {
 	streamingText    string
 	pendingToolCall  string
 	needsTextSep     bool
-	sessionCostUSD      float64
-	lastInputTokens    int // input tokens from most recent API call (context usage)
-	sessionInputTokens  int // cumulative input tokens this session
-	sessionOutputTokens int // cumulative output tokens this session
-	sessionCacheRead    int // cumulative cache read tokens this session
-	sessionLLMCalls     int // number of LLM API calls this session
+	sessionCostUSD         float64
+	lastInputTokens        int // input tokens from most recent API call (context usage)
+	sessionInputTokens     int // cumulative input tokens this session (all agents)
+	sessionOutputTokens    int // cumulative output tokens this session (all agents)
+	sessionCacheRead       int // cumulative cache read tokens this session
+	sessionLLMCalls        int // number of LLM API calls this session (all agents)
+	mainAgentInputTokens   int // input tokens from main agent only
+	mainAgentOutputTokens  int // output tokens from main agent only
+	mainAgentLLMCalls      int // LLM calls from main agent only
 	sessionToolResults  int            // count of tool results this session
 	sessionToolBytes    int            // cumulative tool result bytes this session
 	sessionToolStats    map[string][2]int // tool name → [count, bytes]
@@ -2013,8 +2016,8 @@ func (a *App) buildBlockRows() []string {
 	} else if a.agentElapsed > 0 {
 		elapsed := fmt.Sprintf("\033[2m%.2fs ↑%s ↓%s\033[0m",
 			a.agentElapsed.Seconds(),
-			formatTokenCount(a.sessionInputTokens),
-			formatTokenCount(a.sessionOutputTokens))
+			formatTokenCount(a.mainAgentInputTokens),
+			formatTokenCount(a.mainAgentOutputTokens))
 		rows = append(rows, wrapString(elapsed, 0, a.width)...)
 		rows = append(rows, "")
 	}
@@ -3665,6 +3668,9 @@ func (a *App) handleCommand(input string) {
 		a.sessionCacheRead = 0
 		a.sessionCostUSD = 0
 		a.sessionLLMCalls = 0
+		a.mainAgentInputTokens = 0
+		a.mainAgentOutputTokens = 0
+		a.mainAgentLLMCalls = 0
 		a.sessionToolResults = 0
 		a.sessionToolBytes = 0
 		a.sessionToolStats = nil
@@ -3857,9 +3863,12 @@ func (a *App) handleUsageCommand() {
 	var b strings.Builder
 
 	b.WriteString("Session Usage\n")
-	b.WriteString(fmt.Sprintf("  LLM calls:     %d\n", a.sessionLLMCalls))
-	b.WriteString(fmt.Sprintf("  Input tokens:  %s\n", formatTokenCount(a.sessionInputTokens)))
-	b.WriteString(fmt.Sprintf("  Output tokens: %s\n", formatTokenCount(a.sessionOutputTokens)))
+	b.WriteString(fmt.Sprintf("  LLM calls:     %d (main: %d, sub-agents: %d)\n",
+		a.sessionLLMCalls, a.mainAgentLLMCalls, a.sessionLLMCalls-a.mainAgentLLMCalls))
+	b.WriteString(fmt.Sprintf("  Input tokens:  %s (main: %s)\n",
+		formatTokenCount(a.sessionInputTokens), formatTokenCount(a.mainAgentInputTokens)))
+	b.WriteString(fmt.Sprintf("  Output tokens: %s (main: %s)\n",
+		formatTokenCount(a.sessionOutputTokens), formatTokenCount(a.mainAgentOutputTokens)))
 	if a.sessionCacheRead > 0 {
 		b.WriteString(fmt.Sprintf("  Cache read:    %s\n", formatTokenCount(a.sessionCacheRead)))
 	}
@@ -4765,8 +4774,8 @@ func (a *App) startAgent(userMessage string) {
 	a.agentElapsed = 0
 	a.approvalPausedTotal = 0
 	a.agentTextIndex = 0
-	a.agentDisplayInTok = float64(a.sessionInputTokens)
-	a.agentDisplayOutTok = float64(a.sessionOutputTokens)
+	a.agentDisplayInTok = float64(a.mainAgentInputTokens)
+	a.agentDisplayOutTok = float64(a.mainAgentOutputTokens)
 	if a.agentTicker != nil {
 		a.agentTicker.Stop()
 	}
@@ -4871,6 +4880,12 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 			a.sessionOutputTokens += event.Usage.OutputTokens
 			a.sessionCacheRead += event.Usage.CacheReadInputTokens
 			a.sessionLLMCalls++
+			// Track main-agent tokens separately (sub-agent events have a different AgentID).
+			if a.agent != nil && event.AgentID == a.agent.ID() {
+				a.mainAgentInputTokens += event.Usage.InputTokens
+				a.mainAgentOutputTokens += event.Usage.OutputTokens
+				a.mainAgentLLMCalls++
+			}
 			a.renderInput()
 		}
 
@@ -4906,10 +4921,16 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 			a.agentTicker = nil
 		}
 		a.agentElapsed = a.agentElapsedTime()
-		a.agentDisplayInTok = float64(a.sessionInputTokens)
-		a.agentDisplayOutTok = float64(a.sessionOutputTokens)
+		a.agentDisplayInTok = float64(a.mainAgentInputTokens)
+		a.agentDisplayOutTok = float64(a.mainAgentOutputTokens)
 		if event.NodeID != "" {
 			a.agentNodeID = event.NodeID
+		}
+		// Clean up completed sub-agent display entries.
+		for id, sa := range a.subAgents {
+			if sa.done {
+				delete(a.subAgents, id)
+			}
 		}
 		if a.streamingText != "" {
 			a.messages = append(a.messages, chatMessage{
@@ -5011,9 +5032,9 @@ func (a *App) handleResult(result any) {
 		if a.agentRunning {
 			elapsed := a.agentElapsedTime()
 			a.agentTextIndex = int(elapsed.Seconds()/4) % len(funnyTexts)
-			// Lerp displayed tokens toward actual totals
-			a.agentDisplayInTok += (float64(a.sessionInputTokens) - a.agentDisplayInTok) * 0.15
-			a.agentDisplayOutTok += (float64(a.sessionOutputTokens) - a.agentDisplayOutTok) * 0.15
+			// Lerp displayed tokens toward main-agent totals.
+			a.agentDisplayInTok += (float64(a.mainAgentInputTokens) - a.agentDisplayInTok) * 0.15
+			a.agentDisplayOutTok += (float64(a.mainAgentOutputTokens) - a.agentDisplayOutTok) * 0.15
 		}
 		if a.awaitingApproval {
 			a.renderInput() // Only redraw input area; leave block rows (tool timer) frozen.
