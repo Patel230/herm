@@ -401,38 +401,50 @@ func TestSubAgentToolResultContainsAgentID(t *testing.T) {
 
 func TestFormatSubAgentResult(t *testing.T) {
 	// With output path, no tokens, no model summary
-	got := formatSubAgentResult("abc123", "/tmp/.herm/agents/abc123.md", "hello world", false, 0, 0)
-	want := "[agent_id: abc123] [output: /tmp/.herm/agents/abc123.md]\n\nhello world"
+	got := formatSubAgentResult("abc123", "/tmp/.herm/agents/abc123.md", "hello world", false, 0, 0, 1, 15, nil)
+	want := "[agent_id: abc123] [output: /tmp/.herm/agents/abc123.md] [turns: 1/15]\n\nhello world"
 	if got != want {
-		t.Errorf("with path, no tokens: got %q, want %q", got, want)
+		t.Errorf("with path, no tokens:\n got %q\nwant %q", got, want)
 	}
 
 	// Without output path (write failed)
-	got2 := formatSubAgentResult("abc123", "", "hello world", false, 0, 0)
-	want2 := "[agent_id: abc123]\n\nhello world"
+	got2 := formatSubAgentResult("abc123", "", "hello world", false, 0, 0, 0, 15, nil)
+	want2 := "[agent_id: abc123] [turns: 0/15]\n\nhello world"
 	if got2 != want2 {
-		t.Errorf("without path: got %q, want %q", got2, want2)
+		t.Errorf("without path:\n got %q\nwant %q", got2, want2)
 	}
 
 	// With output path and token usage
-	got3 := formatSubAgentResult("abc123", "/tmp/out.md", "result", false, 5000, 1200)
-	want3 := "[agent_id: abc123] [output: /tmp/out.md] [tokens: input=5000 output=1200]\n\nresult"
+	got3 := formatSubAgentResult("abc123", "/tmp/out.md", "result", false, 5000, 1200, 3, 15, nil)
+	want3 := "[agent_id: abc123] [output: /tmp/out.md] [tokens: input=5000 output=1200] [turns: 3/15]\n\nresult"
 	if got3 != want3 {
-		t.Errorf("with tokens: got %q, want %q", got3, want3)
+		t.Errorf("with tokens:\n got %q\nwant %q", got3, want3)
 	}
 
 	// Without output path but with tokens
-	got4 := formatSubAgentResult("abc123", "", "result", false, 100, 50)
-	want4 := "[agent_id: abc123] [tokens: input=100 output=50]\n\nresult"
+	got4 := formatSubAgentResult("abc123", "", "result", false, 100, 50, 2, 15, nil)
+	want4 := "[agent_id: abc123] [tokens: input=100 output=50] [turns: 2/15]\n\nresult"
 	if got4 != want4 {
-		t.Errorf("tokens without path: got %q, want %q", got4, want4)
+		t.Errorf("tokens without path:\n got %q\nwant %q", got4, want4)
 	}
 
 	// With model summary indicator
-	got5 := formatSubAgentResult("abc123", "/tmp/out.md", "- finding 1\n- finding 2", true, 1000, 200)
-	want5 := "[agent_id: abc123] [output: /tmp/out.md] [tokens: input=1000 output=200] [summary: model]\n\n- finding 1\n- finding 2"
+	got5 := formatSubAgentResult("abc123", "/tmp/out.md", "- finding 1\n- finding 2", true, 1000, 200, 5, 15, nil)
+	want5 := "[agent_id: abc123] [output: /tmp/out.md] [tokens: input=1000 output=200] [turns: 5/15] [summary: model]\n\n- finding 1\n- finding 2"
 	if got5 != want5 {
-		t.Errorf("model summary: got %q, want %q", got5, want5)
+		t.Errorf("model summary:\n got %q\nwant %q", got5, want5)
+	}
+
+	// With errors
+	got6 := formatSubAgentResult("abc123", "/tmp/out.md", "partial result", false, 100, 50, 2, 15, []string{"turn 1: connection reset", "during tool \"bash\" (turn 2): timeout"})
+	if !strings.Contains(got6, "[errors:") {
+		t.Errorf("result with errors should contain [errors:], got: %q", got6)
+	}
+	if !strings.Contains(got6, "connection reset") {
+		t.Errorf("result should contain error text, got: %q", got6)
+	}
+	if !strings.Contains(got6, "[turns: 2/15]") {
+		t.Errorf("result should contain turns, got: %q", got6)
 	}
 }
 
@@ -722,5 +734,89 @@ func TestSummarizeWithModelFallbackOnShortOutput(t *testing.T) {
 	}
 	if !strings.Contains(result, "brief result") {
 		t.Errorf("result should contain original output, got: %q", result)
+	}
+}
+
+// --- Phase 5: Graceful sub-agent error reporting tests ---
+
+func TestSubAgentResultIncludesTurnCount(t *testing.T) {
+	client := newTestClient("turn count output")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"work"}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	// Result should always contain [turns: N/M].
+	if !strings.Contains(result, "[turns:") {
+		t.Errorf("result should contain [turns:], got: %q", result)
+	}
+	// The mock makes no tool calls, so turns should be 0/10.
+	if !strings.Contains(result, "[turns: 0/10]") {
+		t.Errorf("result should contain [turns: 0/10], got: %q", result)
+	}
+}
+
+func TestSubAgentResultMaxTurnsShown(t *testing.T) {
+	// Verify that maxTurns is reflected in the turns display.
+	client := newTestClient("output")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 5, 3, 0, tmpDir, "", "alpine:latest", nil)
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"quick task"}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	if !strings.Contains(result, "[turns: 0/5]") {
+		t.Errorf("result should show maxTurns=5, got: %q", result)
+	}
+}
+
+func TestFormatSubAgentResultWithErrors(t *testing.T) {
+	// Errors should appear in the header.
+	errors := []string{"turn 1: connection reset", `during tool "bash" (turn 2): timeout`}
+	got := formatSubAgentResult("abc", "/tmp/out.md", "partial", false, 100, 50, 2, 15, errors)
+
+	if !strings.Contains(got, "[errors: turn 1: connection reset; during tool") {
+		t.Errorf("result should contain joined errors, got: %q", got)
+	}
+	if !strings.Contains(got, "[turns: 2/15]") {
+		t.Errorf("result should contain turns, got: %q", got)
+	}
+}
+
+func TestFormatSubAgentResultNoOutputWithErrors(t *testing.T) {
+	// When the sub-agent produced no text but had errors, buildResult should
+	// use the errors as the result body instead of "(sub-agent produced no output)".
+	client := newTestClient("") // empty output
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
+
+	// We can't easily inject errors into the event stream via mock, so test
+	// buildResult directly.
+	result := tool.buildResult(context.Background(), "test-id", nil, []string{"API error: 500"}, 100, 50, 1)
+	if strings.Contains(result, "sub-agent produced no output") {
+		t.Errorf("should not show generic no-output message when errors are present, got: %q", result)
+	}
+	if !strings.Contains(result, "Sub-agent encountered errors") {
+		t.Errorf("should include error context, got: %q", result)
+	}
+	if !strings.Contains(result, "API error: 500") {
+		t.Errorf("should include error text, got: %q", result)
+	}
+}
+
+func TestFormatSubAgentResultNoOutputNoErrors(t *testing.T) {
+	// No output and no errors — should show generic message.
+	client := newTestClient("")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
+
+	result := tool.buildResult(context.Background(), "test-id", nil, nil, 0, 0, 0)
+	if !strings.Contains(result, "sub-agent produced no output") {
+		t.Errorf("should show generic no-output, got: %q", result)
 	}
 }

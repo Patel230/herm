@@ -185,13 +185,13 @@ When a sub-agent fails, tell the main agent why so it can adapt.
 - Tool result on failure: `"(sub-agent produced no output)"` with no explanation
 - Main agent has no way to know if the failure was: context limit, API error, tool failure, or empty output
 
-- [ ] 5a: **Collect sub-agent errors** — In the event loop in `Execute()`, accumulate error messages from `EventError` events into an `errors []string` slice. Include error text and any available context (which tool was running, how many turns completed).
+- [x] 5a: **Collect sub-agent errors** — In the event loop in `Execute()`, accumulate error messages from `EventError` events into an `errors []string` slice. Include error text and any available context (which tool was running, how many turns completed).
 
-- [ ] 5b: **Include error context in tool result** — When the sub-agent finishes with errors, append an `[errors]` section to the tool result: `[errors: <error messages>]`. When the sub-agent produced no output AND had errors, return the errors as the result instead of the generic "(sub-agent produced no output)".
+- [x] 5b: **Include error context in tool result** — When the sub-agent finishes with errors, append an `[errors]` section to the tool result: `[errors: <error messages>]`. When the sub-agent produced no output AND had errors, return the errors as the result instead of the generic "(sub-agent produced no output)".
 
-- [ ] 5c: **Add turn count to tool result** — Always include `[turns: N/M]` in the result (completed turns / max turns). If the sub-agent hit maxTurns, the main agent knows it was cut off and can resume it or spawn a new one with a narrower task.
+- [x] 5c: **Add turn count to tool result** — Always include `[turns: N/M]` in the result (completed turns / max turns). If the sub-agent hit maxTurns, the main agent knows it was cut off and can resume it or spawn a new one with a narrower task.
 
-- [ ] 5d: **Test error reporting** — Test: sub-agent with tool error shows error in result, sub-agent hitting maxTurns shows turns count, sub-agent with API failure shows error context, main agent receives actionable information.
+- [x] 5d: **Test error reporting** — Test: sub-agent with tool error shows error in result, sub-agent hitting maxTurns shows turns count, sub-agent with API failure shows error context, main agent receives actionable information.
 
 ---
 
