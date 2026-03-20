@@ -431,7 +431,7 @@ func writeRows(buf *strings.Builder, rows []string, from int) {
 // Shell body uses two warm sand tones, eyes are black,
 // and the interior (face area) has a grey-blue background.
 // HERM acronym rendered as 2-row block art with cyan→pink gradient.
-func buildLogo() []string {
+func buildLogo(width int) []string {
 	shA := "\033[38;5;180m" // shell body (warm sand)
 	shB := "\033[38;5;223m" // shell highlight (lighter peach)
 	ib := "\033[48;5;60m"   // interior bg (grey-blue)
@@ -444,11 +444,20 @@ func buildLogo() []string {
 	cE := "\033[1;38;2;85;140;230m"
 	cR := "\033[1;38;2;170;68;200m"
 	cM := "\033[1;38;2;255;20;147m"
+	prefix := " " + shA + "▀" + shB + "██" + shA + "█" + tb + shA + "▌▌▌" + r + shA + "█" + r + "  " + d
+	tagline := "Helpful Encapsulated Reasoning Machine"
+	prefixWidth := visibleWidth(prefix)
+	available := width - prefixWidth
+	if available < len(tagline) && available > 1 {
+		tagline = tagline[:available-1] + "…"
+	} else if available <= 1 {
+		tagline = ""
+	}
 	return []string{
 		"",
 		"    " + shA + "▄" + shB + "███" + shA + "▄" + r + "  " + cH + "█ █" + r + " " + cE + "█▀▀" + r + " " + cR + "█▀█" + r + " " + cM + "█▄ ▄█" + r,
 		"  " + shA + "▄██" + ib + ey + "• •" + r + shA + "█" + r + "  " + cH + "█▀█" + r + " " + cE + "██▄" + r + " " + cR + "█▀▄" + r + " " + cM + "█ ▀ █" + r,
-		" " + shA + "▀" + shB + "██" + shA + "█" + tb + shA + "▌▌▌" + r + shA + "█" + r + "  " + d + "Helpful Encapsulated Reasoning Machine" + r,
+		prefix + tagline + r,
 		"",
 	}
 }
@@ -1890,7 +1899,7 @@ func (a *App) agentElapsedTime() time.Duration {
 
 func (a *App) buildBlockRows() []string {
 	var rows []string
-	for _, line := range buildLogo() {
+	for _, line := range buildLogo(a.width) {
 		rows = append(rows, wrapString(line, 0, a.width)...)
 	}
 	inCodeBlock := false
