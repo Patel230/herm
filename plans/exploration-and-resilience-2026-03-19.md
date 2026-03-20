@@ -168,7 +168,7 @@ Replace the naive first-500-bytes summary with a model-generated summary that ca
 
 - [x] 4c: **Add summary quality indicator** — Append `[summary: model]` or `[summary: truncated]` to the tool result so the main agent knows whether it got an intelligent summary or a fallback. If truncated, the agent should read the full file.
 
-- [ ] 4d: **Test model summarization** — Test: model summary is concise and structured, fallback works when model call fails, very short outputs skip summarization (not worth the call), summary indicator is present.
+- [x] 4d: **Test model summarization** — Test: model summary is concise and structured, fallback works when model call fails, very short outputs skip summarization (not worth the call), summary indicator is present.
 
 **Open questions:**
 - Should the summarization happen synchronously (adds ~1-2s latency per sub-agent completion) or asynchronously? Synchronous is simpler and the latency is acceptable since the parent agent is already waiting.

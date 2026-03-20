@@ -617,3 +617,110 @@ func TestSubAgentResultIncludesTokenUsage(t *testing.T) {
 		t.Errorf("result should contain output=50, got: %q", result)
 	}
 }
+
+// --- Phase 4: Model-based summarization tests ---
+
+func TestSummarizeWithModelShortOutput(t *testing.T) {
+	// Short output (under 500 bytes) should be returned as-is without calling the model.
+	tool := &SubAgentTool{explorationModel: "cheap-model"}
+	summary, usedModel := tool.summarizeWithModel(context.Background(), "short output")
+	if usedModel {
+		t.Error("short output should not use model summarization")
+	}
+	if summary != "short output" {
+		t.Errorf("summary = %q, want %q", summary, "short output")
+	}
+}
+
+func TestSummarizeWithModelNoExplorationModel(t *testing.T) {
+	// No exploration model — falls back to truncation.
+	longOutput := strings.Repeat("This is a detailed line of output.\n", 50)
+	tool := &SubAgentTool{explorationModel: "", client: nil}
+	summary, usedModel := tool.summarizeWithModel(context.Background(), longOutput)
+	if usedModel {
+		t.Error("should fall back to truncation without exploration model")
+	}
+	if !strings.Contains(summary, "[... full output in file above]") {
+		t.Error("fallback should use truncation summary")
+	}
+}
+
+func TestSummarizeWithModelSuccess(t *testing.T) {
+	// Mock provider returns a structured summary.
+	client := newTestClient("- finding 1: the code has 3 modules\n- finding 2: tests pass")
+	longOutput := strings.Repeat("This is a detailed line of output.\n", 50)
+
+	tool := &SubAgentTool{
+		explorationModel: "cheap-model",
+		client:           client,
+	}
+	summary, usedModel := tool.summarizeWithModel(context.Background(), longOutput)
+	if !usedModel {
+		t.Error("should have used model summarization")
+	}
+	if !strings.Contains(summary, "finding 1") {
+		t.Errorf("summary should contain model output, got: %q", summary)
+	}
+}
+
+func TestSummarizeWithModelTruncatesLargeInput(t *testing.T) {
+	// Output larger than 4000 chars should be truncated before sending to model.
+	// We verify indirectly: the call succeeds and returns a model summary.
+	client := newTestClient("- summarized large input")
+	largeOutput := strings.Repeat("x", 6000)
+
+	tool := &SubAgentTool{
+		explorationModel: "cheap-model",
+		client:           client,
+	}
+	summary, usedModel := tool.summarizeWithModel(context.Background(), largeOutput)
+	if !usedModel {
+		t.Error("should have used model for large input")
+	}
+	if !strings.Contains(summary, "summarized large input") {
+		t.Errorf("summary = %q, want model output", summary)
+	}
+}
+
+func TestSummarizeWithModelExecuteIntegration(t *testing.T) {
+	// When explorationModel is set and output is large, Execute() should use
+	// model summarization and include [summary: model] indicator.
+	largeOutput := strings.Repeat("This is a detailed line.\n", 50)
+	// First response: sub-agent's LLM reply (the large output).
+	// Second response: summarization model's response.
+	client := newTestClient(largeOutput, "- bullet point summary")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", "cheap-model", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"explore codebase"}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	if !strings.Contains(result, "[summary: model]") {
+		t.Errorf("result should contain [summary: model], got: %q", result)
+	}
+	if !strings.Contains(result, "bullet point summary") {
+		t.Errorf("result should contain model summary, got: %q", result)
+	}
+}
+
+func TestSummarizeWithModelFallbackOnShortOutput(t *testing.T) {
+	// When output is short, Execute() should NOT call the model and should
+	// NOT include a summary indicator.
+	client := newTestClient("brief result")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", "cheap-model", 10, 3, 0, tmpDir, "", "alpine:latest", nil)
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"quick check"}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	if strings.Contains(result, "[summary:") {
+		t.Errorf("short output should not have summary indicator, got: %q", result)
+	}
+	if !strings.Contains(result, "brief result") {
+		t.Errorf("result should contain original output, got: %q", result)
+	}
+}
