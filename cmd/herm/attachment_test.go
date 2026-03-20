@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -120,5 +122,102 @@ func TestExpandAttachments_TextOnly(t *testing.T) {
 	got := expandAttachments("just text", store)
 	if got != "just text" {
 		t.Fatalf("expected passthrough, got %q", got)
+	}
+}
+
+// ─── isFilePath tests ───
+
+func TestIsFilePath_DoubleQuoted(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "test.jpeg")
+	if err := os.WriteFile(tmp, []byte("img"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a terminal that wraps the dropped path in double quotes.
+	quoted := `"` + tmp + `"`
+	resolved, ok := isFilePath(quoted)
+	if !ok {
+		t.Fatalf("expected isFilePath to accept double-quoted path %q", quoted)
+	}
+	if resolved != tmp {
+		t.Fatalf("expected resolved=%q, got %q", tmp, resolved)
+	}
+}
+
+func TestIsFilePath_SingleQuoted(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "test.png")
+	if err := os.WriteFile(tmp, []byte("img"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a terminal that wraps the dropped path in single quotes.
+	quoted := "'" + tmp + "'"
+	resolved, ok := isFilePath(quoted)
+	if !ok {
+		t.Fatalf("expected isFilePath to accept single-quoted path %q", quoted)
+	}
+	if resolved != tmp {
+		t.Fatalf("expected resolved=%q, got %q", tmp, resolved)
+	}
+}
+
+func TestIsFilePath_Unquoted(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "test.pdf")
+	if err := os.WriteFile(tmp, []byte("pdf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resolved, ok := isFilePath(tmp)
+	if !ok {
+		t.Fatalf("expected isFilePath to accept unquoted path %q", tmp)
+	}
+	if resolved != tmp {
+		t.Fatalf("expected resolved=%q, got %q", tmp, resolved)
+	}
+}
+
+func TestIsFilePath_NonExistent(t *testing.T) {
+	_, ok := isFilePath("/no/such/file.txt")
+	if ok {
+		t.Fatal("expected isFilePath to reject non-existent path")
+	}
+}
+
+func TestIsFilePath_RelativePath(t *testing.T) {
+	_, ok := isFilePath("relative/path.txt")
+	if ok {
+		t.Fatal("expected isFilePath to reject relative path")
+	}
+}
+
+func TestIsFilePath_BackslashSpaces(t *testing.T) {
+	dir := t.TempDir()
+	tmp := filepath.Join(dir, "my file.txt")
+	if err := os.WriteFile(tmp, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate shell-escaped spaces from drag-drop.
+	escaped := filepath.Join(dir, "my\\ file.txt")
+	resolved, ok := isFilePath(escaped)
+	if !ok {
+		t.Fatalf("expected isFilePath to accept backslash-space path %q", escaped)
+	}
+	if resolved != tmp {
+		t.Fatalf("expected resolved=%q, got %q", tmp, resolved)
+	}
+}
+
+func TestIsFilePath_DoubleQuotedMultiline(t *testing.T) {
+	// When multiple quoted paths are pasted, each line is passed to
+	// isFilePath individually after trimming. Verify that a single
+	// double-quoted line resolves correctly (the caller splits on \n).
+	tmp := filepath.Join(t.TempDir(), "photo.jpg")
+	if err := os.WriteFile(tmp, []byte("jpg"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	quoted := `"` + tmp + `"`
+	resolved, ok := isFilePath(quoted)
+	if !ok {
+		t.Fatalf("expected isFilePath to accept %q", quoted)
+	}
+	if resolved != tmp {
+		t.Fatalf("expected resolved=%q, got %q", tmp, resolved)
 	}
 }

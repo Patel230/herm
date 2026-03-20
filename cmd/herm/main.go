@@ -588,9 +588,18 @@ func expandPastes(s string, store map[int]string) string {
 // ─── Attachment helpers ───
 
 // isFilePath reports whether s looks like an absolute file path that exists on disk.
-// It handles shell-escaped paths (backslash-spaces from terminal drag-drop) and
-// tilde-prefixed home-dir paths.
+// It handles surrounding quotes (some terminals wrap dropped paths in double or
+// single quotes), shell-escaped paths (backslash-spaces from terminal drag-drop),
+// and tilde-prefixed home-dir paths.
 func isFilePath(s string) (string, bool) {
+	// Strip surrounding double-quotes (some terminals wrap dropped paths in quotes).
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		s = s[1 : len(s)-1]
+	}
+	// Strip surrounding single-quotes (some terminals wrap dropped paths in single quotes).
+	if len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'' {
+		s = s[1 : len(s)-1]
+	}
 	// Unescape backslash-spaces (common in terminal drag-drop).
 	p := strings.ReplaceAll(s, "\\ ", " ")
 	// Expand tilde.
