@@ -4964,9 +4964,19 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 		sa := a.getOrCreateSubAgent(event.AgentID)
 		if event.Text == "done" {
 			sa.done = true
+			completionMsg := fmt.Sprintf("[agent %s] completed: %s", shortID(event.AgentID), sa.task)
+			if event.Usage != nil && (event.Usage.InputTokens > 0 || event.Usage.OutputTokens > 0) {
+				completionMsg += fmt.Sprintf(" (↑%s ↓%s",
+					formatTokenCount(event.Usage.InputTokens),
+					formatTokenCount(event.Usage.OutputTokens))
+				if event.Task != "" {
+					completionMsg += ", " + event.Task
+				}
+				completionMsg += ")"
+			}
 			a.messages = append(a.messages, chatMessage{
 				kind:    msgInfo,
-				content: fmt.Sprintf("[agent %s] completed: %s", shortID(event.AgentID), sa.task),
+				content: completionMsg,
 			})
 		} else {
 			sa.status = event.Text

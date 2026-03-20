@@ -206,7 +206,16 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 			// Forward usage events so sub-agent costs are tracked.
 			t.forward(event)
 		case EventDone:
-			t.forward(AgentEvent{Type: EventSubAgentStatus, AgentID: agentID, Text: "done"})
+			t.forward(AgentEvent{
+				Type:    EventSubAgentStatus,
+				AgentID: agentID,
+				Text:    "done",
+				Usage: &types.Usage{
+					InputTokens:  totalInputTokens,
+					OutputTokens: totalOutputTokens,
+				},
+				Task: fmt.Sprintf("turns:%d/%d", turns, t.maxTurns),
+			})
 			// Save the nodeID for potential resume.
 			if event.NodeID != "" {
 				t.saveNodeID(agentID, event.NodeID)
@@ -228,7 +237,16 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 
 	// Channel closed without EventDone (e.g., EventDone was dropped, or agent
 	// exited without emitting it). Handle gracefully.
-	t.forward(AgentEvent{Type: EventSubAgentStatus, AgentID: agentID, Text: "done"})
+	t.forward(AgentEvent{
+		Type:    EventSubAgentStatus,
+		AgentID: agentID,
+		Text:    "done",
+		Usage: &types.Usage{
+			InputTokens:  totalInputTokens,
+			OutputTokens: totalOutputTokens,
+		},
+		Task: fmt.Sprintf("turns:%d/%d", turns, t.maxTurns),
+	})
 	<-done
 	result := strings.TrimSpace(strings.Join(textParts, ""))
 	if result == "" {
