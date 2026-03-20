@@ -29,8 +29,8 @@ type SubAgentTool struct {
 	client           *langdag.Client
 	tools            []Tool
 	serverTools      []types.ToolDefinition
-	model            string
-	explorationModel string // cheap model for summarization; empty = use truncation fallback
+	mainModel        string // full orchestrator model for "implement" mode
+	explorationModel string // cheap model for "explore" mode and summarization; empty = use truncation fallback
 	maxTurns         int
 	maxDepth         int    // maximum nesting depth from this level
 	currentDepth     int    // current nesting depth (0 = spawned by main agent)
@@ -44,7 +44,7 @@ type SubAgentTool struct {
 	agentNodes map[string]string // agentID → last nodeID (for resume)
 }
 
-func NewSubAgentTool(client *langdag.Client, tools []Tool, serverTools []types.ToolDefinition, model string, explorationModel string, maxTurns int, maxDepth int, currentDepth int, workDir string, personality string, containerImage string, snapshot *projectSnapshot) *SubAgentTool {
+func NewSubAgentTool(client *langdag.Client, tools []Tool, serverTools []types.ToolDefinition, mainModel string, explorationModel string, maxTurns int, maxDepth int, currentDepth int, workDir string, personality string, containerImage string, snapshot *projectSnapshot) *SubAgentTool {
 	if maxTurns <= 0 {
 		maxTurns = defaultSubAgentMaxTurns
 	}
@@ -55,7 +55,7 @@ func NewSubAgentTool(client *langdag.Client, tools []Tool, serverTools []types.T
 		client:           client,
 		tools:            tools,
 		serverTools:      serverTools,
-		model:            model,
+		mainModel:        mainModel,
 		explorationModel: explorationModel,
 		maxTurns:         maxTurns,
 		maxDepth:         maxDepth,
@@ -135,7 +135,7 @@ func (t *SubAgentTool) buildSubAgentTools() []Tool {
 	nextDepth := t.currentDepth + 1
 	if nextDepth < t.maxDepth {
 		// Sub-agent is allowed to spawn its own sub-agents.
-		child := NewSubAgentTool(t.client, t.tools, t.serverTools, t.model, t.explorationModel, t.maxTurns, t.maxDepth, nextDepth, t.workDir, t.personality, t.containerImage, t.snapshot)
+		child := NewSubAgentTool(t.client, t.tools, t.serverTools, t.mainModel, t.explorationModel, t.maxTurns, t.maxDepth, nextDepth, t.workDir, t.personality, t.containerImage, t.snapshot)
 		child.parentEvents = t.parentEvents
 		tools = append(tools, child)
 	}
@@ -170,7 +170,7 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 	// skills, and uses a compact role section instead of the full orchestrator framing.
 	systemPrompt := buildSubAgentSystemPrompt(subTools, t.serverTools, t.workDir, t.containerImage, t.snapshot)
 
-	agent := NewAgent(t.client, subTools, t.serverTools, systemPrompt, t.model, 0)
+	agent := NewAgent(t.client, subTools, t.serverTools, systemPrompt, t.mainModel, 0)
 	agentID := agent.ID()
 
 	// Notify the TUI that a sub-agent is starting, with its task label.
