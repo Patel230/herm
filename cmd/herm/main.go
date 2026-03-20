@@ -1846,6 +1846,10 @@ type App struct {
 	escTime time.Time
 	escHint bool
 
+	// Force-quit: tracks whether Cancel() was already issued so a
+	// subsequent double-tap CTRL-C or ESC forces an immediate exit.
+	cancelSent bool
+
 	// CLI flags
 	displaySystemPrompts bool
 }
@@ -2755,7 +2759,10 @@ func (a *App) Run() error {
 	sigWinch := make(chan os.Signal, 1)
 	signal.Notify(sigWinch, syscall.SIGWINCH)
 	resizeDb := newDebouncer(150*time.Millisecond, func() {
-		a.resultCh <- resizeMsg{}
+		select {
+		case a.resultCh <- resizeMsg{}:
+		default:
+		}
 	})
 	go func() {
 		for range sigWinch {
@@ -2842,9 +2849,15 @@ func (a *App) handleByte(ch byte, stdinCh chan byte, readByte func() (byte, bool
 	// Ctrl+C: double-tap to stop agent (when running) or exit (when idle)
 	if ch == 3 {
 		if a.agentRunning {
-			// When agent is running, double-tap Ctrl+C stops the agent
+			// When agent is running, double-tap Ctrl+C stops the agent.
+			// If Cancel was already sent and agent is still running,
+			// force-quit immediately (safety net for stuck agents).
 			if a.ctrlCHint && time.Since(a.ctrlCTime) < 2*time.Second {
+				if a.cancelSent {
+					return true // force quit — Cancel() didn't work
+				}
 				a.agent.Cancel()
+				a.cancelSent = true
 				a.ctrlCHint = false
 				a.ctrlCTime = time.Time{}
 				return false
@@ -2865,7 +2878,10 @@ func (a *App) handleByte(ch byte, stdinCh chan byte, readByte func() (byte, bool
 		ch := a.resultCh
 		go func() {
 			time.Sleep(2 * time.Second)
-			ch <- ctrlCExpiredMsg{}
+			select {
+			case ch <- ctrlCExpiredMsg{}:
+			default:
+			}
 		}()
 		return false
 	}
@@ -3006,10 +3022,13 @@ func (a *App) handlePlainEscape() {
 	if a.awaitingApproval {
 		a.handleApprovalByte('n')
 	}
-	// When agent is running, double-tap ESC to stop it
+	// When agent is running, double-tap ESC to stop it.
+	// If Cancel was already sent and agent is still running, cancel again
+	// (force the context) so the user is never truly stuck.
 	if a.agentRunning {
 		if a.escHint && time.Since(a.escTime) < 2*time.Second {
 			a.agent.Cancel()
+			a.cancelSent = true
 			a.escHint = false
 			a.escTime = time.Time{}
 			return
@@ -3020,7 +3039,10 @@ func (a *App) handlePlainEscape() {
 		ch := a.resultCh
 		go func() {
 			time.Sleep(2 * time.Second)
-			ch <- escExpiredMsg{}
+			select {
+			case ch <- escExpiredMsg{}:
+			default:
+			}
 		}()
 		return
 	}
@@ -3584,7 +3606,10 @@ func (a *App) handleApprovalByte(ch byte) {
 			a.toolTimer = time.NewTicker(100 * time.Millisecond)
 			go func(ticker *time.Ticker, ch chan any) {
 				for range ticker.C {
-					ch <- toolTimerTickMsg{}
+					select {
+					case ch <- toolTimerTickMsg{}:
+					default:
+					}
 				}
 			}(a.toolTimer, a.resultCh)
 		}
@@ -4810,7 +4835,10 @@ func (a *App) startAgent(userMessage string) {
 	a.agentTicker = time.NewTicker(50 * time.Millisecond)
 	go func(ticker *time.Ticker, ch chan any) {
 		for range ticker.C {
-			ch <- agentTickMsg{}
+			select {
+			case ch <- agentTickMsg{}:
+			default:
+			}
 		}
 	}(a.agentTicker, a.resultCh)
 
@@ -4822,11 +4850,15 @@ func (a *App) drainAgentEvents() {
 	if a.agent == nil || !a.agentRunning {
 		return
 	}
-	for {
+	// Cap drain iterations to avoid starving stdin processing.
+	// The select in the main loop will pick up remaining events next iteration.
+	const maxDrain = 50
+	for i := 0; i < maxDrain; i++ {
 		select {
 		case event, ok := <-a.agent.Events():
 			if !ok {
 				a.agentRunning = false
+				a.cancelSent = false
 				return
 			}
 			a.handleAgentEvent(event)
@@ -4872,7 +4904,11 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 		a.toolTimer = time.NewTicker(100 * time.Millisecond)
 		go func(ticker *time.Ticker, ch chan any) {
 			for range ticker.C {
-				ch <- toolTimerTickMsg{}
+				select {
+				case ch <- toolTimerTickMsg{}:
+				default:
+					// Don't block if resultCh is full — skip this tick.
+				}
 			}
 		}(a.toolTimer, a.resultCh)
 		a.render()
@@ -4944,6 +4980,7 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 	case EventDone:
 		debugLog("done: nodeID=%s streamingLen=%d", event.NodeID, len(a.streamingText))
 		a.agentRunning = false
+		a.cancelSent = false
 		if a.agentTicker != nil {
 			a.agentTicker.Stop()
 			a.agentTicker = nil
