@@ -637,22 +637,30 @@ func NewOutlineTool(container *ContainerClient) *OutlineTool {
 func (t *OutlineTool) Definition() types.ToolDefinition {
 	return types.ToolDefinition{
 		Name:        "outline",
-		Description: "Extract function/type/class signatures from a file. Returns a compact outline with line numbers — much cheaper than reading the full file. Use to understand a file's structure before deciding which sections to read in detail.",
+		Description: "Extract function/type/class signatures from one or more files. Returns a compact outline with line numbers — much cheaper than reading the full file. Use to understand file structure before deciding which sections to read in detail. Supports multi-file batching via file_paths to reduce tool calls.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
 				"file_path": {
 					"type": "string",
-					"description": "Path to the file, relative to /workspace (e.g. 'src/main.go')"
+					"description": "Path to a single file, relative to /workspace (e.g. 'src/main.go')"
+				},
+				"file_paths": {
+					"type": "array",
+					"items": {"type": "string"},
+					"description": "Paths to multiple files, relative to /workspace. Use instead of file_path to outline several files in one call (max 20)."
 				}
-			},
-			"required": ["file_path"]
+			}
 		}`),
 	}
 }
 
+// outlineMaxFiles is the maximum number of files allowed in a single multi-file outline call.
+const outlineMaxFiles = 20
+
 type outlineInput struct {
-	FilePath string `json:"file_path"`
+	FilePath  string   `json:"file_path"`
+	FilePaths []string `json:"file_paths,omitempty"`
 }
 
 func (t *OutlineTool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
@@ -660,16 +668,45 @@ func (t *OutlineTool) Execute(ctx context.Context, input json.RawMessage) (strin
 	if err := json.Unmarshal(input, &in); err != nil {
 		return "", fmt.Errorf("invalid outline input: %w", err)
 	}
-	if in.FilePath == "" {
-		return "", fmt.Errorf("file_path is required")
+
+	// Build the list of files to outline.
+	var paths []string
+	if in.FilePath != "" {
+		paths = append(paths, in.FilePath)
+	}
+	paths = append(paths, in.FilePaths...)
+
+	if len(paths) == 0 {
+		return "", fmt.Errorf("file_path or file_paths is required")
+	}
+	if len(paths) > outlineMaxFiles {
+		return "", fmt.Errorf("too many files: %d (max %d)", len(paths), outlineMaxFiles)
 	}
 
-	filePath := in.FilePath
+	// Single file — return directly (no header).
+	if len(paths) == 1 {
+		return t.outlineOne(paths[0])
+	}
+
+	// Multiple files — combine with headers.
+	var parts []string
+	for _, p := range paths {
+		result, err := t.outlineOne(p)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, fmt.Sprintf("=== %s ===\n%s", p, result))
+	}
+	return strings.Join(parts, "\n\n"), nil
+}
+
+// outlineOne outlines a single file and returns its output or an inline error string.
+func (t *OutlineTool) outlineOne(displayPath string) (string, error) {
+	filePath := displayPath
 	if !strings.HasPrefix(filePath, "/") {
 		filePath = "/workspace/" + filePath
 	}
 
-	// Call the outline binary directly — no shell, no quoting.
 	result, err := t.container.Exec(fmt.Sprintf("outline %s", shellQuote(filePath)), 15)
 	if err != nil {
 		return "", err
@@ -680,14 +717,14 @@ func (t *OutlineTool) Execute(ctx context.Context, input json.RawMessage) (strin
 
 	// Binary not found (old container image) — fall back to grep.
 	if result.ExitCode == 127 || (result.ExitCode != 0 && strings.Contains(stderr, "not found")) {
-		return t.outlineFallback(filePath, in.FilePath)
+		return t.outlineFallback(filePath, displayPath)
 	}
 
 	if result.ExitCode != 0 {
 		if stderr != "" {
 			return fmt.Sprintf("error: %s", stderr), nil
 		}
-		return fmt.Sprintf("error: cannot read %s", in.FilePath), nil
+		return fmt.Sprintf("error: cannot read %s", displayPath), nil
 	}
 
 	if output == "" {
