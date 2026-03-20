@@ -241,7 +241,7 @@ Go (host) → json.Marshal → bytes.Reader → cmd.Stdin → docker exec -i →
 
 - [x] 7d: **Test with multi-line content** — Test that old_string/new_string containing `\n`, `\t`, `\\`, `\"`, and single quotes survive the full pipeline: `json.Marshal → ExecWithStdin → binary stdin → json.Decode`. This is now trivially correct by construction (no shell in the path), but the test documents the guarantee. Also test with real Docker if available (integration test).
 
-- [ ] 7e: **Remove `sanitizeToolJSON` workaround for tabs** — With the shell removed from the path, the only remaining need for `sanitizeToolJSON` is fixing literal control characters in the LLM's JSON *before* `json.Unmarshal` on the host side. Review whether this is still needed: if LLMs emit literal tabs in JSON, Go's `json.Unmarshal` still rejects them, so the sanitizer stays but its scope is clear — it fixes LLM JSON violations, not shell piping issues.
+- [x] 7e: **Remove `sanitizeToolJSON` workaround for tabs** — With the shell removed from the path, the only remaining need for `sanitizeToolJSON` is fixing literal control characters in the LLM's JSON *before* `json.Unmarshal` on the host side. Review whether this is still needed: if LLMs emit literal tabs in JSON, Go's `json.Unmarshal` still rejects them, so the sanitizer stays but its scope is clear — it fixes LLM JSON violations, not shell piping issues.
 
 **Failure modes:**
 - `docker exec -i` without stdin: Works fine — docker will provide an empty stdin. The binary reads EOF and fails with "invalid JSON" which is the correct behavior.
