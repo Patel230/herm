@@ -1767,10 +1767,9 @@ type App struct {
 	sessionToolResults  int            // count of tool results this session
 	sessionToolBytes    int            // cumulative tool result bytes this session
 	sessionToolStats    map[string][2]int // tool name → [count, bytes]
-	lastModelID      string   // last model used, for detecting changes
-	subAgentBuf      string   // accumulates sub-agent streaming text
-	subAgentLines    []string // completed lines from sub-agent output
-	containerImage   string   // runtime container image name (not persisted)
+	lastModelID    string                       // last model used, for detecting changes
+	subAgents      map[string]*subAgentDisplay // per-agent display state keyed by AgentID
+	containerImage string                       // runtime container image name (not persisted)
 	updateAvailable string   // version tag if update is available
 
 	// Tool timer (live elapsed display)
@@ -2050,55 +2049,82 @@ func isBlankRow(s string) bool {
 	return strings.TrimSpace(ansiEscRe.ReplaceAllString(s, "")) == ""
 }
 
-// subAgentDisplayLines returns up to 3 dim/italic lines showing live sub-agent activity.
+// subAgentDisplay tracks per-agent display state for live TUI rendering.
+type subAgentDisplay struct {
+	task   string // task label (first ~40 chars of the task description)
+	status string // current activity (tool name or text snippet)
+	done   bool
+}
+
+// maxSubAgentDisplayLines is the maximum number of active agent lines shown.
+const maxSubAgentDisplayLines = 5
+
+// subAgentDisplayLines returns one line per active sub-agent showing its task label and status.
 func (a *App) subAgentDisplayLines() []string {
-	// Collect all available lines: completed lines + current partial line.
-	all := a.subAgentLines
-	if a.subAgentBuf != "" {
-		all = append(append([]string{}, all...), a.subAgentBuf)
-	}
-	if len(all) == 0 {
+	if len(a.subAgents) == 0 {
 		return nil
 	}
-	// Take the last 3 lines.
-	start := 0
-	if len(all) > 3 {
-		start = len(all) - 3
+	var active []*subAgentDisplay
+	for _, sa := range a.subAgents {
+		if !sa.done {
+			active = append(active, sa)
+		}
 	}
-	visible := all[start:]
-	out := make([]string, len(visible))
-	for i, line := range visible {
-		// dim (2) + italic (3), with [sub-agent] prefix
-		out[i] = "\033[2;3m[sub-agent] " + line + "\033[0m"
+	if len(active) == 0 {
+		return nil
+	}
+	var out []string
+	shown := active
+	if len(shown) > maxSubAgentDisplayLines {
+		shown = shown[:maxSubAgentDisplayLines]
+	}
+	for _, sa := range shown {
+		label := sa.task
+		status := sa.status
+		if status == "" {
+			status = "starting..."
+		}
+		// dim (2) + italic (3), task label in normal weight
+		out = append(out, fmt.Sprintf("\033[2;3m[agent] \033[0;2m%s\033[2;3m: %s\033[0m", label, status))
+	}
+	if len(active) > maxSubAgentDisplayLines {
+		out = append(out, fmt.Sprintf("\033[2;3m  ...and %d more\033[0m", len(active)-maxSubAgentDisplayLines))
 	}
 	return out
 }
 
-// subAgentSummaryLine builds a one-line summary from sub-agent output for the committed messages.
-func subAgentSummaryLine(lines []string, buf string) string {
-	// Find the first non-empty line of text output.
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		// Skip tool status lines.
-		if strings.HasPrefix(line, "tool:") {
-			continue
-		}
-		if line != "" {
-			const maxLen = 80
-			if len(line) > maxLen {
-				line = line[:maxLen] + "…"
-			}
-			return "[sub-agent] completed: " + line
-		}
+// truncateTaskLabel returns the first ~40 chars of a task description for display.
+func truncateTaskLabel(task string) string {
+	// Take first line only.
+	if idx := strings.IndexByte(task, '\n'); idx >= 0 {
+		task = task[:idx]
 	}
-	if s := strings.TrimSpace(buf); s != "" {
-		const maxLen = 80
-		if len(s) > maxLen {
-			s = s[:maxLen] + "…"
-		}
-		return "[sub-agent] completed: " + s
+	const maxLen = 40
+	if len(task) > maxLen {
+		task = task[:maxLen] + "…"
 	}
-	return "[sub-agent] completed"
+	return task
+}
+
+// shortID returns the first 8 characters of an agent ID for display.
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+// getOrCreateSubAgent returns the display state for the given agent ID, creating it if needed.
+func (a *App) getOrCreateSubAgent(agentID string) *subAgentDisplay {
+	if a.subAgents == nil {
+		a.subAgents = make(map[string]*subAgentDisplay)
+	}
+	sa, ok := a.subAgents[agentID]
+	if !ok {
+		sa = &subAgentDisplay{task: "unknown task"}
+		a.subAgents[agentID] = sa
+	}
+	return sa
 }
 
 // refreshModelMenu re-sorts and re-formats the model menu after a sort change.
@@ -4895,31 +4921,34 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 		}
 		a.render()
 
+	case EventSubAgentStart:
+		sa := a.getOrCreateSubAgent(event.AgentID)
+		sa.task = truncateTaskLabel(event.Task)
+		a.render()
+
 	case EventSubAgentDelta:
-		a.subAgentBuf += event.Text
-		// Split completed lines.
-		for {
-			idx := strings.Index(a.subAgentBuf, "\n")
-			if idx < 0 {
-				break
+		// Update the agent's status with a snippet of the streaming text.
+		sa := a.getOrCreateSubAgent(event.AgentID)
+		snippet := strings.TrimSpace(event.Text)
+		if snippet != "" {
+			// Show last meaningful text fragment as status.
+			if len(snippet) > 60 {
+				snippet = snippet[:60] + "…"
 			}
-			a.subAgentLines = append(a.subAgentLines, a.subAgentBuf[:idx])
-			a.subAgentBuf = a.subAgentBuf[idx+1:]
+			sa.status = snippet
 		}
 		a.render()
 
 	case EventSubAgentStatus:
+		sa := a.getOrCreateSubAgent(event.AgentID)
 		if event.Text == "done" {
-			// Collapse live display into a single summary line.
-			summary := subAgentSummaryLine(a.subAgentLines, a.subAgentBuf)
-			if summary != "" {
-				a.messages = append(a.messages, chatMessage{kind: msgInfo, content: summary})
-			}
-			a.subAgentBuf = ""
-			a.subAgentLines = nil
+			sa.done = true
+			a.messages = append(a.messages, chatMessage{
+				kind:    msgInfo,
+				content: fmt.Sprintf("[agent %s] completed: %s", shortID(event.AgentID), sa.task),
+			})
 		} else {
-			// Tool call status — show as a status line.
-			a.subAgentLines = append(a.subAgentLines, event.Text)
+			sa.status = event.Text
 		}
 		a.render()
 

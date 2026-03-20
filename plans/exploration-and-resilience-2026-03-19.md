@@ -54,7 +54,7 @@ Fix the confusing merged sub-agent display. Each active sub-agent should show it
 
 - [x] 1a: **Add `EventSubAgentStart` event** — Emit from `SubAgentTool.Execute()` when a sub-agent begins, carrying `AgentID` and `Task` (the task description). This gives the display the label it needs. In `subagent.go`, forward this event right after creating the agent, before the goroutine starts.
 
-- [ ] 1b: **Replace shared sub-agent display state with per-agent tracking** — In `main.go`, replace `subAgentBuf string` and `subAgentLines []string` with a `subAgents map[string]*subAgentDisplay` struct containing: `task string` (label), `status string` (current activity), `done bool`. Update EventSubAgentDelta/EventSubAgentStatus handlers to route events to the correct agent entry by AgentID.
+- [x] 1b: **Replace shared sub-agent display state with per-agent tracking** — In `main.go`, replace `subAgentBuf string` and `subAgentLines []string` with a `subAgents map[string]*subAgentDisplay` struct containing: `task string` (label), `status string` (current activity), `done bool`. Update EventSubAgentDelta/EventSubAgentStatus handlers to route events to the correct agent entry by AgentID.
 
 - [ ] 1c: **Rewrite `subAgentDisplayLines()`** — Instead of returning the last 3 shared lines, iterate active sub-agents and render one line per agent: `[agent] <truncated task label>: <current status>`. Show up to 5 active agents. Done agents are removed from display (their completion was already logged as a message). Use dim/italic styling but make the task label normal weight for readability.
 
