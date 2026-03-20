@@ -976,6 +976,84 @@ func TestWriteFileTool_Execute_LiteralTabInInput(t *testing.T) {
 	}
 }
 
+// --- ExecWithStdin pipeline tests (7d) ---
+
+// TestEditFileTool_Execute_MultiLineContent verifies that content containing
+// \n, \t, \\, \", and single quotes survives json.Marshal → ExecWithStdin → stdin.
+// With the shell removed from the path, this is correct by construction, but the
+// test documents the guarantee.
+func TestEditFileTool_Execute_MultiLineContent(t *testing.T) {
+	container, readStdin := newFakeContainerWithStdinCapture(t, func(cmd string) (string, string, int) {
+		return `{"ok":true,"diff":"@@ ok @@"}`, "", 0
+	})
+
+	tool := NewEditFileTool(container)
+	input, _ := json.Marshal(editFileInput{
+		FilePath:  "main.go",
+		OldString: "line1\nline2\ttab\n\t\"quoted\"\n\\backslash\n'single'",
+		NewString: "replaced\nwith\nnewlines\tand\ttabs",
+	})
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(result, "@@ ok @@") {
+		t.Errorf("expected diff output, got: %q", result)
+	}
+
+	// Verify the JSON sent to the binary is valid and contains the special chars.
+	captured := readStdin()
+	var parsed editFileInput
+	if err := json.Unmarshal(captured, &parsed); err != nil {
+		t.Fatalf("stdin JSON should be valid: %v\nJSON: %s", err, captured)
+	}
+	if !strings.Contains(parsed.OldString, "\n") {
+		t.Error("expected newline in old_string")
+	}
+	if !strings.Contains(parsed.OldString, "\t") {
+		t.Error("expected tab in old_string")
+	}
+	if !strings.Contains(parsed.OldString, `"quoted"`) {
+		t.Error("expected quotes in old_string")
+	}
+	if !strings.Contains(parsed.OldString, `\`) {
+		t.Error("expected backslash in old_string")
+	}
+	if !strings.Contains(parsed.OldString, "'") {
+		t.Error("expected single quote in old_string")
+	}
+}
+
+func TestWriteFileTool_Execute_MultiLineContent(t *testing.T) {
+	container, readStdin := newFakeContainerWithStdinCapture(t, func(cmd string) (string, string, int) {
+		return `{"ok":true,"created":true,"summary":"Created test.go"}`, "", 0
+	})
+
+	tool := NewWriteFileTool(container)
+	content := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"hello\\nworld\")\n\tfmt.Println('x')\n}\n"
+	input, _ := json.Marshal(writeFileInput{
+		FilePath: "test.go",
+		Content:  content,
+	})
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(result, "Created") {
+		t.Errorf("expected creation summary, got: %q", result)
+	}
+
+	// Verify the content survived the pipeline intact.
+	captured := readStdin()
+	var parsed writeFileInput
+	if err := json.Unmarshal(captured, &parsed); err != nil {
+		t.Fatalf("stdin JSON should be valid: %v\nJSON: %s", err, captured)
+	}
+	if parsed.Content != content {
+		t.Errorf("content mismatch:\ngot:  %q\nwant: %q", parsed.Content, content)
+	}
+}
+
 // --- RequiresApproval tests ---
 
 func TestFileTools_NoApproval(t *testing.T) {
