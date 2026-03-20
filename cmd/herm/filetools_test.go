@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 // newFakeContainer creates a started ContainerClient with a fakeDockerCommand
 // that returns the given stdout/stderr/exitCode for any exec call.
-// The execHandler receives the shell command string passed to "sh -c".
+// The execHandler receives either:
+//   - the shell command string (for Exec calls via "sh -c"), or
+//   - the binary name (for ExecWithStdin calls via "exec -i").
 func newFakeContainer(t *testing.T, execHandler func(cmd string) (string, string, int)) *ContainerClient {
 	t.Helper()
 	orig := dockerCommand
@@ -22,7 +26,11 @@ func newFakeContainer(t *testing.T, execHandler func(cmd string) (string, string
 			case "run":
 				return "fake-container-id\n", "", 0
 			case "exec":
-				// The shell command is the last argument after "sh" "-c".
+				// Direct binary exec: docker exec -i <id> <binary> [args...]
+				if len(args) >= 5 && args[2] == "-i" {
+					return execHandler(args[4])
+				}
+				// Shell exec: docker exec <id> sh -c <cmd>
 				if len(args) >= 6 {
 					cmd := args[5]
 					return execHandler(cmd)
@@ -40,6 +48,51 @@ func newFakeContainer(t *testing.T, execHandler func(cmd string) (string, string
 		t.Fatalf("Start: %v", err)
 	}
 	return c
+}
+
+// newFakeContainerWithStdinCapture creates a started ContainerClient that captures
+// stdin bytes sent via ExecWithStdin to a temp file. Returns the container and
+// a function to read the captured bytes.
+func newFakeContainerWithStdinCapture(t *testing.T, execHandler func(cmd string) (string, string, int)) (*ContainerClient, func() []byte) {
+	t.Helper()
+	orig := dockerCommand
+	t.Cleanup(func() { dockerCommand = orig })
+
+	stdinFile := filepath.Join(t.TempDir(), "stdin.json")
+
+	dockerCommand = fakeDockerCommandWithStdin(func(args []string) (string, string, int) {
+		if len(args) >= 2 {
+			switch args[1] {
+			case "run":
+				return "fake-container-id\n", "", 0
+			case "exec":
+				if len(args) >= 5 && args[2] == "-i" {
+					return execHandler(args[4])
+				}
+				if len(args) >= 6 {
+					return execHandler(args[5])
+				}
+				return "", "no command", 1
+			case "rm":
+				return "", "", 0
+			}
+		}
+		return "", "unknown", 1
+	}, stdinFile)
+
+	c := NewContainerClient(ContainerConfig{Image: "test:latest"})
+	if err := c.Start("/workspace", nil); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	readCapture := func() []byte {
+		data, err := os.ReadFile(stdinFile)
+		if err != nil {
+			t.Fatalf("reading captured stdin: %v", err)
+		}
+		return data
+	}
+	return c, readCapture
 }
 
 // --- GlobTool tests ---
@@ -536,12 +589,11 @@ func TestEditFileTool_Execute_NotUnique(t *testing.T) {
 }
 
 func TestEditFileTool_Execute_ReplaceAll(t *testing.T) {
-	container := newFakeContainer(t, func(cmd string) (string, string, int) {
-		// Verify replace_all is passed in the JSON input.
-		if !strings.Contains(cmd, "replace_all") {
-			return `{"ok":false,"error":"replace_all not set"}`, "", 0
+	container, readStdin := newFakeContainerWithStdinCapture(t, func(cmd string) (string, string, int) {
+		if cmd == "edit-file" {
+			return `{"ok":true,"diff":"@@ multi-replace @@"}`, "", 0
 		}
-		return `{"ok":true,"diff":"@@ multi-replace @@"}`, "", 0
+		return "", "unexpected", 1
 	})
 
 	tool := NewEditFileTool(container)
@@ -558,6 +610,12 @@ func TestEditFileTool_Execute_ReplaceAll(t *testing.T) {
 
 	if !strings.Contains(result, "multi-replace") {
 		t.Errorf("expected diff output, got: %q", result)
+	}
+
+	// Verify replace_all was sent in stdin JSON.
+	captured := string(readStdin())
+	if !strings.Contains(captured, `"replace_all":true`) {
+		t.Errorf("expected replace_all in stdin, got: %q", captured)
 	}
 }
 
@@ -603,12 +661,11 @@ func TestEditFileTool_Execute_EmptyOldString(t *testing.T) {
 }
 
 func TestEditFileTool_Execute_RelativePath(t *testing.T) {
-	container := newFakeContainer(t, func(cmd string) (string, string, int) {
-		// Verify the path was resolved to /workspace/src/main.go.
-		if !strings.Contains(cmd, "/workspace/src/main.go") {
-			return `{"ok":false,"error":"wrong path"}`, "", 0
+	container, readStdin := newFakeContainerWithStdinCapture(t, func(cmd string) (string, string, int) {
+		if cmd == "edit-file" {
+			return `{"ok":true,"diff":"ok"}`, "", 0
 		}
-		return `{"ok":true,"diff":"ok"}`, "", 0
+		return "", "unexpected", 1
 	})
 
 	tool := NewEditFileTool(container)
@@ -624,6 +681,12 @@ func TestEditFileTool_Execute_RelativePath(t *testing.T) {
 
 	if result != "ok" {
 		t.Errorf("expected 'ok', got: %q", result)
+	}
+
+	// Verify the path was resolved to /workspace/src/main.go in stdin JSON.
+	captured := string(readStdin())
+	if !strings.Contains(captured, "/workspace/src/main.go") {
+		t.Errorf("expected resolved path in stdin, got: %q", captured)
 	}
 }
 
@@ -759,11 +822,11 @@ func TestWriteFileTool_Execute_EmptyResponse(t *testing.T) {
 }
 
 func TestWriteFileTool_Execute_RelativePath(t *testing.T) {
-	container := newFakeContainer(t, func(cmd string) (string, string, int) {
-		if !strings.Contains(cmd, "/workspace/src/new.go") {
-			return `{"ok":false,"error":"wrong path"}`, "", 0
+	container, readStdin := newFakeContainerWithStdinCapture(t, func(cmd string) (string, string, int) {
+		if cmd == "write-file" {
+			return `{"ok":true,"summary":"Created src/new.go"}`, "", 0
 		}
-		return `{"ok":true,"summary":"Created src/new.go"}`, "", 0
+		return "", "unexpected", 1
 	})
 
 	tool := NewWriteFileTool(container)
@@ -778,6 +841,12 @@ func TestWriteFileTool_Execute_RelativePath(t *testing.T) {
 
 	if !strings.Contains(result, "Created") {
 		t.Errorf("expected success, got: %q", result)
+	}
+
+	// Verify the path was resolved to /workspace/src/new.go in stdin JSON.
+	captured := string(readStdin())
+	if !strings.Contains(captured, "/workspace/src/new.go") {
+		t.Errorf("expected resolved path in stdin, got: %q", captured)
 	}
 }
 

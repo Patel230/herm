@@ -494,8 +494,7 @@ func (t *EditFileTool) Execute(ctx context.Context, input json.RawMessage) (stri
 		return "", fmt.Errorf("marshalling edit-file input: %w", err)
 	}
 
-	cmd := fmt.Sprintf("echo %s | edit-file", shellQuote(string(inputJSON)))
-	result, err := t.container.Exec(cmd, 30)
+	result, err := t.container.ExecWithStdin(inputJSON, 30, "edit-file")
 	if err != nil {
 		return "", err
 	}
@@ -589,8 +588,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, input json.RawMessage) (str
 		return "", fmt.Errorf("marshalling write-file input: %w", err)
 	}
 
-	cmd := fmt.Sprintf("echo %s | write-file", shellQuote(string(inputJSON)))
-	result, err := t.container.Exec(cmd, 30)
+	result, err := t.container.ExecWithStdin(inputJSON, 30, "write-file")
 	if err != nil {
 		return "", err
 	}
