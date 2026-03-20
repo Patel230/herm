@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1181,6 +1182,123 @@ func TestOutlineTool_Execute_RelativePath(t *testing.T) {
 
 	if !strings.Contains(result, "package main") {
 		t.Errorf("expected output, got: %q", result)
+	}
+}
+
+func TestOutlineTool_Execute_MultipleFiles(t *testing.T) {
+	container := newFakeContainer(t, func(cmd string) (string, string, int) {
+		if strings.Contains(cmd, "main.go") {
+			return "1\tpackage main\n5\tfunc main()\n", "", 0
+		}
+		if strings.Contains(cmd, "util.go") {
+			return "1\tpackage main\n3\tfunc helper()\n", "", 0
+		}
+		return "", "unexpected", 1
+	})
+
+	tool := NewOutlineTool(container)
+	input, _ := json.Marshal(outlineInput{FilePaths: []string{"main.go", "util.go"}})
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if !strings.Contains(result, "=== main.go ===") {
+		t.Errorf("expected main.go header, got: %q", result)
+	}
+	if !strings.Contains(result, "=== util.go ===") {
+		t.Errorf("expected util.go header, got: %q", result)
+	}
+	if !strings.Contains(result, "func main()") {
+		t.Errorf("expected func main in output, got: %q", result)
+	}
+	if !strings.Contains(result, "func helper()") {
+		t.Errorf("expected func helper in output, got: %q", result)
+	}
+}
+
+func TestOutlineTool_Execute_MultipleFiles_PartialError(t *testing.T) {
+	container := newFakeContainer(t, func(cmd string) (string, string, int) {
+		if strings.Contains(cmd, "good.go") {
+			return "1\tpackage main\n", "", 0
+		}
+		if strings.Contains(cmd, "bad.go") {
+			return "", "no such file or directory", 1
+		}
+		return "", "unexpected", 1
+	})
+
+	tool := NewOutlineTool(container)
+	input, _ := json.Marshal(outlineInput{FilePaths: []string{"good.go", "bad.go"}})
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	// good.go should succeed.
+	if !strings.Contains(result, "=== good.go ===") {
+		t.Errorf("expected good.go header, got: %q", result)
+	}
+	if !strings.Contains(result, "package main") {
+		t.Errorf("expected good.go content, got: %q", result)
+	}
+	// bad.go should show an inline error.
+	if !strings.Contains(result, "=== bad.go ===") {
+		t.Errorf("expected bad.go header, got: %q", result)
+	}
+	if !strings.Contains(result, "error") {
+		t.Errorf("expected error for bad.go, got: %q", result)
+	}
+}
+
+func TestOutlineTool_Execute_MultipleFiles_TooMany(t *testing.T) {
+	c := &ContainerClient{}
+	tool := NewOutlineTool(c)
+
+	paths := make([]string, outlineMaxFiles+1)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("file%d.go", i)
+	}
+	input, _ := json.Marshal(outlineInput{FilePaths: paths})
+	_, err := tool.Execute(context.Background(), input)
+	if err == nil {
+		t.Error("expected error for too many files")
+	}
+	if !strings.Contains(err.Error(), "too many files") {
+		t.Errorf("expected 'too many files' in error, got: %v", err)
+	}
+}
+
+func TestOutlineTool_Execute_BothInputs(t *testing.T) {
+	container := newFakeContainer(t, func(cmd string) (string, string, int) {
+		if strings.Contains(cmd, "a.go") {
+			return "1\tpackage a\n", "", 0
+		}
+		if strings.Contains(cmd, "b.go") {
+			return "1\tpackage b\n", "", 0
+		}
+		if strings.Contains(cmd, "c.go") {
+			return "1\tpackage c\n", "", 0
+		}
+		return "", "unexpected", 1
+	})
+
+	tool := NewOutlineTool(container)
+	// Both file_path and file_paths provided — should merge (a.go + b.go + c.go).
+	input, _ := json.Marshal(outlineInput{FilePath: "a.go", FilePaths: []string{"b.go", "c.go"}})
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if !strings.Contains(result, "=== a.go ===") {
+		t.Errorf("expected a.go header, got: %q", result)
+	}
+	if !strings.Contains(result, "=== b.go ===") {
+		t.Errorf("expected b.go header, got: %q", result)
+	}
+	if !strings.Contains(result, "=== c.go ===") {
+		t.Errorf("expected c.go header, got: %q", result)
 	}
 }
 
