@@ -58,8 +58,8 @@ main.go's rendering functions (~1500 lines) are the largest cohesive group and h
 
 ## Phase 5: Split main.go — extract session management
 
-- [ ] 5a: Create `session.go` — move conversation/session management: `buildConversationTree`, `showConversationList`, `loadConversation`, `handleSessionCommand`, `formatRelativeTime`, `renderTree`, `formatTreeNode`, and related types. Note: some of these may already live in tree.go — verify before moving. Add doc comment.
-- [ ] 5b: Verify all tests pass after session extraction
+- [x] 5a: All session functions already live in tree.go — no extraction needed
+- [x] 5b: No changes made, tests already passing
 
 ## Phase 6: Split main.go — extract input handling
 
