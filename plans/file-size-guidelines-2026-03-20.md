@@ -48,8 +48,8 @@ Add a doc comment block before `package main` in every non-test .go file that la
 
 main.go's rendering functions (~1500 lines) are the largest cohesive group and have the fewest entanglements with other logic.
 
-- [ ] 3a: Create `render.go` — move all rendering/display functions: `getVisualLines`, `cursorVisualPos`, `visibleWidth`, `padCodeBlockRow`, `wrapString`, `buildLogo`, `writeRows`, `renderMessage`, `renderToolBox`, `styledUserMsg`, `styledAssistantText`, `styledError`, `progressBar`, `lerpColor`, `hslToRGB`, `buildBlockRows`, `buildInputRows`, `positionCursor`, and related types/constants. Add doc comment.
-- [ ] 3b: Verify all tests pass after the rendering extraction
+- [x] 3a: Create `render.go` — move all rendering/display functions: `getVisualLines`, `cursorVisualPos`, `visibleWidth`, `padCodeBlockRow`, `wrapString`, `buildLogo`, `writeRows`, `renderMessage`, `renderToolBox`, `styledUserMsg`, `styledAssistantText`, `styledError`, `progressBar`, `lerpColor`, `hslToRGB`, `buildBlockRows`, `buildInputRows`, `positionCursor`, and related types/constants. Add doc comment.
+- [x] 3b: Verify all tests pass after the rendering extraction
 
 ## Phase 4: Split main.go — extract content processing
 
