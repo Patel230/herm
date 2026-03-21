@@ -1,3 +1,5 @@
+// subagent.go implements the sub-agent tool, which spawns autonomous child
+// agents to handle complex subtasks with their own context windows.
 package main
 
 import (

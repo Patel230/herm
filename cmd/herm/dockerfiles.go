@@ -1,3 +1,4 @@
+// dockerfiles.go embeds and resolves the default Dockerfile template.
 package main
 
 import (

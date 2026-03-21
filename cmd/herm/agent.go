@@ -1,3 +1,5 @@
+// agent.go defines the Agent type and its streaming tool-call loop for
+// communicating with LLM providers via langdag.
 package main
 
 import (

@@ -1,3 +1,5 @@
+// history.go manages persistent prompt history with file-backed storage,
+// navigation (up/down), deduplication, and automatic compaction.
 package main
 
 import (

@@ -1,3 +1,5 @@
+// tools.go defines the agent tool implementations (BashTool, GitTool, DevEnvTool)
+// that execute commands in containers or on the host.
 package main
 
 import (

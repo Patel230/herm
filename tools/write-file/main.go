@@ -1,3 +1,5 @@
+// main.go provides a JSON-driven file writer that atomically creates or
+// overwrites files and returns a unified diff for overwrites.
 package main
 
 import (

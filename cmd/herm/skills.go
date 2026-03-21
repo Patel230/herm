@@ -1,3 +1,5 @@
+// skills.go loads and parses project-local skills from markdown files with
+// front-matter metadata (name, description) in a designated directory.
 package main
 
 import (

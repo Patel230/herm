@@ -1,3 +1,5 @@
+// main.go provides a JSON-driven file editor that performs exact string
+// replacements and returns a unified diff of the changes.
 package main
 
 import (

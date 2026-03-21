@@ -1,3 +1,5 @@
+// container.go implements the Docker container lifecycle client, including
+// starting, stopping, and executing commands inside dev containers.
 package main
 
 import (

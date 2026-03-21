@@ -1,3 +1,5 @@
+// main.go provides a terminal key-press debugger that displays raw byte
+// and UTF-8 representations of each keystroke.
 package main
 
 import (

@@ -1,3 +1,4 @@
+// term.go provides terminal dimension helpers.
 package main
 
 import (

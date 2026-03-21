@@ -1,3 +1,6 @@
+// filetools.go implements container-based file tools (glob, grep, read, edit,
+// write, and outline) that execute inside the Docker container via ripgrep and
+// shell commands.
 package main
 
 import (

@@ -1,3 +1,4 @@
+// worktree.go manages git worktree creation, listing, locking, and selection.
 package main
 
 import (

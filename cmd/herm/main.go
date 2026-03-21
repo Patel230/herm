@@ -1,3 +1,5 @@
+// main.go implements the herm terminal UI, rendering, input handling, and
+// program entry point.
 package main
 
 import (

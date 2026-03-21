@@ -1,3 +1,5 @@
+// config.go handles loading, saving, and merging of global and per-project
+// configuration for herm.
 package main
 
 import (

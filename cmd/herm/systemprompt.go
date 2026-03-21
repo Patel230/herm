@@ -1,3 +1,5 @@
+// systemprompt.go builds the system prompt for the coding agent and sub-agents
+// by rendering embedded Go templates with tool availability and project context.
 package main
 
 import (

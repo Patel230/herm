@@ -1,3 +1,5 @@
+// compact.go implements conversation compaction, which summarizes old history
+// and creates a fresh conversation branch to reclaim context window space.
 package main
 
 import (

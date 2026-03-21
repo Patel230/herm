@@ -1,3 +1,5 @@
+// main.go provides a source-code outliner that extracts declarations
+// and signatures from Go, Python, JS/TS, Rust, and other languages.
 package main
 
 import (

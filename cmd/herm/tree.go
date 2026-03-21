@@ -1,3 +1,5 @@
+// tree.go builds and renders conversation trees, handles session commands,
+// and provides helpers for parsing assistant and tool-call node content.
 package main
 
 import (

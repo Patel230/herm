@@ -1,3 +1,5 @@
+// models.go defines model definitions, catalog lookups, sorting, filtering,
+// and formatting helpers for the AI provider model selection UI.
 package main
 
 import (

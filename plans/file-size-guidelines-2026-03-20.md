@@ -35,12 +35,12 @@ Test files over 1000 lines (`agent_test.go` at 1,871, `filetools_test.go` at 1,3
 
 Add a doc comment block before `package main` in every non-test .go file that lacks one. The comment should be 1-3 lines describing the file's purpose. Files to update:
 
-- [ ] 2a: `cmd/herm/main.go`, `cmd/herm/agent.go`, `cmd/herm/config.go`
-- [ ] 2b: `cmd/herm/models.go`, `cmd/herm/container.go`, `cmd/herm/tools.go`
-- [ ] 2c: `cmd/herm/filetools.go`, `cmd/herm/subagent.go`, `cmd/herm/compact.go`
-- [ ] 2d: `cmd/herm/systemprompt.go`, `cmd/herm/skills.go`, `cmd/herm/history.go`
-- [ ] 2e: `cmd/herm/worktree.go`, `cmd/herm/tree.go`, `cmd/herm/term.go`, `cmd/herm/dockerfiles.go`
-- [ ] 2f: `tools/outline/main.go`, `tools/edit-file/main.go`, `tools/write-file/main.go`, `cmd/debug/main.go`
+- [x] 2a: `cmd/herm/main.go`, `cmd/herm/agent.go`, `cmd/herm/config.go`
+- [x] 2b: `cmd/herm/models.go`, `cmd/herm/container.go`, `cmd/herm/tools.go`
+- [x] 2c: `cmd/herm/filetools.go`, `cmd/herm/subagent.go`, `cmd/herm/compact.go`
+- [x] 2d: `cmd/herm/systemprompt.go`, `cmd/herm/skills.go`, `cmd/herm/history.go`
+- [x] 2e: `cmd/herm/worktree.go`, `cmd/herm/tree.go`, `cmd/herm/term.go`, `cmd/herm/dockerfiles.go`
+- [x] 2f: `tools/outline/main.go`, `tools/edit-file/main.go`, `tools/write-file/main.go`, `cmd/debug/main.go`
 
 **Parallel Tasks: 2a, 2b, 2c, 2d, 2e, 2f**
 
