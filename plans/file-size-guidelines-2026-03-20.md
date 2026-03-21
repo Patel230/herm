@@ -70,12 +70,33 @@ main.go's rendering functions (~1500 lines) are the largest cohesive group and h
 
 - [x] 7a: Create `background.go` — move async/background functions: `bootContainerCmd`, `ensureImageLocal`, `fetchStatusCmd`, `fetchCommitInfo`, `fetchProjectSnapshot`, `fetchSWEScoresCmd`, and related helpers. Add doc comment.
 - [x] 7b: Create `helpers.go` — move standalone utility functions: `formatDuration`, `truncateWithEllipsis`, `truncateVisual`, `debugLog`, `gitRepoRoot`, color helpers, and any remaining small functions that don't fit elsewhere. Add doc comment.
-- [ ] 7c: Verify all tests pass and that main.go is under 1000 lines
+- [x] 7c: Verify all tests pass after phase 7 extractions
 
-## Phase 8: Final validation
+## Phase 8: Split main.go — extract config editor
 
-- [ ] 8a: Run full test suite, verify no regressions
-- [ ] 8b: Verify all source files are under 1000 lines; verify all non-test .go files have doc comments; update GUIDELINES.md if any rules changed during implementation
+main.go is still ~2300 lines after phase 7. The config editor UI (~530 lines) is a self-contained mode with its own types and methods.
+
+- [ ] 8a: Create `configeditor.go` — move config editor types and methods: `cfgTabNames`, `cfgField` struct, `maskKey`, `enterConfigMode`, `exitConfigMode`, `openConfigModelPicker`, `cfgCurrentFields`, `settingsTabFields`, `projectTabFields`, `buildConfigRows`, `handleConfigByte`, `handleConfigEditByte`. Add doc comment.
+- [ ] 8b: Verify all tests pass after config editor extraction
+
+## Phase 9: Split main.go — extract commands and shell mode
+
+The command dispatch (~360 lines) and shell mode (~58 lines) are cohesive command-handling logic.
+
+- [ ] 9a: Create `commands.go` — move slash command handling: `handleCommand`, `handleCompactCommand`, `handleUsageCommand`, `promptForWorktreeName`, `switchToWorktree`, `isInWorktree`, `enterShellMode`. Add doc comment.
+- [ ] 9b: Verify all tests pass after commands extraction
+
+## Phase 10: Split main.go — extract agent orchestration
+
+The agent UI methods (~418 lines) bridge the App and Agent types. agent.go (860 lines) is too large to absorb them, so they go in a new file.
+
+- [ ] 10a: Create `agentui.go` — move agent orchestration methods on App: `showModelChange`, `maybeShowInitialModels`, `startAgent`, `drainAgentEvents`, `handleAgentEvent`. Add doc comment.
+- [ ] 10b: Verify all tests pass and that main.go is under 1000 lines
+
+## Phase 11: Final validation
+
+- [ ] 11a: Run full test suite, verify no regressions
+- [ ] 11b: Verify all source files are under 1000 lines; verify all non-test .go files have doc comments; update GUIDELINES.md if any rules changed during implementation
 
 ### Success criteria
 
