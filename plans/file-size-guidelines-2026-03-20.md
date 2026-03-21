@@ -68,8 +68,8 @@ main.go's rendering functions (~1500 lines) are the largest cohesive group and h
 
 ## Phase 7: Split main.go — extract background tasks and utilities
 
-- [ ] 7a: Create `background.go` — move async/background functions: `bootContainerCmd`, `ensureImageLocal`, `fetchStatusCmd`, `fetchCommitInfo`, `fetchProjectSnapshot`, `fetchSWEScoresCmd`, and related helpers. Add doc comment.
-- [ ] 7b: Create `helpers.go` — move standalone utility functions: `formatDuration`, `truncateWithEllipsis`, `truncateVisual`, `debugLog`, `gitRepoRoot`, color helpers, and any remaining small functions that don't fit elsewhere. Add doc comment.
+- [x] 7a: Create `background.go` — move async/background functions: `bootContainerCmd`, `ensureImageLocal`, `fetchStatusCmd`, `fetchCommitInfo`, `fetchProjectSnapshot`, `fetchSWEScoresCmd`, and related helpers. Add doc comment.
+- [x] 7b: Create `helpers.go` — move standalone utility functions: `formatDuration`, `truncateWithEllipsis`, `truncateVisual`, `debugLog`, `gitRepoRoot`, color helpers, and any remaining small functions that don't fit elsewhere. Add doc comment.
 - [ ] 7c: Verify all tests pass and that main.go is under 1000 lines
 
 ## Phase 8: Final validation

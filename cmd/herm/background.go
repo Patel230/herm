@@ -1,0 +1,647 @@
+// background.go contains async initialization commands and background task
+// functions that run in goroutines during startup and operation, along with
+// the message types they produce.
+package main
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
+
+	"langdag.com/langdag"
+)
+
+// ─── Async message types ───
+
+type sweScoresMsg struct {
+	scores map[string]float64
+	err    error
+}
+
+type ctrlCExpiredMsg struct{}
+type escExpiredMsg struct{}
+
+type containerReadyMsg struct {
+	client       *ContainerClient
+	worktreePath string
+	imageName    string
+}
+
+type containerErrMsg struct {
+	err error
+}
+
+type containerStatusMsg struct {
+	text string
+}
+
+type statusInfo struct {
+	Branch       string
+	PRNumber     int
+	WorktreeName string
+	ActiveCount  int
+	TotalCount   int
+	DiffAdd      int
+	DiffDel      int
+	Behind       int // commits on remote tracking branch missing locally
+	Ahead        int // local commits missing on remote tracking branch
+	HasUpstream  bool
+}
+
+type statusInfoMsg struct {
+	info statusInfo
+}
+
+type commitInfoMsg struct {
+	behind      int
+	ahead       int
+	hasUpstream bool
+	diffAdd     int
+	diffDel     int
+}
+
+type worktreeListMsg struct {
+	items []WorktreeInfo
+	err   error
+}
+
+type branchListMsg struct {
+	items         []string
+	currentBranch string
+	err           error
+}
+
+type branchCheckoutMsg struct {
+	branch string
+	err    error
+}
+
+type workspaceMsg struct {
+	worktreePath string
+}
+
+type langdagReadyMsg struct {
+	client   *langdag.Client
+	provider string
+	err      error
+}
+
+type catalogMsg struct {
+	catalog *langdag.ModelCatalog
+}
+
+type resizeMsg struct{}
+
+type toolTimerTickMsg struct{}
+
+type agentTickMsg struct{}
+
+// projectSnapshot holds a lightweight project context gathered at startup.
+type projectSnapshot struct {
+	TopLevel      string // ls -1 of worktree root
+	RecentCommits string // git log --oneline -20
+	GitStatus     string // git status --short
+}
+
+type projectSnapshotMsg struct {
+	snapshot projectSnapshot
+}
+
+type updateAvailableMsg struct {
+	version string
+	err     error
+}
+
+type updateCompleteMsg struct {
+	err error
+}
+
+// ─── Async init commands ───
+
+func resolveWorkspaceCmd(cfg Config) workspaceMsg {
+	if repoRoot := gitRepoRoot(); repoRoot != "" {
+		ensureGitignoreLock(repoRoot)
+		return workspaceMsg{worktreePath: repoRoot}
+	}
+	cwd, _ := os.Getwd()
+	return workspaceMsg{worktreePath: cwd}
+}
+
+func bootContainerCmd(workspace string, sessionID string, ch chan<- any) {
+	ch <- containerStatusMsg{text: "checking docker…"}
+
+	client := NewContainerClient(ContainerConfig{Image: defaultContainerImage})
+
+	if !client.IsAvailable() {
+		ch <- containerStatusMsg{text: "docker not running"}
+		ch <- containerErrMsg{err: fmt.Errorf(
+			"Docker is not running. Please start Docker Desktop and try again.")}
+		return
+	}
+
+	// Build from .herm/Dockerfile (write base template if none exists).
+	imageName := buildContainerImage(workspace, ch)
+	if imageName != "" {
+		client.mu.Lock()
+		client.config.Image = imageName
+		client.mu.Unlock()
+	}
+
+	// Ensure the image is available locally (pull if needed).
+	finalImage := client.config.Image
+	if err := ensureImageLocal(finalImage, ch); err != nil {
+		ch <- containerStatusMsg{text: "image pull failed"}
+		ch <- containerErrMsg{err: fmt.Errorf("pulling %s: %w", finalImage, err)}
+		return
+	}
+
+	ch <- containerStatusMsg{text: "starting…"}
+
+	attachDir := filepath.Join(workspace, ".herm", "attachments", sessionID)
+	_ = os.MkdirAll(attachDir, 0o755)
+
+	mounts := []MountSpec{
+		{Source: workspace, Destination: "/workspace", ReadOnly: false},
+		{Source: attachDir, Destination: "/attachments", ReadOnly: true},
+	}
+
+	if err := client.Start(workspace, mounts); err != nil {
+		ch <- containerStatusMsg{text: "start failed"}
+		ch <- containerErrMsg{err: fmt.Errorf("starting container: %w", err)}
+		return
+	}
+
+	ch <- containerReadyMsg{client: client, worktreePath: workspace, imageName: imageName}
+}
+
+// ensureImageLocal checks whether a Docker image exists locally. If not, it
+// pulls it from the registry. Status updates are sent via ch. Returns nil on
+// success, or the pull error if the image cannot be obtained.
+func ensureImageLocal(image string, ch chan<- any) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if dockerCommand(ctx, "docker", "image", "inspect", image).Run() == nil {
+		return nil // already available
+	}
+
+	ch <- containerStatusMsg{text: "pulling image…"}
+
+	pullCtx, pullCancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer pullCancel()
+
+	pullCmd := dockerCommand(pullCtx, "docker", "pull", image)
+	var stderr bytes.Buffer
+	pullCmd.Stderr = &stderr
+
+	if err := pullCmd.Run(); err != nil {
+		return fmt.Errorf("%s", strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+// buildContainerImage builds a Docker image from .herm/Dockerfile in the workspace.
+// If no Dockerfile exists, or it matches the embedded base template, the build is
+// skipped and the caller uses the default image (aduermael/herm:<tag>) directly.
+// Image tag is deterministic: herm-<projectID[:8]>:<sha256[:12]> based on Dockerfile content.
+// If the image already exists (docker image inspect), the build is skipped.
+// Returns the built image name, or empty string on failure (caller falls back to raw image).
+func buildContainerImage(workspace string, ch chan<- any) string {
+	hermDir := filepath.Join(workspace, ".herm")
+	dockerfilePath := filepath.Join(hermDir, "Dockerfile")
+
+	// No .herm/Dockerfile — use the default image directly. No build needed.
+	if _, err := os.Stat(dockerfilePath); os.IsNotExist(err) {
+		return ""
+	}
+
+	// Read Dockerfile content.
+	content, err := os.ReadFile(dockerfilePath)
+	if err != nil {
+		return ""
+	}
+
+	// If the Dockerfile matches the embedded base template, skip the build.
+	// The default image already has everything.
+	if string(content) == BaseDockerfile {
+		return ""
+	}
+
+	// If the Dockerfile uses an outdated or wrong base image, back it up
+	// so devenv can later help the user migrate their customizations.
+	// This is expected when the herm base image is updated.
+	if !dockerfileUsesHermBase(string(content)) {
+		backupPath := filepath.Join(hermDir, "Dockerfile.old")
+		_ = os.Rename(dockerfilePath, backupPath)
+		ch <- containerStatusMsg{text: "migrating to new base image…"}
+		return ""
+	}
+
+	// Resolve __HERM_VERSION__ placeholder to actual version.
+	resolved := resolveDockerfile(string(content))
+
+	// Hash the resolved content so version bumps trigger rebuilds.
+	hash := sha256.Sum256([]byte(resolved))
+	hashStr := hex.EncodeToString(hash[:])[:12]
+
+	// Derive image name from project ID + content hash.
+	imageName := "herm-local:" + hashStr
+	if repoRoot := gitRepoRoot(); repoRoot != "" {
+		if projectID, err := ensureProjectID(repoRoot); err == nil && len(projectID) >= 8 {
+			imageName = "herm-" + projectID[:8] + ":" + hashStr
+		}
+	}
+
+	// Check if image already exists — skip build if so (cache hit).
+	inspectCtx, inspectCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer inspectCancel()
+	inspectCmd := dockerCommand(inspectCtx, "docker", "image", "inspect", imageName)
+	if inspectCmd.Run() == nil {
+		return imageName
+	}
+
+	ch <- containerStatusMsg{text: "building image…"}
+
+	// Write resolved Dockerfile to a temp file for docker build.
+	tmpFile, tmpErr := os.CreateTemp("", "herm-dockerfile-*")
+	if tmpErr != nil {
+		return ""
+	}
+	defer os.Remove(tmpFile.Name())
+	if _, writeErr := tmpFile.WriteString(resolved); writeErr != nil {
+		tmpFile.Close()
+		return ""
+	}
+	tmpFile.Close()
+
+	buildCtx, buildCancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer buildCancel()
+
+	buildCmd := dockerCommand(buildCtx, "docker", "build",
+		"-t", imageName,
+		"-f", tmpFile.Name(),
+		workspace,
+	)
+	var buildStderr bytes.Buffer
+	buildCmd.Stderr = &buildStderr
+
+	if err := buildCmd.Run(); err != nil {
+		// Build failed — fall back to raw default image.
+		ch <- containerStatusMsg{text: "build failed, using default image"}
+		return ""
+	}
+
+	return imageName
+}
+
+// dockerfileUsesHermBase checks if a Dockerfile's first FROM instruction uses
+// aduermael/herm:__HERM_VERSION__ as the base image. Dockerfiles with hardcoded
+// version tags (e.g. aduermael/herm:0.1) are rejected so the migration flow
+// backs them up and the user can re-create with the placeholder.
+func dockerfileUsesHermBase(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		upper := strings.ToUpper(line)
+		if strings.HasPrefix(upper, "FROM ") {
+			return strings.Contains(line, "aduermael/herm:__HERM_VERSION__")
+		}
+		// First non-comment, non-empty line isn't FROM — invalid but not our problem.
+		break
+	}
+	return false
+}
+
+func fetchStatusCmd(worktreePath string) statusInfoMsg {
+	var info statusInfo
+
+	info.Branch = worktreeBranch(worktreePath)
+
+	// ahead/behind relative to upstream tracking branch
+	revListCmd := exec.Command("git", "rev-list", "--count", "--left-right", "@{upstream}...HEAD")
+	revListCmd.Dir = worktreePath
+	if out, err := revListCmd.Output(); err == nil {
+		parts := strings.Split(strings.TrimSpace(string(out)), "\t")
+		if len(parts) == 2 {
+			info.HasUpstream = true
+			if n, err := strconv.Atoi(parts[0]); err == nil {
+				info.Behind = n
+			}
+			if n, err := strconv.Atoi(parts[1]); err == nil {
+				info.Ahead = n
+			}
+		}
+	}
+
+	ghCmd := exec.Command("gh", "pr", "view", "--json", "number", "-q", ".number")
+	ghCmd.Dir = worktreePath
+	if out, err := ghCmd.Output(); err == nil {
+		if n, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil {
+			info.PRNumber = n
+		}
+	}
+
+	diffCmd := exec.Command("git", "diff", "--shortstat", "HEAD")
+	diffCmd.Dir = worktreePath
+	if out, err := diffCmd.Output(); err == nil {
+		line := strings.TrimSpace(string(out))
+		if re := regexp.MustCompile(`(\d+) insertion`); re.MatchString(line) {
+			if n, err := strconv.Atoi(re.FindStringSubmatch(line)[1]); err == nil {
+				info.DiffAdd = n
+			}
+		}
+		if re := regexp.MustCompile(`(\d+) deletion`); re.MatchString(line) {
+			if n, err := strconv.Atoi(re.FindStringSubmatch(line)[1]); err == nil {
+				info.DiffDel = n
+			}
+		}
+	}
+
+	info.WorktreeName = filepath.Base(worktreePath)
+
+	repoRoot := gitRepoRoot()
+	if repoRoot != "" {
+		if projectID, err := ensureProjectID(repoRoot); err == nil {
+			baseDir := worktreeBaseDir(projectID)
+			if wts, err := listWorktrees(baseDir); err == nil {
+				info.TotalCount = len(wts)
+				for _, wt := range wts {
+					if wt.Active {
+						info.ActiveCount++
+					}
+				}
+			}
+		}
+	}
+
+	return statusInfoMsg{info: info}
+}
+
+func fetchCommitInfo(worktreePath string) commitInfoMsg {
+	var msg commitInfoMsg
+	cmd := exec.Command("git", "rev-list", "--count", "--left-right", "@{upstream}...HEAD")
+	cmd.Dir = worktreePath
+	if out, err := cmd.Output(); err == nil {
+		parts := strings.Split(strings.TrimSpace(string(out)), "	")
+		if len(parts) == 2 {
+			msg.hasUpstream = true
+			if n, err := strconv.Atoi(parts[0]); err == nil {
+				msg.behind = n
+			}
+			if n, err := strconv.Atoi(parts[1]); err == nil {
+				msg.ahead = n
+			}
+		}
+	}
+
+	diffCmd := exec.Command("git", "diff", "--shortstat", "HEAD")
+	diffCmd.Dir = worktreePath
+	if out, err := diffCmd.Output(); err == nil {
+		line := strings.TrimSpace(string(out))
+		if re := regexp.MustCompile(`(\d+) insertion`); re.MatchString(line) {
+			if n, err := strconv.Atoi(re.FindStringSubmatch(line)[1]); err == nil {
+				msg.diffAdd = n
+			}
+		}
+		if re := regexp.MustCompile(`(\d+) deletion`); re.MatchString(line) {
+			if n, err := strconv.Atoi(re.FindStringSubmatch(line)[1]); err == nil {
+				msg.diffDel = n
+			}
+		}
+	}
+	return msg
+}
+
+// fetchProjectSnapshot gathers a lightweight project snapshot for the system prompt.
+// Each sub-command has a 2s timeout and fails gracefully to empty string.
+func fetchProjectSnapshot(worktreePath string) projectSnapshotMsg {
+	var snap projectSnapshot
+
+	type result struct {
+		field string
+		value string
+	}
+
+	ch := make(chan result, 3)
+
+	// ls -1 of root (with tree fallback for sparse dirs).
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "ls", "-1", worktreePath)
+		out, err := cmd.Output()
+		val := ""
+		if err == nil {
+			val = strings.TrimSpace(string(out))
+			// If sparse (<= 8 entries), try tree for richer structure.
+			if strings.Count(val, "\n") < 8 {
+				treeCtx, treeCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer treeCancel()
+				treeCmd := exec.CommandContext(treeCtx, "tree", "-L", "2", "--noreport", worktreePath)
+				if treeOut, treeErr := treeCmd.Output(); treeErr == nil {
+					lines := strings.Split(strings.TrimSpace(string(treeOut)), "\n")
+					if len(lines) <= 50 {
+						val = strings.TrimSpace(string(treeOut))
+					}
+				}
+			}
+		}
+		ch <- result{"ls", val}
+	}()
+
+	// git log --oneline -20
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "git", "log", "--oneline", "-20")
+		cmd.Dir = worktreePath
+		out, err := cmd.Output()
+		val := ""
+		if err == nil {
+			val = strings.TrimSpace(string(out))
+		}
+		ch <- result{"log", val}
+	}()
+
+	// git status --short
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "git", "status", "--short")
+		cmd.Dir = worktreePath
+		out, err := cmd.Output()
+		val := ""
+		if err == nil {
+			val = strings.TrimSpace(string(out))
+		}
+		ch <- result{"status", val}
+	}()
+
+	for i := 0; i < 3; i++ {
+		r := <-ch
+		switch r.field {
+		case "ls":
+			snap.TopLevel = r.value
+		case "log":
+			snap.RecentCommits = r.value
+		case "status":
+			snap.GitStatus = r.value
+		}
+	}
+
+	return projectSnapshotMsg{snapshot: snap}
+}
+
+func fetchSWEScoresCmd() sweScoresMsg {
+	scores, err := fetchSWEScores()
+	return sweScoresMsg{scores: scores, err: err}
+}
+
+// checkForUpdate queries the GitHub API for the latest release and compares
+// it against the current binary version.
+func checkForUpdate(currentVersion string) updateAvailableMsg {
+	if currentVersion == "dev" {
+		return updateAvailableMsg{}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.github.com/repos/aduermael/herm/releases/latest", nil)
+	if err != nil {
+		return updateAvailableMsg{err: err}
+	}
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return updateAvailableMsg{err: err}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return updateAvailableMsg{err: fmt.Errorf("GitHub API returned %d", resp.StatusCode)}
+	}
+
+	var release struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return updateAvailableMsg{err: err}
+	}
+
+	latest := strings.TrimPrefix(release.TagName, "v")
+	current := strings.TrimPrefix(currentVersion, "v")
+	if latest != "" && latest != current {
+		return updateAvailableMsg{version: latest}
+	}
+	return updateAvailableMsg{}
+}
+
+// performUpdate downloads and installs the specified version of herm,
+// replacing the current binary in-place.
+func performUpdate(version string) updateCompleteMsg {
+	exePath, err := os.Executable()
+	if err != nil {
+		return updateCompleteMsg{err: fmt.Errorf("cannot determine executable path: %w", err)}
+	}
+	exePath, err = filepath.EvalSymlinks(exePath)
+	if err != nil {
+		return updateCompleteMsg{err: fmt.Errorf("cannot resolve executable path: %w", err)}
+	}
+
+	osName := runtime.GOOS
+	archName := runtime.GOARCH
+
+	url := fmt.Sprintf("https://github.com/aduermael/herm/releases/download/v%s/herm_%s_%s_%s.tar.gz",
+		version, version, osName, archName)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return updateCompleteMsg{err: err}
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return updateCompleteMsg{err: fmt.Errorf("download failed: %w", err)}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return updateCompleteMsg{err: fmt.Errorf("download returned HTTP %d", resp.StatusCode)}
+	}
+
+	gz, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return updateCompleteMsg{err: fmt.Errorf("gzip error: %w", err)}
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	var binData []byte
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return updateCompleteMsg{err: fmt.Errorf("tar error: %w", err)}
+		}
+		if filepath.Base(hdr.Name) == "herm" && !hdr.FileInfo().IsDir() {
+			binData, err = io.ReadAll(tr)
+			if err != nil {
+				return updateCompleteMsg{err: fmt.Errorf("reading binary from archive: %w", err)}
+			}
+			break
+		}
+	}
+	if binData == nil {
+		return updateCompleteMsg{err: fmt.Errorf("binary not found in archive")}
+	}
+
+	// Write to a temp file in the same directory, then atomic rename
+	dir := filepath.Dir(exePath)
+	tmp, err := os.CreateTemp(dir, "herm-update-*")
+	if err != nil {
+		return updateCompleteMsg{err: fmt.Errorf("creating temp file: %w", err)}
+	}
+	tmpPath := tmp.Name()
+
+	if _, err := tmp.Write(binData); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return updateCompleteMsg{err: fmt.Errorf("writing temp file: %w", err)}
+	}
+	if err := tmp.Chmod(0o755); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return updateCompleteMsg{err: fmt.Errorf("chmod: %w", err)}
+	}
+	tmp.Close()
+
+	if err := os.Rename(tmpPath, exePath); err != nil {
+		os.Remove(tmpPath)
+		return updateCompleteMsg{err: fmt.Errorf("replacing binary: %w", err)}
+	}
+
+	return updateCompleteMsg{}
+}
