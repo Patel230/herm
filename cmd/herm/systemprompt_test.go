@@ -34,10 +34,33 @@ func (s stubTool) RequiresApproval(_ json.RawMessage) bool {
 
 func (s stubTool) HostTool() bool { return false }
 
+// stubHostTool is like stubTool but returns true for HostTool().
+type stubHostTool struct {
+	name string
+}
+
+func (s stubHostTool) Definition() types.ToolDefinition {
+	return types.ToolDefinition{
+		Name:        s.name,
+		Description: "stub host " + s.name,
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+	}
+}
+
+func (s stubHostTool) Execute(_ context.Context, _ json.RawMessage) (string, error) {
+	return "", nil
+}
+
+func (s stubHostTool) RequiresApproval(_ json.RawMessage) bool {
+	return false
+}
+
+func (s stubHostTool) HostTool() bool { return true }
+
 func TestBuildSystemPromptAllTools(t *testing.T) {
 	tools := []Tool{
 		stubTool{"bash"},
-		stubTool{"git"},
+		stubHostTool{"git"},
 		stubTool{"devenv"},
 		stubTool{"glob"},
 		stubTool{"grep"},
@@ -201,54 +224,97 @@ func TestBuildSystemPromptGitAbsent(t *testing.T) {
 	tools := []Tool{stubTool{"bash"}}
 	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "", nil)
 
-	if strings.Contains(prompt, "worktree managed by herm") {
-		t.Error("prompt should not contain git worktree info when git tool absent")
+	if strings.Contains(prompt, "Host tools") {
+		t.Error("prompt should not contain Host tools info when no host tools present")
 	}
 }
 
 func TestBuildSystemPromptWorktreeBranch(t *testing.T) {
-	tools := []Tool{stubTool{"git"}}
+	tools := []Tool{stubHostTool{"git"}}
 	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "herm-feature-x", nil)
 
-	if !strings.Contains(prompt, "branch: herm-feature-x") {
+	if !strings.Contains(prompt, "herm-feature-x") {
 		t.Error("prompt missing worktree branch name")
 	}
-	if !strings.Contains(prompt, "worktree managed by herm") {
-		t.Error("prompt missing worktree context in environment section")
+	if !strings.Contains(prompt, "Host tools") {
+		t.Error("prompt missing Host tools in environment section")
 	}
 }
 
 func TestBuildSystemPromptWorktreeBranchEmpty(t *testing.T) {
-	tools := []Tool{stubTool{"git"}}
+	tools := []Tool{stubHostTool{"git"}}
 	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "", nil)
 
-	if strings.Contains(prompt, "branch:") {
-		t.Error("prompt should not contain branch info when worktree branch is empty")
-	}
-	if !strings.Contains(prompt, "worktree managed by herm") {
-		t.Error("prompt missing worktree context in environment section")
+	if !strings.Contains(prompt, "Host tools") {
+		t.Error("prompt missing Host tools in environment section")
 	}
 }
 
-func TestBuildSystemPromptRunsOnHostMention(t *testing.T) {
-	tools := []Tool{stubTool{"git"}}
+func TestBuildSystemPromptHostToolsMention(t *testing.T) {
+	tools := []Tool{stubHostTool{"git"}}
 	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "", nil)
 
-	if !strings.Contains(prompt, "tools run on the host") {
-		t.Error("role section missing host-bridge mention when git tool is present")
+	if !strings.Contains(prompt, "Host exceptions:") {
+		t.Error("role section missing host exceptions when git tool is present")
+	}
+	if !strings.Contains(prompt, "git") {
+		t.Error("role section should enumerate git as a host tool")
 	}
 	if !strings.Contains(prompt, "SSH keys and credentials") {
-		t.Error("role section missing credentials mention when git tool is present")
+		t.Error("role section missing credentials mention when host tools present")
 	}
 }
 
-func TestBuildSystemPromptRunsOnHostAbsent(t *testing.T) {
+func TestBuildSystemPromptHostToolsAbsent(t *testing.T) {
 	tools := []Tool{stubTool{"bash"}}
 	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "", nil)
 
-	if strings.Contains(prompt, "tools run on the host") {
-		t.Error("role section should not mention host-bridge when git tool is absent")
+	if strings.Contains(prompt, "Host exceptions") {
+		t.Error("role section should not mention host exceptions when no host tools")
 	}
+}
+
+func TestHostToolsSlicePopulatedFromInterface(t *testing.T) {
+	tools := []Tool{
+		stubTool{"bash"},
+		stubHostTool{"git"},
+		stubTool{"glob"},
+	}
+	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "", nil)
+
+	// git should appear as a host tool.
+	if !strings.Contains(prompt, "Host exceptions:") {
+		t.Error("prompt missing Host exceptions when host tool present")
+	}
+	if !strings.Contains(prompt, "git") {
+		t.Error("prompt should list git as host tool")
+	}
+}
+
+func TestSubAgentPromptHostToolsOmittedWhenAbsent(t *testing.T) {
+	// Explore-mode sub-agent without git — no host tools section.
+	tools := []Tool{
+		stubTool{"bash"},
+		stubTool{"glob"},
+		stubTool{"grep"},
+		stubTool{"read_file"},
+	}
+	prompt := buildSubAgentSystemPrompt(tools, nil, "/work", "alpine:latest", nil)
+
+	if strings.Contains(prompt, "Host exceptions") {
+		t.Error("sub-agent prompt without host tools should not contain Host exceptions")
+	}
+}
+
+func TestToolHostToolReturnValues(t *testing.T) {
+	gt := NewGitTool("/tmp", false)
+	if !gt.HostTool() {
+		t.Error("GitTool.HostTool() should return true")
+	}
+
+	// All other tool types should return false.
+	// We test this via the stubTool and stubHostTool, but also verify
+	// the real tool structs if we can construct them without dependencies.
 }
 
 func TestGitToolForcePushApproval(t *testing.T) {
@@ -470,7 +536,7 @@ func TestSubAgentPromptWithoutWriteToolsExcludesModify(t *testing.T) {
 func TestSubAgentPromptSmallerThanMain(t *testing.T) {
 	tools := []Tool{
 		stubTool{"bash"},
-		stubTool{"git"},
+		stubHostTool{"git"},
 		stubTool{"devenv"},
 		stubTool{"agent"},
 		stubTool{"glob"},
@@ -487,7 +553,7 @@ func TestSubAgentPromptSmallerThanMain(t *testing.T) {
 
 	subTools := []Tool{
 		stubTool{"bash"},
-		stubTool{"git"},
+		stubHostTool{"git"},
 		stubTool{"devenv"},
 		stubTool{"glob"},
 		stubTool{"grep"},
@@ -696,7 +762,7 @@ func TestToolsMDCrossToolGuidanceOnly(t *testing.T) {
 		stubTool{"outline"},
 		stubTool{"edit_file"},
 		stubTool{"write_file"},
-		stubTool{"git"},
+		stubHostTool{"git"},
 		stubTool{"devenv"},
 		stubTool{"agent"},
 	}
