@@ -1,3 +1,4 @@
+{{/* practices: general coding best practices. Used by both entry points. */}}
 {{define "practices"}}
 
 ## Practices

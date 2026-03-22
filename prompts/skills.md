@@ -1,3 +1,4 @@
+{{/* skills: project-specific skill content loaded from .herm/skills/. Used by system.md only. */}}
 {{define "skills"}}{{if .Skills}}
 
 ## Skills

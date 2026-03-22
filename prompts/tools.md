@@ -1,3 +1,4 @@
+{{/* tools: cross-tool workflow guidance. Per-tool guidance lives in tool Description fields (prompts/tools/). Used by both entry points. */}}
 {{define "tools"}}
 
 ## Tools

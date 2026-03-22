@@ -1,3 +1,4 @@
+{{/* environment: runtime context (date, paths, image, project snapshot). Used by both entry points. */}}
 {{define "environment"}}
 
 ## Environment

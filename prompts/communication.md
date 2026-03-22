@@ -1,3 +1,4 @@
+{{/* communication: response style guidelines. Used by system.md only (main agent). */}}
 {{define "communication"}}
 
 ## Communication
