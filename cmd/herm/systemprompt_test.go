@@ -226,21 +226,24 @@ func TestBuildSystemPromptWorktreeBranchEmpty(t *testing.T) {
 	}
 }
 
-func TestBuildSystemPromptGitRoleMention(t *testing.T) {
+func TestBuildSystemPromptRunsOnHostMention(t *testing.T) {
 	tools := []Tool{stubTool{"git"}}
 	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "", nil)
 
-	if !strings.Contains(prompt, "git` tool is the exception") {
-		t.Error("role section missing git host-bridge mention when git tool is present")
+	if !strings.Contains(prompt, "tools run on the host") {
+		t.Error("role section missing host-bridge mention when git tool is present")
+	}
+	if !strings.Contains(prompt, "SSH keys and credentials") {
+		t.Error("role section missing credentials mention when git tool is present")
 	}
 }
 
-func TestBuildSystemPromptGitRoleMentionAbsent(t *testing.T) {
+func TestBuildSystemPromptRunsOnHostAbsent(t *testing.T) {
 	tools := []Tool{stubTool{"bash"}}
 	prompt := buildSystemPrompt(tools, nil, nil, "/work", "", "alpine:latest", "", nil)
 
-	if strings.Contains(prompt, "git` tool is the exception") {
-		t.Error("role section should not mention git host-bridge when git tool is absent")
+	if strings.Contains(prompt, "tools run on the host") {
+		t.Error("role section should not mention host-bridge when git tool is absent")
 	}
 }
 

@@ -79,8 +79,8 @@ Explore-mode sub-agents should only get read-only tools.
 
 The `HasGit` flag in `PromptData` gates host-specific guidance ("runs on the host", "SSH keys and credentials"), not git-specific logic. Rename for clarity and extensibility — more tools may run on host in the future.
 
-- [ ] 5a: Rename `HasGit` to `RunsOnHost` in the `PromptData` struct in `systemprompt.go`. Update both `buildSystemPrompt()` and `buildSubAgentSystemPrompt()` to set it from `toolNames["git"]` (same source, better name). Update all template references in `role.md` and `environment.md` from `.HasGit` to `.RunsOnHost`. Reframe the gated content to be about host access generically: e.g. "Some tools run on the host rather than inside the container, giving them access to SSH keys and credentials" rather than "The git tool runs on the host"
-- [ ] 5b: Update `systemprompt_test.go` for the rename. Any tests checking for `HasGit` or the old template output need updating
+- [x] 5a: Rename `HasGit` to `RunsOnHost` in the `PromptData` struct in `systemprompt.go`. Update both `buildSystemPrompt()` and `buildSubAgentSystemPrompt()` to set it from `toolNames["git"]` (same source, better name). Update all template references in `role.md` and `environment.md` from `.HasGit` to `.RunsOnHost`. Reframe the gated content to be about host access generically: e.g. "Some tools run on the host rather than inside the container, giving them access to SSH keys and credentials" rather than "The git tool runs on the host"
+- [x] 5b: Update `systemprompt_test.go` for the rename. Any tests checking for `HasGit` or the old template output need updating
 
 ## Phase 6: Align explore-mode role text with filtered tools
 

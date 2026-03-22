@@ -20,7 +20,7 @@ var promptTemplates = template.Must(template.ParseFS(promptFS, "prompts/*.md"))
 // PromptData holds all values passed to the system prompt templates.
 type PromptData struct {
 	HasBash        bool
-	HasGit         bool
+	RunsOnHost     bool
 	HasDevenv      bool
 	HasAgent       bool
 	HasWebSearch   bool
@@ -59,7 +59,7 @@ func buildSystemPrompt(tools []Tool, serverTools []types.ToolDefinition, skills 
 
 	data := PromptData{
 		HasBash:        toolNames["bash"],
-		HasGit:         toolNames["git"],
+		RunsOnHost:     toolNames["git"],
 		HasDevenv:      toolNames["devenv"],
 		HasAgent:       toolNames["agent"],
 		HasWebSearch:   toolNames[types.ServerToolWebSearch],
@@ -106,7 +106,7 @@ func buildSubAgentSystemPrompt(tools []Tool, serverTools []types.ToolDefinition,
 
 	data := PromptData{
 		HasBash:        toolNames["bash"],
-		HasGit:         toolNames["git"],
+		RunsOnHost:     toolNames["git"],
 		HasDevenv:      toolNames["devenv"],
 		HasAgent:       toolNames["agent"],
 		HasWebSearch:   toolNames[types.ServerToolWebSearch],

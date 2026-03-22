@@ -6,7 +6,7 @@
 - Working directory: {{.WorkDir}}
 - Container image: {{.ContainerImage}}
 - Project mounted at: /workspace
-{{- if .HasGit}}
+{{- if .RunsOnHost}}
 - Git: project is in a worktree managed by herm{{if .WorktreeBranch}} (branch: {{.WorktreeBranch}}){{end}}
 {{- end}}
 {{- if .HasBash}}
