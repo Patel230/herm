@@ -430,6 +430,39 @@ func TestBuildSubAgentSystemPrompt(t *testing.T) {
 	}
 }
 
+func TestSubAgentPromptWithWriteToolsIncludesModify(t *testing.T) {
+	tools := []Tool{
+		stubTool{"bash"},
+		stubTool{"glob"},
+		stubTool{"grep"},
+		stubTool{"read_file"},
+		stubTool{"edit_file"},
+		stubTool{"write_file"},
+	}
+	prompt := buildSubAgentSystemPrompt(tools, nil, "/work", "alpine:latest", nil)
+
+	if !strings.Contains(prompt, "modify any files") {
+		t.Error("sub-agent prompt with write tools should include 'modify any files'")
+	}
+}
+
+func TestSubAgentPromptWithoutWriteToolsExcludesModify(t *testing.T) {
+	tools := []Tool{
+		stubTool{"bash"},
+		stubTool{"glob"},
+		stubTool{"grep"},
+		stubTool{"read_file"},
+	}
+	prompt := buildSubAgentSystemPrompt(tools, nil, "/work", "alpine:latest", nil)
+
+	if strings.Contains(prompt, "modify any files") {
+		t.Error("sub-agent prompt without write tools should NOT include 'modify any files'")
+	}
+	if !strings.Contains(prompt, "search code, and read files") {
+		t.Error("sub-agent prompt without write tools should include read-only capability statement")
+	}
+}
+
 func TestSubAgentPromptSmallerThanMain(t *testing.T) {
 	tools := []Tool{
 		stubTool{"bash"},

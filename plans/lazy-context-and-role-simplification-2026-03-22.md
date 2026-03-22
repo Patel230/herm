@@ -86,8 +86,8 @@ The `HasGit` flag in `PromptData` gates host-specific guidance ("runs on the hos
 
 Phase 4 filters tools for explore mode, but `role.md` still unconditionally tells sub-agents "modify any files." The role text should reflect actual capabilities.
 
-- [ ] 6a: In `role.md`, make the sub-agent capability statement conditional. When `HasEditFile` or `HasWriteFile` is true: "You have full control — run any commands, modify any files." When neither is true (explore mode): "You can run commands, search code, and read files." No new `PromptData` fields needed — the existing `Has*` flags are already correctly computed from the filtered tool list
-- [ ] 6b: Add a test in `systemprompt_test.go` verifying: (1) sub-agent prompt with write tools includes "modify" language, (2) sub-agent prompt without write tools does NOT include "modify" language
+- [x] 6a: In `role.md`, make the sub-agent capability statement conditional. When `HasEditFile` or `HasWriteFile` is true: "You have full control — run any commands, modify any files." When neither is true (explore mode): "You can run commands, search code, and read files." No new `PromptData` fields needed — the existing `Has*` flags are already correctly computed from the filtered tool list
+- [x] 6b: Add a test in `systemprompt_test.go` verifying: (1) sub-agent prompt with write tools includes "modify" language, (2) sub-agent prompt without write tools does NOT include "modify" language
 
 ## Phase 7: Move prompts directory to repo root
 
