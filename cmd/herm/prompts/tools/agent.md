@@ -1,0 +1,32 @@
+---
+name: agent
+description: Spawn a sub-agent to handle a complex subtask
+---
+
+Spawn a sub-agent with its own context window. Each sub-agent has startup cost (system prompt tokens + LLM call latency), so only use when the benefit outweighs that overhead.
+
+**Modes — you must specify one:**
+- `"explore"` — uses a fast, cheap model. For research, search, reading code, investigating issues, gathering information.
+- `"implement"` — uses the full orchestrator model. For writing code, making edits, running build/test cycles, executing changes.
+
+**When to use:**
+- Tasks requiring deep exploration across many files (10+ tool calls) -> `explore`
+- Self-contained implementation work that would produce verbose output -> `implement`
+- Running multiple independent investigations in parallel (spawn several sub-agents) -> `explore`
+
+**When NOT to use — act directly instead:**
+- A single grep, glob, or file read
+- A small edit (even edit -> test -> fix cycles)
+- Running one command and interpreting the output
+- Any task completable in ~5 or fewer tool calls
+
+**Usage:**
+- Provide a clear, self-contained task description — the sub-agent has the same tools you do but no shared memory.
+- Resume a previous sub-agent by passing its agent_id with a new task — this continues from where it left off with full context preserved.
+
+**Reading results:**
+- Results include metadata: `[agent_id]`, `[output]`, `[tokens]`, `[turns]`, and a summary.
+- `[summary: model]` — intelligent summary; usually sufficient to act on.
+- `[summary: truncated]` — naive truncation; read the full output file via `read_file` for complete findings.
+- `[errors: ...]` — sub-agent hit errors; review and consider retrying with a narrower task.
+- `[turns: N/M]` — turns count LLM response cycles, not individual tool calls (one response with 5 tool calls = 1 turn). N=M means the sub-agent hit its turn limit and may have incomplete results.
