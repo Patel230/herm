@@ -136,6 +136,9 @@ func (a *App) startAgent(userMessage string) {
 		containerImage = defaultContainerImage
 	}
 
+	// Load tool descriptions from embedded markdown files, replacing dynamic placeholders.
+	toolDescriptions = loadToolDescriptions(containerImage)
+
 	// Sub-agent tool: output-only communication, no shared memory.
 	// Uses exploration model if configured, otherwise falls back to active model.
 	maxTurns := a.config.SubAgentMaxTurns

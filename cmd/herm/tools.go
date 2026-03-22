@@ -42,7 +42,7 @@ func NewBashTool(container *ContainerClient, timeout int) *BashTool {
 func (t *BashTool) Definition() types.ToolDefinition {
 	return types.ToolDefinition{
 		Name:        "bash",
-		Description: "Run a shell command in the dev container (project mounted at /workspace). Use for: reading/editing files, running tests, installing packages, building code, and any shell task. Output is truncated to 80 lines / 12KB (head+tail).",
+		Description: getToolDescription("bash", "Run a shell command in the dev container (project mounted at /workspace). Output is truncated to 80 lines / 12KB (head+tail)."),
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -162,7 +162,7 @@ func NewGitTool(workDir string, coAuthor bool) *GitTool {
 func (t *GitTool) Definition() types.ToolDefinition {
 	return types.ToolDefinition{
 		Name:        "git",
-		Description: "Run git commands on the host in the project worktree. Recommended for all main-project git operations — the container may not have git installed. Required for remote operations (push/pull/fetch) since only the host has SSH keys and credentials. Push and force operations require user approval. Allowed subcommands: status, diff, log, show, branch, checkout, add, commit, pull, push, fetch, stash, rebase, merge, reset, tag.",
+		Description: getToolDescription("git", "Run git commands on the host in the project worktree. Required for remote operations (push/pull/fetch) since only the host has SSH keys and credentials."),
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -311,7 +311,7 @@ func NewDevEnvTool(container *ContainerClient, hermDir, workspace string, mounts
 func (t *DevEnvTool) Definition() types.ToolDefinition {
 	return types.ToolDefinition{
 		Name:        "devenv",
-		Description: "Manage the single dev container Dockerfile at .herm/Dockerfile. The built image replaces the running container and persists across sessions. Use this to install languages, tools, compilers, and system dependencies permanently. Always read before writing.",
+		Description: getToolDescription("devenv", "Manage the single dev container Dockerfile at .herm/Dockerfile. The built image replaces the running container and persists across sessions."),
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
