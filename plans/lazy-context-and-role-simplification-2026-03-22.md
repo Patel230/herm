@@ -108,6 +108,24 @@ The single `system.md` template branches on `.IsSubAgent`, and that conditional 
 - [x] 8d: Add Go template comments (`{{/* ... */}}`) as docstrings to each template file. Each file should have a brief comment at the top describing its purpose and which entry point uses it. These are standard `text/template` comments, stripped at render time
 - [x] 8e: Update `systemprompt_test.go` — the `TestPromptTemplateParsing` test needs to include the new template names. Existing tests for `buildSubAgentSystemPrompt` should still pass since behavior is unchanged. Run `go test ./...`
 
+## Phase 9: Per-tool execution context and host tool grouping
+
+The `RunsOnHost` boolean is a proxy for "git tool is present" but pretends to be generic. The vague "Some tools run on the host" language doesn't tell the LLM *which* tools. Meanwhile, 7 of 10 tool description files don't mention where they execute. This phase makes execution context a first-class property of each tool, and renders it explicitly in prompts.
+
+**Guiding principle:** The agent and sub-agents all run on the host — but most *tools* execute inside the container. Host-executing tools are the exception and should be clearly flagged and grouped.
+
+- [ ] 9a: Add `HostTool() bool` to the `Tool` interface in `agent.go`. Returns `true` if the tool executes on the host rather than in the container. Implement on all tool structs: `GitTool` returns `true`; all others (`BashTool`, `GlobTool`, `GrepTool`, `ReadFileTool`, `EditFileTool`, `WriteFileTool`, `OutlineTool`, `DevEnvTool`, `SubAgentTool`) return `false`. DevEnvTool is borderline (reads/writes Dockerfile on host) but its primary user-facing behavior is container-focused, so `false` is correct — revisit if this causes confusion
+
+- [ ] 9b: Replace `RunsOnHost bool` with `HostTools []string` in the `PromptData` struct in `systemprompt.go`. In both `buildSystemPrompt` and `buildSubAgentSystemPrompt`, compute the list by iterating tools and collecting `t.Definition().Name` where `t.HostTool()` returns `true`. This makes the field self-maintaining — adding a future host tool only requires implementing `HostTool() bool { return true }` on that struct. Drop all `toolNames["git"]` references that previously set `RunsOnHost`
+
+- [ ] 9c: Update `role.md` and `role_subagent.md` templates. Replace the vague `{{if .RunsOnHost}} Some tools run on the host...{{end}}` conditional with explicit enumeration using the `HostTools` slice. When the list is non-empty, render something like: "Most tools execute inside the container. **Host exceptions:** {{range .HostTools}}{{.}}, {{end}} — these run on the host with access to SSH keys and credentials that container tools cannot reach. Use `git` for remote operations (push, pull, fetch)." When the list is empty, omit the section entirely. The git-specific tip ("Use `git` for remote operations") should be conditional on `"git"` being in the list, not hardcoded
+
+- [ ] 9d: Update `environment.md`. Replace `{{if .RunsOnHost}}` with `{{if .HostTools}}`. The git worktree line should check for `"git"` in the list (use a template helper function or range/eq). Consider adding a grouped "Host tools" bullet under Environment that lists them, e.g. `- Host tools: git (worktree: branch-name)` instead of the current separate `- Git: project is in a worktree managed by herm`
+
+- [ ] 9e: Update all tool description markdown files in `prompts/tools/` to consistently state execution context. Add a `runs_on:` field to each file's frontmatter (`container` or `host`). Near the top of each description body, include a one-line statement: "Runs inside the dev container." or "Runs on the host (not in the container)." Currently only `bash.md` and `git.md` state this; update `devenv.md`, `glob.md`, `grep.md`, `read_file.md`, `edit_file.md`, `write_file.md`, `outline.md`, and `agent.md`
+
+- [ ] 9f: Update `systemprompt_test.go`. Remove tests checking for `RunsOnHost` boolean behavior. Add tests verifying: (1) `HostTools` slice is correctly populated from tools where `HostTool()` returns `true`, (2) main and sub-agent prompts enumerate host tool names explicitly when present, (3) when no host tools exist (e.g. explore-mode sub-agent without git), the host exception section is omitted entirely, (4) each tool struct returns the expected `HostTool()` value
+
 ## Open questions
 
 - **web_search**: This is a server-side tool (no Go Definition() method — it's a `types.ToolDefinition` literal). Should it also get a markdown file, or keep the inline definition? Leaning toward keeping it inline since it's 3 lines and provider-defined.
