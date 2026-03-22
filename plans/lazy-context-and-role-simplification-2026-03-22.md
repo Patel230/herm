@@ -65,8 +65,8 @@ Create per-tool markdown files that replace both inline Description strings and 
 
 The devenv tool's markdown file now contains core guidance. Reconcile with the `.herm/skills/devenv.md` skill.
 
-- [ ] 3a: Review `.herm/skills/devenv.md` content against `prompts/tools/devenv.md`. Move essential non-duplicated content (Dockerfile examples, common mistakes, RUN layer hygiene) into the tool description markdown file. The skill file should be trimmed or removed if fully redundant
-- [ ] 3b: If the skill is kept, slim it to project-specific content only (e.g., base image version specifics). Update skills.md template if needed. If removed, clean up references
+- [x] 3a: Review `.herm/skills/devenv.md` content against `prompts/tools/devenv.md`. Move essential non-duplicated content (Dockerfile examples, common mistakes, RUN layer hygiene) into the tool description markdown file. The skill file should be trimmed or removed if fully redundant
+- [x] 3b: If the skill is kept, slim it to project-specific content only (e.g., base image version specifics). Update skills.md template if needed. If removed, clean up references
 
 ## Phase 4: Filter sub-agent tools by mode
 
