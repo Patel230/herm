@@ -75,6 +75,29 @@ Explore-mode sub-agents should only get read-only tools.
 - [x] 4a: Define a package-level `exploreToolAllowlist` as a `map[string]bool` containing: `glob`, `grep`, `read_file`, `outline`, `bash`. Modify `buildSubAgentTools()` in `subagent.go` to accept a `mode` parameter. When mode is `"explore"`, filter the tool list to only tools in the allowlist. When mode is `"implement"`, keep the full tool set. Note: bash remains in explore mode (needed for read-only commands like `ls`, `tree`, build checks) — this is an accepted escape hatch, consistent with Claude Code's approach
 - [x] 4b: Add tests verifying: (1) explore-mode tool list contains only allowlisted tools, (2) implement-mode tool list contains all tools, (3) the sub-agent system prompt built from filtered tools excludes write-tool guidance
 
+## Phase 5: Rename HasGit to RunsOnHost
+
+The `HasGit` flag in `PromptData` gates host-specific guidance ("runs on the host", "SSH keys and credentials"), not git-specific logic. Rename for clarity and extensibility — more tools may run on host in the future.
+
+- [ ] 5a: Rename `HasGit` to `RunsOnHost` in the `PromptData` struct in `systemprompt.go`. Update both `buildSystemPrompt()` and `buildSubAgentSystemPrompt()` to set it from `toolNames["git"]` (same source, better name). Update all template references in `role.md` and `environment.md` from `.HasGit` to `.RunsOnHost`. Reframe the gated content to be about host access generically: e.g. "Some tools run on the host rather than inside the container, giving them access to SSH keys and credentials" rather than "The git tool runs on the host"
+- [ ] 5b: Update `systemprompt_test.go` for the rename. Any tests checking for `HasGit` or the old template output need updating
+
+## Phase 6: Align explore-mode role text with filtered tools
+
+Phase 4 filters tools for explore mode, but `role.md` still unconditionally tells sub-agents "modify any files." The role text should reflect actual capabilities.
+
+- [ ] 6a: In `role.md`, make the sub-agent capability statement conditional. When `HasEditFile` or `HasWriteFile` is true: "You have full control — run any commands, modify any files." When neither is true (explore mode): "You can run commands, search code, and read files." No new `PromptData` fields needed — the existing `Has*` flags are already correctly computed from the filtered tool list
+- [ ] 6b: Add a test in `systemprompt_test.go` verifying: (1) sub-agent prompt with write tools includes "modify" language, (2) sub-agent prompt without write tools does NOT include "modify" language
+
+## Phase 7: Move prompts directory to repo root
+
+The `cmd/herm/prompts/` directory is buried too deep. Move it to the repo root so all system prompt markdown is easily discoverable. Note: `//go:embed` does not allow `..` paths, so the embed FS must be restructured — likely a dedicated `prompts` package with its own embed, imported by `cmd/herm`.
+
+- [ ] 7a: Create a `prompts/` package at the repo root. Move all 18 markdown files from `cmd/herm/prompts/` into `prompts/` (preserving the `tools/` subdirectory). Add a `prompts.go` file that embeds the files and exports the template set and tool description FS. This package owns `//go:embed prompts/*.md` and `//go:embed tools/*.md` (relative to its own directory)
+- [ ] 7b: Update `cmd/herm/systemprompt.go` to import the new `prompts` package instead of using its own embed. Remove the old `//go:embed prompts/*.md` directive. Update `promptTemplates` to use the exported template set from the prompts package
+- [ ] 7c: Update `cmd/herm/tooldesc.go` to import the new `prompts` package instead of embedding `prompts/tools/*.md` directly. Remove the old `//go:embed prompts/tools/*.md` directive
+- [ ] 7d: Remove the now-empty `cmd/herm/prompts/` directory. Update any tests that reference prompt paths. Run `go test ./...` to verify everything still works
+
 ## Open questions
 
 - **web_search**: This is a server-side tool (no Go Definition() method — it's a `types.ToolDefinition` literal). Should it also get a markdown file, or keep the inline definition? Leaning toward keeping it inline since it's 3 lines and provider-defined.
