@@ -98,6 +98,16 @@ The `cmd/herm/prompts/` directory is buried too deep. Move it to the repo root s
 - [x] 7c: Update `cmd/herm/tooldesc.go` to import the new `prompts` package instead of embedding `prompts/tools/*.md` directly. Remove the old `//go:embed prompts/tools/*.md` directive
 - [x] 7d: Remove the now-empty `cmd/herm/prompts/` directory. Update any tests that reference prompt paths. Run `go test ./...` to verify everything still works
 
+## Phase 8: Split system.md into main and sub-agent entry points
+
+The single `system.md` template branches on `.IsSubAgent`, and that conditional cascades through `role.md`, `tools.md`, etc. Two separate entry-point templates make the flow easier to read. Also add Go template docstring comments (`{{/* ... */}}`) to each template file for maintainability.
+
+- [x] 8a: Create `system_subagent.md` as a new entry-point template for sub-agents. It should define `{{define "system_subagent"}}` and chain only the templates relevant to sub-agents (role, tools, practices, environment — no communication, personality, or skills). Remove the `{{if not .IsSubAgent}}` conditional from `system.md` — it becomes the main-agent-only entry point
+- [ ] 8b: Update `buildSubAgentSystemPrompt()` in `systemprompt.go` to execute `"system_subagent"` instead of `"system"`. Update `prompts.go` to ensure the new file is included in the embed
+- [ ] 8c: Simplify `role.md` — split into `role.md` (main agent) and `role_subagent.md` (sub-agent), removing the top-level `{{if .IsSubAgent}}` branch. Update both `system.md` and `system_subagent.md` to reference the appropriate role template
+- [ ] 8d: Add Go template comments (`{{/* ... */}}`) as docstrings to each template file. Each file should have a brief comment at the top describing its purpose and which entry point uses it. These are standard `text/template` comments, stripped at render time
+- [ ] 8e: Update `systemprompt_test.go` — the `TestPromptTemplateParsing` test needs to include the new template names. Existing tests for `buildSubAgentSystemPrompt` should still pass since behavior is unchanged. Run `go test ./...`
+
 ## Open questions
 
 - **web_search**: This is a server-side tool (no Go Definition() method — it's a `types.ToolDefinition` literal). Should it also get a markdown file, or keep the inline definition? Leaning toward keeping it inline since it's 3 lines and provider-defined.
