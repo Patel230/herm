@@ -155,6 +155,8 @@ func (t *GlobTool) RequiresApproval(_ json.RawMessage) bool {
 	return false
 }
 
+func (t *GlobTool) HostTool() bool { return false }
+
 // GrepTool searches file contents by regex inside the Docker container.
 // It uses rg (ripgrep) under the hood for fast, .gitignore-aware searching.
 type GrepTool struct {
@@ -291,6 +293,8 @@ func (t *GrepTool) RequiresApproval(_ json.RawMessage) bool {
 	return false
 }
 
+func (t *GrepTool) HostTool() bool { return false }
+
 // ReadFileTool reads file contents (with optional line range) inside the Docker container.
 type ReadFileTool struct {
 	container *ContainerClient
@@ -413,6 +417,8 @@ func (t *ReadFileTool) RequiresApproval(_ json.RawMessage) bool {
 	return false
 }
 
+func (t *ReadFileTool) HostTool() bool { return false }
+
 // EditFileTool performs exact string replacement in a file inside the Docker container.
 // It pipes JSON to the edit-file CLI tool and returns the unified diff.
 type EditFileTool struct {
@@ -520,6 +526,8 @@ func (t *EditFileTool) RequiresApproval(_ json.RawMessage) bool {
 	return false
 }
 
+func (t *EditFileTool) HostTool() bool { return false }
+
 // WriteFileTool creates or overwrites a file inside the Docker container.
 // It pipes JSON to the write-file CLI tool and returns a summary with diff.
 type WriteFileTool struct {
@@ -624,6 +632,8 @@ func (t *WriteFileTool) Execute(ctx context.Context, input json.RawMessage) (str
 func (t *WriteFileTool) RequiresApproval(_ json.RawMessage) bool {
 	return false
 }
+
+func (t *WriteFileTool) HostTool() bool { return false }
 
 // OutlineTool extracts function/type signatures from a file without reading
 // the full content. Returns a compact outline with line numbers (~50-100 tokens
@@ -784,3 +794,5 @@ func (t *OutlineTool) outlineFallback(filePath, displayPath string) (string, err
 func (t *OutlineTool) RequiresApproval(_ json.RawMessage) bool {
 	return false
 }
+
+func (t *OutlineTool) HostTool() bool { return false }

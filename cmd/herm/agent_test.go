@@ -35,6 +35,8 @@ func (t *testTool) RequiresApproval(_ json.RawMessage) bool {
 	return t.requiresApproval
 }
 
+func (t *testTool) HostTool() bool { return false }
+
 // blockingTool blocks Execute until the release channel is closed.
 type blockingTool struct {
 	name    string
@@ -55,6 +57,7 @@ func (t *blockingTool) Execute(ctx context.Context, _ json.RawMessage) (string, 
 }
 
 func (t *blockingTool) RequiresApproval(_ json.RawMessage) bool { return false }
+func (t *blockingTool) HostTool() bool                        { return false }
 
 // --- Task 1a: NewAgent with option funcs ---
 
@@ -951,6 +954,7 @@ func (t *parallelTracker) Execute(ctx context.Context, _ json.RawMessage) (strin
 }
 
 func (t *parallelTracker) RequiresApproval(_ json.RawMessage) bool { return false }
+func (t *parallelTracker) HostTool() bool                        { return false }
 
 func TestRunParallelAgentCalls(t *testing.T) {
 	// LLM returns 3 agent tool calls in one response.
@@ -1309,6 +1313,7 @@ func (t *panicTool) Execute(_ context.Context, _ json.RawMessage) (string, error
 }
 
 func (t *panicTool) RequiresApproval(_ json.RawMessage) bool { return false }
+func (t *panicTool) HostTool() bool                        { return false }
 
 func TestEmitNonBlockingWhenChannelFull(t *testing.T) {
 	client := newTestClient("ok")

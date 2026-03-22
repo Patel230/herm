@@ -94,6 +94,8 @@ type Tool interface {
 	Execute(ctx context.Context, input json.RawMessage) (string, error)
 	// RequiresApproval returns true if this invocation needs user confirmation.
 	RequiresApproval(input json.RawMessage) bool
+	// HostTool returns true if the tool executes on the host rather than in the container.
+	HostTool() bool
 }
 
 // AgentEventType identifies the kind of agent event.

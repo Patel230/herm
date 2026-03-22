@@ -32,6 +32,8 @@ func (s stubTool) RequiresApproval(_ json.RawMessage) bool {
 	return false
 }
 
+func (s stubTool) HostTool() bool { return false }
+
 func TestBuildSystemPromptAllTools(t *testing.T) {
 	tools := []Tool{
 		stubTool{"bash"},

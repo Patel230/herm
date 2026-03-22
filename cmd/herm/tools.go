@@ -101,6 +101,8 @@ func (t *BashTool) RequiresApproval(_ json.RawMessage) bool {
 	return false
 }
 
+func (t *BashTool) HostTool() bool { return false }
+
 // truncateOutput trims output to bashMaxLines lines and bashMaxBytes bytes using
 // a head+tail strategy: keep the first truncHeadLines and last truncTailLines,
 // inserting a "[... N lines omitted ...]" separator in between.
@@ -251,6 +253,8 @@ func (t *GitTool) RequiresApproval(input json.RawMessage) bool {
 	return false
 }
 
+func (t *GitTool) HostTool() bool { return true }
+
 // gitArgsContainForce returns true if args contain --force or -f.
 func gitArgsContainForce(args []string) bool {
 	for _, arg := range args {
@@ -357,6 +361,8 @@ func (t *DevEnvTool) Execute(ctx context.Context, input json.RawMessage) (string
 func (t *DevEnvTool) RequiresApproval(_ json.RawMessage) bool {
 	return false
 }
+
+func (t *DevEnvTool) HostTool() bool { return false }
 
 // dockerfilePath returns the canonical path to .herm/Dockerfile.
 func (t *DevEnvTool) dockerfilePath() string {

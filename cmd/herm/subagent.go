@@ -99,6 +99,8 @@ func (t *SubAgentTool) RequiresApproval(_ json.RawMessage) bool {
 	return false
 }
 
+func (t *SubAgentTool) HostTool() bool { return false }
+
 type subAgentInput struct {
 	Task    string `json:"task"`
 	Mode    string `json:"mode"`
