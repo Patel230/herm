@@ -32,7 +32,7 @@ Uncommitted changes:
 {{- if .GitStatus}}
 {{.GitStatus}}
 {{- else}}
-clean
+no uncommitted changes
 {{- end}}
 {{- end}}
 {{- end}}

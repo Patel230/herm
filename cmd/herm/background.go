@@ -428,6 +428,113 @@ func fetchCommitInfo(worktreePath string) commitInfoMsg {
 	return msg
 }
 
+// buildProjectTree creates a two-level tree view of the project directory with
+// smart truncation. Important files (README, go.mod, package.json, Makefile,
+// Dockerfile) are preserved when truncating top-level entries. Hidden entries
+// (starting with ".") are excluded.
+func buildProjectTree(rootPath string, maxTopLevel, maxPerSubdir int) string {
+	if maxTopLevel <= 0 {
+		maxTopLevel = 20
+	}
+	if maxPerSubdir <= 0 {
+		maxPerSubdir = 8
+	}
+
+	entries, err := os.ReadDir(rootPath)
+	if err != nil {
+		return ""
+	}
+
+	// Filter out hidden entries.
+	var visible []os.DirEntry
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), ".") {
+			visible = append(visible, e)
+		}
+	}
+
+	importantNames := map[string]bool{
+		"readme": true, "readme.md": true, "readme.txt": true, "readme.rst": true,
+		"go.mod": true, "go.sum": true, "package.json": true,
+		"makefile": true, "dockerfile": true,
+	}
+	isImportant := func(name string) bool {
+		return importantNames[strings.ToLower(name)]
+	}
+
+	// If we need to truncate, keep important files and fill remaining slots.
+	var selected []os.DirEntry
+	truncated := 0
+	if len(visible) > maxTopLevel {
+		var imp, other []os.DirEntry
+		for _, e := range visible {
+			if isImportant(e.Name()) {
+				imp = append(imp, e)
+			} else {
+				other = append(other, e)
+			}
+		}
+		if len(imp) >= maxTopLevel {
+			selected = imp[:maxTopLevel]
+			truncated = len(visible) - maxTopLevel
+		} else {
+			selected = append(selected, imp...)
+			remaining := maxTopLevel - len(imp)
+			if len(other) > remaining {
+				selected = append(selected, other[:remaining]...)
+				truncated = len(other) - remaining
+			} else {
+				selected = append(selected, other...)
+			}
+		}
+	} else {
+		selected = visible
+	}
+
+	var buf strings.Builder
+	for _, e := range selected {
+		name := e.Name()
+		if e.IsDir() {
+			buf.WriteString(name + "/\n")
+			subEntries, err := os.ReadDir(filepath.Join(rootPath, name))
+			if err != nil {
+				continue
+			}
+			var visibleSub []os.DirEntry
+			for _, se := range subEntries {
+				if !strings.HasPrefix(se.Name(), ".") {
+					visibleSub = append(visibleSub, se)
+				}
+			}
+			if len(visibleSub) > maxPerSubdir {
+				for _, se := range visibleSub[:maxPerSubdir] {
+					subName := se.Name()
+					if se.IsDir() {
+						subName += "/"
+					}
+					buf.WriteString("  " + subName + "\n")
+				}
+				buf.WriteString(fmt.Sprintf("  +%d more\n", len(visibleSub)-maxPerSubdir))
+			} else {
+				for _, se := range visibleSub {
+					subName := se.Name()
+					if se.IsDir() {
+						subName += "/"
+					}
+					buf.WriteString("  " + subName + "\n")
+				}
+			}
+		} else {
+			buf.WriteString(name + "\n")
+		}
+	}
+	if truncated > 0 {
+		buf.WriteString(fmt.Sprintf("+%d more\n", truncated))
+	}
+
+	return strings.TrimSpace(buf.String())
+}
+
 // fetchProjectSnapshot gathers a lightweight project snapshot for the system prompt.
 // Each sub-command has a 2s timeout and fails gracefully to empty string.
 func fetchProjectSnapshot(worktreePath string) projectSnapshotMsg {
@@ -440,28 +547,9 @@ func fetchProjectSnapshot(worktreePath string) projectSnapshotMsg {
 
 	ch := make(chan result, 3)
 
-	// ls -1 of root (with tree fallback for sparse dirs).
+	// Two-level tree view of project root.
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "ls", "-1", worktreePath)
-		out, err := cmd.Output()
-		val := ""
-		if err == nil {
-			val = strings.TrimSpace(string(out))
-			// If sparse (<= 8 entries), try tree for richer structure.
-			if strings.Count(val, "\n") < 8 {
-				treeCtx, treeCancel := context.WithTimeout(context.Background(), 2*time.Second)
-				defer treeCancel()
-				treeCmd := exec.CommandContext(treeCtx, "tree", "-L", "2", "--noreport", worktreePath)
-				if treeOut, treeErr := treeCmd.Output(); treeErr == nil {
-					lines := strings.Split(strings.TrimSpace(string(treeOut)), "\n")
-					if len(lines) <= 50 {
-						val = strings.TrimSpace(string(treeOut))
-					}
-				}
-			}
-		}
+		val := buildProjectTree(worktreePath, 20, 8)
 		ch <- result{"ls", val}
 	}()
 

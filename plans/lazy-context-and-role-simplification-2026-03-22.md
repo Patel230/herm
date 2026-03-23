@@ -132,13 +132,13 @@ The current project snapshot uses `ls -1` (flat listing) with a fallback to `tre
 
 **Goal:** Two-level tree view with smart truncation, and better wording for clean status.
 
-- [ ] 10a: Create a `buildProjectTree(rootPath string, maxTopLevel, maxPerSubdir int) string` function in `background.go`. It should: (1) list top-level entries, (2) for directories, list one level of sub-entries, (3) truncate top-level entries beyond `maxTopLevel` (default 20) with a "+N more" line, (4) truncate sub-entries beyond `maxPerSubdir` (default 8) with "+N more" per directory, (5) use simple indentation (2 spaces) rather than ASCII tree characters. The function runs `ls` commands in the container — no new dependencies. Important files (README, go.mod, package.json, Makefile, Dockerfile) should be kept when truncating top-level, with less notable entries dropped first
+- [x] 10a: Create a `buildProjectTree(rootPath string, maxTopLevel, maxPerSubdir int) string` function in `background.go`. It should: (1) list top-level entries, (2) for directories, list one level of sub-entries, (3) truncate top-level entries beyond `maxTopLevel` (default 20) with a "+N more" line, (4) truncate sub-entries beyond `maxPerSubdir` (default 8) with "+N more" per directory, (5) use simple indentation (2 spaces) rather than ASCII tree characters. The function runs `ls` commands in the container — no new dependencies. Important files (README, go.mod, package.json, Makefile, Dockerfile) should be kept when truncating top-level, with less notable entries dropped first
 
-- [ ] 10b: Update `fetchProjectSnapshot()` in `background.go` (lines 431-509) to use `buildProjectTree()` instead of the current `ls -1` / `tree -L 2` fallback logic. Keep the 2-second timeout. The `projectSnapshot.TopLevel` field now holds hierarchical output
+- [x] 10b: Update `fetchProjectSnapshot()` in `background.go` (lines 431-509) to use `buildProjectTree()` instead of the current `ls -1` / `tree -L 2` fallback logic. Keep the 2-second timeout. The `projectSnapshot.TopLevel` field now holds hierarchical output
 
-- [ ] 10c: Update `prompts/environment.md` template. Change the "Uncommitted changes" section: when `GitStatus` is empty, render "no uncommitted changes" instead of "clean". Keep current behavior when `GitStatus` is non-empty
+- [x] 10c: Update `prompts/environment.md` template. Change the "Uncommitted changes" section: when `GitStatus` is empty, render "no uncommitted changes" instead of "clean". Keep current behavior when `GitStatus` is non-empty
 
-- [ ] 10d: Update tests. Modify `TestBuildSystemPromptCleanRepo` in `snapshot_test.go` to check for "no uncommitted changes" instead of "clean". Add `TestBuildProjectTree` verifying: (1) two-level output for normal directories, (2) "+N more" truncation when entries exceed limits, (3) important files preserved during truncation
+- [x] 10d: Update tests. Modify `TestBuildSystemPromptCleanRepo` in `snapshot_test.go` to check for "no uncommitted changes" instead of "clean". Add `TestBuildProjectTree` verifying: (1) two-level output for normal directories, (2) "+N more" truncation when entries exceed limits, (3) important files preserved during truncation
 
 ## Phase 11: Show full agent context in display mode
 

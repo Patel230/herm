@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -196,8 +197,8 @@ func TestBuildSystemPromptCleanRepo(t *testing.T) {
 	if !strings.Contains(prompt, "## Project context") {
 		t.Error("prompt should contain Project context section")
 	}
-	if !strings.Contains(prompt, "clean") {
-		t.Error("prompt should show 'clean' when GitStatus is empty")
+	if !strings.Contains(prompt, "no uncommitted changes") {
+		t.Error("prompt should show 'no uncommitted changes' when GitStatus is empty")
 	}
 }
 
@@ -230,5 +231,119 @@ func TestBuildSubAgentSystemPromptWithoutSnapshot(t *testing.T) {
 
 	if strings.Contains(prompt, "## Project context") {
 		t.Error("sub-agent prompt should NOT contain Project context when snapshot is nil")
+	}
+}
+
+// --- Phase 10: buildProjectTree tests ---
+
+func TestBuildProjectTree_TwoLevel(t *testing.T) {
+	tmp := t.TempDir()
+
+	// Create a small project structure.
+	os.MkdirAll(filepath.Join(tmp, "cmd", "app"), 0o755)
+	os.MkdirAll(filepath.Join(tmp, "pkg", "util"), 0o755)
+	os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module test"), 0o644)
+	os.WriteFile(filepath.Join(tmp, "README.md"), []byte("hello"), 0o644)
+	os.WriteFile(filepath.Join(tmp, "cmd", "main.go"), []byte("package main"), 0o644)
+	os.WriteFile(filepath.Join(tmp, "pkg", "lib.go"), []byte("package pkg"), 0o644)
+
+	result := buildProjectTree(tmp, 20, 8)
+
+	if result == "" {
+		t.Fatal("expected non-empty tree output")
+	}
+
+	// Top-level entries.
+	if !strings.Contains(result, "cmd/") {
+		t.Error("should contain cmd/")
+	}
+	if !strings.Contains(result, "pkg/") {
+		t.Error("should contain pkg/")
+	}
+	if !strings.Contains(result, "go.mod") {
+		t.Error("should contain go.mod")
+	}
+	if !strings.Contains(result, "README.md") {
+		t.Error("should contain README.md")
+	}
+
+	// Sub-entries (indented).
+	if !strings.Contains(result, "  main.go") {
+		t.Errorf("should contain indented sub-entry main.go, got:\n%s", result)
+	}
+	if !strings.Contains(result, "  app/") {
+		t.Errorf("should contain indented sub-directory app/, got:\n%s", result)
+	}
+}
+
+func TestBuildProjectTree_TopLevelTruncation(t *testing.T) {
+	tmp := t.TempDir()
+
+	// Create 25 top-level files — more than maxTopLevel=5.
+	for i := 0; i < 25; i++ {
+		os.WriteFile(filepath.Join(tmp, fmt.Sprintf("file%02d.txt", i)), []byte("x"), 0o644)
+	}
+	// Add an important file that should survive truncation.
+	os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module test"), 0o644)
+
+	result := buildProjectTree(tmp, 5, 8)
+
+	if !strings.Contains(result, "go.mod") {
+		t.Errorf("important file go.mod should be preserved during truncation, got:\n%s", result)
+	}
+	if !strings.Contains(result, "+") || !strings.Contains(result, "more") {
+		t.Errorf("should contain +N more truncation indicator, got:\n%s", result)
+	}
+	// Count non-"+N more" lines — should be at most maxTopLevel.
+	lines := strings.Split(result, "\n")
+	entryCount := 0
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "+") {
+			entryCount++
+		}
+	}
+	if entryCount > 5 {
+		t.Errorf("expected at most 5 top-level entries, got %d:\n%s", entryCount, result)
+	}
+}
+
+func TestBuildProjectTree_SubdirTruncation(t *testing.T) {
+	tmp := t.TempDir()
+
+	// Create a directory with 15 sub-entries — more than maxPerSubdir=3.
+	dir := filepath.Join(tmp, "bigdir")
+	os.MkdirAll(dir, 0o755)
+	for i := 0; i < 15; i++ {
+		os.WriteFile(filepath.Join(dir, fmt.Sprintf("item%02d.go", i)), []byte("x"), 0o644)
+	}
+
+	result := buildProjectTree(tmp, 20, 3)
+
+	if !strings.Contains(result, "bigdir/") {
+		t.Errorf("should contain bigdir/, got:\n%s", result)
+	}
+	if !strings.Contains(result, "  +12 more") {
+		t.Errorf("should contain sub-entry truncation '+12 more', got:\n%s", result)
+	}
+}
+
+func TestBuildProjectTree_HiddenFilesExcluded(t *testing.T) {
+	tmp := t.TempDir()
+
+	os.WriteFile(filepath.Join(tmp, ".hidden"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(tmp, "visible.txt"), []byte("x"), 0o644)
+	os.MkdirAll(filepath.Join(tmp, ".git"), 0o755)
+	os.WriteFile(filepath.Join(tmp, ".git", "config"), []byte("x"), 0o644)
+
+	result := buildProjectTree(tmp, 20, 8)
+
+	if strings.Contains(result, ".hidden") {
+		t.Errorf("hidden files should be excluded, got:\n%s", result)
+	}
+	if strings.Contains(result, ".git") {
+		t.Errorf(".git directory should be excluded, got:\n%s", result)
+	}
+	if !strings.Contains(result, "visible.txt") {
+		t.Error("visible files should be included")
 	}
 }
