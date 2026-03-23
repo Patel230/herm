@@ -13,6 +13,48 @@ import (
 	"langdag.com/langdag/types"
 )
 
+// formatToolDefinitions builds a compact display of all tool definitions
+// the LLM receives, including client tools and server tools.
+func formatToolDefinitions(tools []Tool, serverTools []types.ToolDefinition) string {
+	var b strings.Builder
+	b.WriteString("── Tool Definitions ──\n")
+	for _, t := range tools {
+		def := t.Definition()
+		b.WriteString("\n")
+		b.WriteString(def.Name)
+		b.WriteString(": ")
+		// Use the brief description from loaded tool descriptions if available,
+		// otherwise use the first line of the full description.
+		if td, ok := toolDescriptions[def.Name]; ok && td.Brief != "" {
+			b.WriteString(td.Brief)
+		} else {
+			brief := def.Description
+			if idx := strings.IndexByte(brief, '\n'); idx > 0 {
+				brief = brief[:idx]
+			}
+			b.WriteString(brief)
+		}
+		b.WriteString("\n  params: ")
+		params := toolParamNames(def.InputSchema)
+		if len(params) > 0 {
+			b.WriteString(strings.Join(params, ", "))
+		} else {
+			b.WriteString("(none)")
+		}
+		b.WriteString("\n")
+	}
+	for _, st := range serverTools {
+		b.WriteString("\n")
+		b.WriteString(st.Name)
+		b.WriteString(": ")
+		if st.Description != "" {
+			b.WriteString(st.Description)
+		}
+		b.WriteString("\n  params: (server-side)\n")
+	}
+	return b.String()
+}
+
 // showModelChange displays an info message when the active model changes.
 func (a *App) showModelChange(modelID string) {
 	if modelID == "" || modelID == a.lastModelID {
@@ -165,6 +207,8 @@ func (a *App) startAgent(userMessage string) {
 
 	if a.displaySystemPrompts {
 		a.messages = append(a.messages, chatMessage{kind: msgSystemPrompt, content: "── System Prompt ──\n" + systemPrompt})
+		a.messages = append(a.messages, chatMessage{kind: msgSystemPrompt, content: formatToolDefinitions(tools, serverTools)})
+		a.messages = append(a.messages, chatMessage{kind: msgSystemPrompt, content: "── Session Stats ──\n(appended at runtime: \"Session: N tokens used, N agent calls\" — zero at startup)"})
 	}
 
 	a.showModelChange(modelID)

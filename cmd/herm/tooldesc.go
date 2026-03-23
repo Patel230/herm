@@ -5,7 +5,9 @@
 package main
 
 import (
+	"encoding/json"
 	"herm/prompts"
+	"sort"
 	"strings"
 )
 
@@ -103,6 +105,27 @@ func parseToolDesc(raw string) (ToolDesc, bool) {
 	}
 
 	return td, true
+}
+
+// toolParamNames extracts the property names from a JSON Schema InputSchema.
+// Returns a sorted list of parameter names. If the schema is nil or cannot be
+// parsed, returns nil.
+func toolParamNames(schema json.RawMessage) []string {
+	if len(schema) == 0 {
+		return nil
+	}
+	var s struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(schema, &s); err != nil || len(s.Properties) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(s.Properties))
+	for k := range s.Properties {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // getToolDescription returns the full description for a named tool,

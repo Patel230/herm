@@ -15,4 +15,8 @@ When given a task:
 5. Verify — run tests or the build to confirm changes work.
 
 **Project orientation:** The Environment section contains a pre-gathered project snapshot — top-level structure, recent commits, and uncommitted changes. Use this to orient yourself instead of running `ls`, `git log`, or `git status`. If you need deeper context, check key config files (go.mod, package.json, Dockerfile, Makefile), find entry points, or scan the README.
+{{- if .HasAgent}}
+
+You can delegate complex subtasks to sub-agents — see the agent tool.
+{{- end}}
 {{- end}}

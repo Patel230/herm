@@ -752,6 +752,128 @@ func TestGetToolDescriptionMissingTool(t *testing.T) {
 	}
 }
 
+func TestToolParamNames(t *testing.T) {
+	tests := []struct {
+		name   string
+		schema json.RawMessage
+		want   []string
+	}{
+		{
+			name:   "normal schema",
+			schema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer"}}}`),
+			want:   []string{"command", "timeout"},
+		},
+		{
+			name:   "empty schema",
+			schema: json.RawMessage(`{}`),
+			want:   nil,
+		},
+		{
+			name:   "nil schema",
+			schema: nil,
+			want:   nil,
+		},
+		{
+			name:   "no properties",
+			schema: json.RawMessage(`{"type":"object"}`),
+			want:   nil,
+		},
+		{
+			name:   "single param",
+			schema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}}}`),
+			want:   []string{"path"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := toolParamNames(tt.schema)
+			if len(got) != len(tt.want) {
+				t.Fatalf("toolParamNames() = %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("toolParamNames()[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestFormatToolDefinitions(t *testing.T) {
+	// Set up tool descriptions so the formatter can use them.
+	old := toolDescriptions
+	toolDescriptions = map[string]ToolDesc{
+		"bash": {Name: "bash", Brief: "Run a shell command", Full: "Run a shell command in the dev container"},
+		"glob": {Name: "glob", Brief: "Find files by pattern", Full: "Find files by glob pattern"},
+	}
+	defer func() { toolDescriptions = old }()
+
+	tools := []Tool{
+		stubTool{"bash"},
+		stubTool{"glob"},
+	}
+	serverTools := []types.ToolDefinition{WebSearchToolDef()}
+
+	result := formatToolDefinitions(tools, serverTools)
+
+	// Should contain header.
+	if !strings.Contains(result, "── Tool Definitions ──") {
+		t.Error("missing tool definitions header")
+	}
+
+	// Should contain client tool names and brief descriptions.
+	if !strings.Contains(result, "bash: Run a shell command") {
+		t.Error("missing bash tool entry")
+	}
+	if !strings.Contains(result, "glob: Find files by pattern") {
+		t.Error("missing glob tool entry")
+	}
+
+	// Server tools should show "(server-side)".
+	if !strings.Contains(result, "(server-side)") {
+		t.Error("server tool should show (server-side) for params")
+	}
+	if !strings.Contains(result, "web_search") {
+		t.Error("missing web_search server tool entry")
+	}
+}
+
+func TestFormatToolDefinitionsParamNames(t *testing.T) {
+	old := toolDescriptions
+	toolDescriptions = nil
+	defer func() { toolDescriptions = old }()
+
+	// Use a stub tool whose Definition has a real InputSchema with properties.
+	tools := []Tool{stubTool{"bash"}}
+	result := formatToolDefinitions(tools, nil)
+
+	// stubTool has {"type":"object"} schema with no properties — should show "(none)".
+	if !strings.Contains(result, "(none)") {
+		t.Error("tool with no properties should show (none) for params")
+	}
+}
+
+func TestRoleMdDelegationMention(t *testing.T) {
+	// With agent tool available, role should mention delegation.
+	toolsWithAgent := []Tool{
+		stubTool{"bash"},
+		stubTool{"agent"},
+	}
+	promptWith := buildSystemPrompt(toolsWithAgent, nil, nil, "/work", "", "alpine:latest", "", nil)
+
+	if !strings.Contains(promptWith, "delegate complex subtasks to sub-agents") {
+		t.Error("role should mention delegation when agent tool is available")
+	}
+
+	// Without agent tool, no delegation mention.
+	toolsNoAgent := []Tool{stubTool{"bash"}}
+	promptWithout := buildSystemPrompt(toolsNoAgent, nil, nil, "/work", "", "alpine:latest", "", nil)
+
+	if strings.Contains(promptWithout, "delegate complex subtasks") {
+		t.Error("role should not mention delegation when agent tool is absent")
+	}
+}
+
 func TestToolsMDCrossToolGuidanceOnly(t *testing.T) {
 	// The slimmed tools.md should only contain cross-tool guidance.
 	tools := []Tool{
