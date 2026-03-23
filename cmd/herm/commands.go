@@ -62,6 +62,9 @@ func (a *App) handleCommand(input string) {
 		a.sessionToolStats = nil
 		a.lastInputTokens = 0
 		a.agentElapsed = 0
+		a.shownInitialModel = false
+		a.lastModelID = ""
+		a.maybeShowInitialModels()
 		a.render()
 
 	case "/compact":
