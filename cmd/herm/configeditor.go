@@ -61,7 +61,13 @@ var cfgAPIKeyFields = []cfgField{
 	{label: "OpenAI", get: func(c Config) string { return c.OpenAIAPIKey }, display: func(c Config) string { return maskKey(c.OpenAIAPIKey) }, set: func(c *Config, v string) { c.OpenAIAPIKey = v }},
 	{label: "Grok", get: func(c Config) string { return c.GrokAPIKey }, display: func(c Config) string { return maskKey(c.GrokAPIKey) }, set: func(c *Config, v string) { c.GrokAPIKey = v }},
 	{label: "Gemini", get: func(c Config) string { return c.GeminiAPIKey }, display: func(c Config) string { return maskKey(c.GeminiAPIKey) }, set: func(c *Config, v string) { c.GeminiAPIKey = v }},
-	{label: "Ollama URL", get: func(c Config) string { return c.OllamaBaseURL }, set: func(c *Config, v string) { c.OllamaBaseURL = v }},
+	{label: "Ollama URL", get: func(c Config) string { return c.OllamaBaseURL }, set: func(c *Config, v string) {
+		v = strings.TrimSpace(v)
+		if v != "" && !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
+			v = "http://" + v
+		}
+		c.OllamaBaseURL = v
+	}},
 }
 
 func (a *App) enterConfigMode() {

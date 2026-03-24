@@ -54,6 +54,24 @@ func TestLoadConfigRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRoundTripWithOllamaURL(t *testing.T) {
+	dir := t.TempDir()
+
+	original := Config{OllamaBaseURL: "http://localhost:11434"}
+	if err := saveConfigTo(dir, original); err != nil {
+		t.Fatalf("saveConfigTo: %v", err)
+	}
+
+	loaded, err := loadConfigFrom(dir)
+	if err != nil {
+		t.Fatalf("loadConfigFrom: %v", err)
+	}
+
+	if loaded.OllamaBaseURL != original.OllamaBaseURL {
+		t.Errorf("OllamaBaseURL = %q, want %q", loaded.OllamaBaseURL, original.OllamaBaseURL)
+	}
+}
+
 func TestLoadConfigMissingFileFallback(t *testing.T) {
 	dir := t.TempDir()
 
@@ -882,5 +900,31 @@ func TestPickerStubHasCleanID(t *testing.T) {
 	a.menuAction(a.menuCursor)
 	if selected != testOllamaActiveModel {
 		t.Errorf("onSelect received %q, want %q (clean ID)", selected, testOllamaActiveModel)
+	}
+}
+
+// --- Ollama URL normalization tests ---
+
+func TestOllamaURLNormalization(t *testing.T) {
+	field := cfgAPIKeyFields[len(cfgAPIKeyFields)-1] // Ollama URL is the last field
+
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"http://localhost:11434", "http://localhost:11434"},   // already correct
+		{"https://ollama.example.com", "https://ollama.example.com"}, // https preserved
+		{"localhost:11434", "http://localhost:11434"},          // bare host gets http://
+		{"  localhost:11434  ", "http://localhost:11434"},      // whitespace trimmed
+		{"", ""},                                               // empty cleared
+		{"  ", ""},                                             // whitespace-only cleared
+	}
+
+	for _, tc := range cases {
+		var cfg Config
+		field.set(&cfg, tc.input)
+		if cfg.OllamaBaseURL != tc.want {
+			t.Errorf("set(%q): OllamaBaseURL = %q, want %q", tc.input, cfg.OllamaBaseURL, tc.want)
+		}
 	}
 }
