@@ -82,13 +82,13 @@ When a stream fails mid-response, retry the LLM call instead of immediately givi
 - `retryablePrompt()` already handles connection-level retries; stream retries are a separate layer on top
 - Partial text has already been emitted via `EventTextDelta` before the interruption
 
-- [ ] 3a: **Add `retryableStream` helper** — New function that wraps `retryablePrompt` + `drainStream` into a single call that retries on stream failure. Signature: `retryableStream(ctx, cfg, promptFn) (toolCalls, nodeID, error)`. On stream failure with a retryable error pattern (or channel-closed-without-Done), emit an `EventRetry` event and re-call `promptFn`. Emit `EventStreamRetry` (or reuse `EventRetry`) so the TUI shows "stream interrupted, retrying...". Limit stream retries to 1 additional attempt (on top of the connection-level retries inside `retryablePrompt`).
+- [x] 3a: **Add `retryableStream` helper** — New function that wraps `retryablePrompt` + `drainStream` into a single call that retries on stream failure. Signature: `retryableStream(ctx, cfg, promptFn) (toolCalls, nodeID, error)`. On stream failure with a retryable error pattern (or channel-closed-without-Done), emit an `EventRetry` event and re-call `promptFn`. Emit `EventStreamRetry` (or reuse `EventRetry`) so the TUI shows "stream interrupted, retrying...". Limit stream retries to 1 additional attempt (on top of the connection-level retries inside `retryablePrompt`).
 
-- [ ] 3b: **Emit `EventStreamClear` before retry** — When retrying after a stream interruption, emit a new event type that tells the TUI to discard the in-progress streaming text. The TUI's `handleAgentEvent` should reset `a.streamingText` when it receives this event. Without this, the user sees the partial response followed by the full retry response, which looks like duplicate text.
+- [x] 3b: **Emit `EventStreamClear` before retry** — When retrying after a stream interruption, emit a new event type that tells the TUI to discard the in-progress streaming text. The TUI's `handleAgentEvent` should reset `a.streamingText` when it receives this event. Without this, the user sees the partial response followed by the full retry response, which looks like duplicate text.
 
-- [ ] 3c: **Replace both `drainStream` call sites with `retryableStream`** — In `runLoop()`, replace the patterns at lines 609-626 and 838-850 with calls to `retryableStream`. The error handling after each call remains the same (emit error + done/break).
+- [x] 3c: **Replace both `drainStream` call sites with `retryableStream`** — In `runLoop()`, replace the patterns at lines 609-626 and 838-850 with calls to `retryableStream`. The error handling after each call remains the same (emit error + done/break).
 
-- [ ] 3d: **Test stream retry** — Test: stream fails mid-response → retry succeeds → full response received. Stream fails twice → gives up with error. `EventStreamClear` emitted before retry. Context cancellation during retry → no retry attempted.
+- [x] 3d: **Test stream retry** — Test: stream fails mid-response → retry succeeds → full response received. Stream fails twice → gives up with error. `EventStreamClear` emitted before retry. Context cancellation during retry → no retry attempted.
 
 **Failure modes:**
 - Retry produces different response than original → acceptable, LLM responses are non-deterministic

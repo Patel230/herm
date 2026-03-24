@@ -477,6 +477,12 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 		}
 		a.render()
 
+	case EventStreamClear:
+		// Discard in-progress streaming text before a stream retry so the
+		// user doesn't see duplicate partial content.
+		a.streamingText = ""
+		a.render()
+
 	case EventRetry:
 		errMsg := "unknown error"
 		if event.Error != nil {

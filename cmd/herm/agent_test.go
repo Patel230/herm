@@ -2063,3 +2063,308 @@ func TestDoneChIdempotent(t *testing.T) {
 		t.Fatal("doneCh should be closed after EventDone")
 	}
 }
+
+// --- Phase 3: Stream retry tests ---
+
+// streamFailThenSucceedProvider sends partial chunks then a StreamEventError
+// (simulating a mid-stream network failure) on specified call indices. On other
+// calls it streams the full response normally.
+type streamFailThenSucceedProvider struct {
+	mu              sync.Mutex
+	callIdx         int
+	failStreamCalls map[int]bool       // call indices where stream should fail mid-response
+	responses       []scriptedResponse // responses for all calls (fail or succeed)
+	model           string
+}
+
+func (p *streamFailThenSucceedProvider) Complete(_ context.Context, _ *types.CompletionRequest) (*types.CompletionResponse, error) {
+	// Not used in streaming tests, but required by the interface.
+	return &types.CompletionResponse{
+		ID: "resp-test", Model: p.model,
+		Content:    []types.ContentBlock{{Type: "text", Text: "ok"}},
+		StopReason: "end_turn",
+		Usage:      types.Usage{InputTokens: 100, OutputTokens: 50},
+	}, nil
+}
+
+func (p *streamFailThenSucceedProvider) Stream(_ context.Context, req *types.CompletionRequest) (<-chan types.StreamEvent, error) {
+	p.mu.Lock()
+	idx := p.callIdx
+	p.callIdx++
+	p.mu.Unlock()
+
+	var r scriptedResponse
+	if idx < len(p.responses) {
+		r = p.responses[idx]
+	} else {
+		r = scriptedResponse{text: "ok", tokensIn: 100, tokensOut: 50}
+	}
+
+	ch := make(chan types.StreamEvent, 20)
+	shouldFail := p.failStreamCalls[idx]
+
+	go func() {
+		defer close(ch)
+
+		if shouldFail {
+			// Send partial text then an error — simulates mid-stream network failure.
+			if r.text != "" {
+				ch <- types.StreamEvent{Type: types.StreamEventDelta, Content: "partial: " + r.text[:min(10, len(r.text))]}
+			}
+			ch <- types.StreamEvent{Type: types.StreamEventError, Error: fmt.Errorf("connection reset by peer")}
+			return
+		}
+
+		// Normal streaming.
+		if r.text != "" {
+			ch <- types.StreamEvent{Type: types.StreamEventDelta, Content: r.text}
+		}
+		for _, tc := range r.toolCalls {
+			tc := tc
+			ch <- types.StreamEvent{Type: types.StreamEventContentDone, ContentBlock: &tc}
+		}
+		content := []types.ContentBlock{{Type: "text", Text: r.text}}
+		content = append(content, r.toolCalls...)
+		stopReason := "end_turn"
+		if len(r.toolCalls) > 0 {
+			stopReason = "tool_use"
+		}
+		ch <- types.StreamEvent{
+			Type: types.StreamEventDone,
+			Response: &types.CompletionResponse{
+				ID: fmt.Sprintf("resp-%d", idx), Model: req.Model,
+				Content: content, StopReason: stopReason,
+				Usage: types.Usage{InputTokens: r.tokensIn, OutputTokens: r.tokensOut},
+			},
+		}
+	}()
+	return ch, nil
+}
+
+func (p *streamFailThenSucceedProvider) Name() string             { return "mock" }
+func (p *streamFailThenSucceedProvider) Models() []types.ModelInfo { return nil }
+
+func TestStreamRetrySucceedsAfterInterruption(t *testing.T) {
+	// First stream fails mid-response, retry succeeds with full response.
+	prov := &streamFailThenSucceedProvider{
+		model:           "test-model",
+		failStreamCalls: map[int]bool{0: true}, // first call fails
+		responses: []scriptedResponse{
+			{text: "Hello world", tokensIn: 100, tokensOut: 50},  // fails (partial)
+			{text: "Hello world!", tokensIn: 100, tokensOut: 50}, // retry succeeds
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+	agent := NewAgent(client, nil, nil, "", "test-model", 0)
+
+	go agent.Run(context.Background(), "hi", "")
+	events := drainEvents(t, agent.Events(), 10*time.Second)
+
+	var hasRetry, hasClear, hasDone bool
+	var finalText string
+	for _, ev := range events {
+		switch ev.Type {
+		case EventRetry:
+			hasRetry = true
+		case EventStreamClear:
+			hasClear = true
+		case EventTextDelta:
+			finalText += ev.Text
+		case EventDone:
+			hasDone = true
+		}
+	}
+	if !hasRetry {
+		t.Error("expected EventRetry for stream interruption")
+	}
+	if !hasClear {
+		t.Error("expected EventStreamClear before retry")
+	}
+	if !hasDone {
+		t.Error("expected EventDone — conversation should complete after retry")
+	}
+	if !strings.Contains(finalText, "Hello world!") {
+		t.Errorf("final text = %q, want to contain full retry response", finalText)
+	}
+}
+
+func TestStreamRetryGivesUpAfterMaxRetries(t *testing.T) {
+	// Both stream attempts fail — should give up with an error.
+	prov := &streamFailThenSucceedProvider{
+		model:           "test-model",
+		failStreamCalls: map[int]bool{0: true, 1: true}, // both calls fail
+		responses: []scriptedResponse{
+			{text: "attempt 1", tokensIn: 100, tokensOut: 50},
+			{text: "attempt 2", tokensIn: 100, tokensOut: 50},
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+	agent := NewAgent(client, nil, nil, "", "test-model", 0)
+
+	go agent.Run(context.Background(), "hi", "")
+	events := drainEvents(t, agent.Events(), 10*time.Second)
+
+	var hasError, hasDone bool
+	for _, ev := range events {
+		switch ev.Type {
+		case EventError:
+			if ev.Error != nil && strings.Contains(ev.Error.Error(), "stream interrupted") {
+				hasError = true
+			}
+		case EventDone:
+			hasDone = true
+		}
+	}
+	if !hasError {
+		t.Error("expected 'stream interrupted' error after max retries")
+	}
+	if !hasDone {
+		t.Error("expected EventDone after giving up")
+	}
+}
+
+func TestStreamRetryEmitsStreamClearBeforeRetry(t *testing.T) {
+	// Verify that EventStreamClear is emitted before EventRetry.
+	prov := &streamFailThenSucceedProvider{
+		model:           "test-model",
+		failStreamCalls: map[int]bool{0: true},
+		responses: []scriptedResponse{
+			{text: "partial data", tokensIn: 100, tokensOut: 50},
+			{text: "full data", tokensIn: 100, tokensOut: 50},
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+	agent := NewAgent(client, nil, nil, "", "test-model", 0)
+
+	go agent.Run(context.Background(), "hi", "")
+	events := drainEvents(t, agent.Events(), 10*time.Second)
+
+	// Find the relative positions of StreamClear and Retry.
+	clearIdx, retryIdx := -1, -1
+	for i, ev := range events {
+		if ev.Type == EventStreamClear && clearIdx == -1 {
+			clearIdx = i
+		}
+		if ev.Type == EventRetry && retryIdx == -1 {
+			retryIdx = i
+		}
+	}
+	if clearIdx == -1 {
+		t.Fatal("expected EventStreamClear")
+	}
+	if retryIdx == -1 {
+		t.Fatal("expected EventRetry")
+	}
+	if clearIdx >= retryIdx {
+		t.Errorf("EventStreamClear (idx=%d) should come before EventRetry (idx=%d)", clearIdx, retryIdx)
+	}
+}
+
+func TestStreamRetryNoRetryOnContextCancel(t *testing.T) {
+	// Test retryableStream directly: when context is already canceled at the
+	// point of stream failure, no retry should be attempted.
+	client := newTestClient("ok")
+	agent := NewAgent(client, nil, nil, "", "test-model", 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	callCount := 0
+
+	promptFn := func() (*langdag.PromptResult, error) {
+		callCount++
+		stream := make(chan langdag.StreamChunk, 10)
+		go func() {
+			defer close(stream)
+			stream <- langdag.StreamChunk{Content: "partial"}
+			// Cancel context before sending error — simulates cancel during stream failure.
+			cancel()
+			stream <- langdag.StreamChunk{Error: fmt.Errorf("connection reset"), Done: true}
+		}()
+		return &langdag.PromptResult{Stream: stream}, nil
+	}
+
+	_, _, err := agent.retryableStream(ctx, retryConfig{maxAttempts: 1, baseDelay: time.Millisecond}, promptFn)
+	if err == nil {
+		t.Error("expected error from retryableStream")
+	}
+	if callCount > 1 {
+		t.Errorf("promptFn called %d times, want 1 (no retry on context cancel)", callCount)
+	}
+
+	// Should not have emitted any retry events.
+	var hasRetry bool
+	for {
+		select {
+		case ev := <-agent.events:
+			if ev.Type == EventRetry {
+				hasRetry = true
+			}
+		default:
+			goto done
+		}
+	}
+done:
+	if hasRetry {
+		t.Error("should not emit EventRetry when context is canceled")
+	}
+}
+
+func TestStreamRetryDuringToolLoop(t *testing.T) {
+	// First LLM call succeeds with a tool call. After tool execution, the
+	// follow-up stream fails once then succeeds on retry.
+	prov := &streamFailThenSucceedProvider{
+		model:           "test-model",
+		failStreamCalls: map[int]bool{1: true}, // second call (tool result) stream fails
+		responses: []scriptedResponse{
+			// Response 0: initial prompt → tool call (succeeds)
+			{
+				text: "Running tool.",
+				toolCalls: []types.ContentBlock{
+					{Type: "tool_use", ID: "c1", Name: "bash", Input: json.RawMessage(`{}`)},
+				},
+				tokensIn: 100, tokensOut: 50,
+			},
+			// Response 1: tool result follow-up (stream fails)
+			{text: "partial result", tokensIn: 200, tokensOut: 50},
+			// Response 2: retry succeeds
+			{text: "Tool completed successfully.", tokensIn: 200, tokensOut: 50},
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+
+	bashTool := &testTool{name: "bash", result: "ok"}
+	agent := NewAgent(client, []Tool{bashTool}, nil, "", "test-model", 0)
+
+	go agent.Run(context.Background(), "run tool", "")
+	events := drainEvents(t, agent.Events(), 10*time.Second)
+
+	var hasRetry, hasToolStart, hasClear bool
+	var finalText string
+	for _, ev := range events {
+		switch ev.Type {
+		case EventRetry:
+			hasRetry = true
+		case EventStreamClear:
+			hasClear = true
+		case EventToolCallStart:
+			hasToolStart = true
+		case EventTextDelta:
+			finalText += ev.Text
+		}
+	}
+	if !hasToolStart {
+		t.Error("expected tool call before stream retry")
+	}
+	if !hasRetry {
+		t.Error("expected EventRetry during tool loop")
+	}
+	if !hasClear {
+		t.Error("expected EventStreamClear during tool loop retry")
+	}
+	if !strings.Contains(finalText, "Tool completed successfully") {
+		t.Errorf("final text = %q, want success message after retry", finalText)
+	}
+}

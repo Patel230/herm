@@ -310,10 +310,19 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 					if !ok {
 						break drainLoop
 					}
-					if event.Type == EventDone {
+					switch event.Type {
+					case EventDone:
 						if event.NodeID != "" {
 							t.saveNodeID(agentID, event.NodeID)
 						}
+					case EventUsage:
+						if event.Usage != nil {
+							totalInputTokens += event.Usage.InputTokens + event.Usage.CacheReadInputTokens
+							totalOutputTokens += event.Usage.OutputTokens
+						}
+						t.forward(event)
+					case EventTextDelta:
+						textParts = append(textParts, event.Text)
 					}
 				default:
 					break drainLoop

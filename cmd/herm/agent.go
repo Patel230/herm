@@ -119,6 +119,7 @@ const (
 	EventSubAgentStatus                        // sub-agent status (tool calls, completion)
 	EventSubAgentStart                         // sub-agent started (carries task label)
 	EventRetry                                 // API call being retried
+	EventStreamClear                           // TUI should discard in-progress streaming text (before stream retry)
 )
 
 // AgentEvent carries a single event from the agent loop to the TUI.
@@ -603,6 +604,47 @@ func (a *Agent) retryablePrompt(ctx context.Context, cfg retryConfig, promptFn f
 	return nil, lastErr
 }
 
+// maxStreamRetries is the number of additional attempts when a stream fails
+// mid-response (on top of the connection-level retries inside retryablePrompt).
+const maxStreamRetries = 1
+
+// retryableStream wraps retryablePrompt + drainStream into a single call that
+// retries on stream failure. If drainStream returns streamOK=false and the
+// context is not canceled, it emits EventStreamClear (so the TUI discards
+// partial text) and EventRetry, then re-calls the prompt. Returns the tool
+// calls, assistant node ID, and any error. A nil error with a non-empty nodeID
+// means the stream completed successfully.
+func (a *Agent) retryableStream(ctx context.Context, cfg retryConfig, promptFn func() (*langdag.PromptResult, error)) ([]types.ContentBlock, string, error) {
+	for streamAttempt := 0; streamAttempt <= maxStreamRetries; streamAttempt++ {
+		result, err := a.retryablePrompt(ctx, cfg, promptFn)
+		if err != nil {
+			return nil, "", err
+		}
+
+		toolCalls, nodeID, streamOK := a.drainStream(ctx, result)
+		if streamOK {
+			return toolCalls, nodeID, nil
+		}
+
+		// Stream failed. Don't retry if the context was canceled.
+		if ctx.Err() != nil {
+			return nil, "", ctx.Err()
+		}
+
+		if streamAttempt < maxStreamRetries {
+			a.emit(AgentEvent{Type: EventStreamClear})
+			a.emit(AgentEvent{
+				Type:     EventRetry,
+				Error:    fmt.Errorf("stream interrupted, retrying"),
+				Attempt:  streamAttempt + 1,
+				MaxRetry: maxStreamRetries + 1,
+			})
+			continue
+		}
+	}
+	return nil, "", fmt.Errorf("stream interrupted: closed without completion")
+}
+
 // drainStream reads all chunks from a prompt result's stream, emitting text
 // deltas and collecting tool calls. Returns the tool calls, the assistant node
 // ID from the Done chunk, and whether the stream completed normally.
@@ -673,8 +715,8 @@ func (a *Agent) drainStream(ctx context.Context, result *langdag.PromptResult) (
 func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID string) {
 	opts := a.buildPromptOpts()
 
-	// Initial LLM call (with retry for transient failures).
-	result, err := a.retryablePrompt(ctx, defaultRetryConfig, func() (*langdag.PromptResult, error) {
+	// Initial LLM call with connection-level and stream-level retry.
+	toolCalls, nodeID, err := a.retryableStream(ctx, defaultRetryConfig, func() (*langdag.PromptResult, error) {
 		if parentNodeID == "" {
 			return a.client.Prompt(ctx, userMessage, opts...)
 		}
@@ -682,14 +724,6 @@ func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID st
 	})
 	if err != nil {
 		a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("prompt: %w", err)})
-		a.emit(AgentEvent{Type: EventDone})
-		return
-	}
-
-	// Process streaming response, collecting tool calls from content blocks.
-	toolCalls, nodeID, streamOK := a.drainStream(ctx, result)
-	if !streamOK {
-		a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("stream interrupted: closed without completion")})
 		a.emit(AgentEvent{Type: EventDone})
 		return
 	}
@@ -903,18 +937,11 @@ func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID st
 			break
 		}
 		toolResultStr := string(toolResultJSON)
-		result, err = a.retryablePrompt(ctx, defaultRetryConfig, func() (*langdag.PromptResult, error) {
+		toolCalls, nodeID, err = a.retryableStream(ctx, defaultRetryConfig, func() (*langdag.PromptResult, error) {
 			return a.client.PromptFrom(ctx, nodeID, toolResultStr, opts...)
 		})
 		if err != nil {
 			a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("prompt (tool results): %w", err)})
-			break
-		}
-
-		// Stream the follow-up response, collecting tool calls.
-		toolCalls, nodeID, streamOK = a.drainStream(ctx, result)
-		if !streamOK {
-			a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("stream interrupted: closed without completion")})
 			break
 		}
 
