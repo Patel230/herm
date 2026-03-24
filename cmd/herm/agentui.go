@@ -62,7 +62,7 @@ func (a *App) showModelChange(modelID string) {
 	}
 	explorationID := a.config.resolveExplorationModel(a.models)
 	line := "Using " + modelID
-	offline := a.config.OllamaBaseURL != "" && a.isOllamaOffline(modelID)
+	offline := a.ollamaFetched && a.config.OllamaBaseURL != "" && a.isOllamaOffline(modelID)
 	if offline {
 		line += " \033[33m(offline)\033[34;3m"
 	}

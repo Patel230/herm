@@ -120,6 +120,7 @@ type App struct {
 	containerStatusText string
 	configReady         bool // true after workspace/project config has been merged
 	shownInitialModel   bool // true after the startup model line has been displayed
+	ollamaFetched       bool // true after the initial Ollama model fetch completes (or was skipped)
 	status           statusInfo
 	projectSnap      *projectSnapshot
 	modelCatalog     *langdag.ModelCatalog
@@ -846,13 +847,29 @@ func (a *App) handleResult(result any) {
 		}
 
 	case ollamaModelsMsg:
+		a.ollamaFetched = true
 		if len(msg.models) > 0 {
 			base := modelsFromCatalog(a.modelCatalog)
 			a.models = append(base, msg.models...)
 			if a.sweLoaded && a.sweScores != nil {
 				matchSWEScores(a.models, a.sweScores)
 			}
-			a.maybeShowInitialModels()
+		}
+		a.maybeShowInitialModels()
+		// If the initial model was already shown before the Ollama fetch
+		// completed, check now whether the active model is offline and
+		// display the warning that was deferred earlier.
+		if a.shownInitialModel {
+			activeID := a.config.resolveActiveModel(a.models)
+			if a.config.OllamaBaseURL != "" && a.isOllamaOffline(activeID) {
+				msg := fmt.Sprintf("\033[33m⚠\033[34;3m Ollama unreachable at \033[36m%s\033[34;3m — run '\033[32;3mollama serve\033[34;3m' to continue", a.config.OllamaBaseURL)
+				providers := a.config.configuredProviders()
+				delete(providers, ProviderOllama)
+				if len(providers) > 0 {
+					msg = fmt.Sprintf("\033[33m⚠\033[34;3m Ollama unreachable at \033[36m%s\033[34;3m — run '\033[32;3mollama serve\033[34;3m' or switch to another provider (/config)", a.config.OllamaBaseURL)
+				}
+				a.messages = append(a.messages, chatMessage{kind: msgInfo, content: msg})
+			}
 		}
 
 	case openPickerMsg:
