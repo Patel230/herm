@@ -1,4 +1,4 @@
-name: Go File Length
+name: Source File Length
 
 on:
   push:
