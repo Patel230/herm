@@ -81,7 +81,7 @@ Show the debug file path in the TUI footer when debug mode is active.
 
 **Contract:** When debug mode is on, a new line appears in the footer area showing `debug: <path>` in dim style. It appears after the branch/cost line and before container status.
 
-- [ ] 3a: **Add debug path to footer** — In `buildInputRows()` (`render.go`), after the branch/cost/context line and before the container status line, add a `debug: <relative-path>` row when `a.debugFilePath != ""`. Use dim styling consistent with other footer lines. Show path relative to repo root for brevity.
+- [x] 3a: **Add debug path to footer** — In `buildInputRows()` (`render.go`), after the branch/cost/context line and before the container status line, add a `debug: <relative-path>` row when `a.debugFilePath != ""`. Use dim styling consistent with other footer lines. Show path relative to repo root for brevity.
 
 ---
 

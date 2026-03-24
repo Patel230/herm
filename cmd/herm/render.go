@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -685,6 +686,17 @@ func (a *App) buildInputRows() []string {
 			padding = 0
 		}
 		rows = append(rows, branchLabel+diffLabel+commitLabel+costLabel+strings.Repeat(" ", padding)+bar+" ")
+
+		// Debug mode: show debug file path
+		if a.debugFilePath != "" {
+			relPath := a.debugFilePath
+			if a.repoRoot != "" {
+				if r, err := filepath.Rel(a.repoRoot, a.debugFilePath); err == nil {
+					relPath = r
+				}
+			}
+			rows = append(rows, "\033[2mdebug: "+relPath+"\033[0m\033[K")
+		}
 
 		// Line 2: container status (always shown when we have status text)
 		if a.containerStatusText != "" {
