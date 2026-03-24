@@ -116,6 +116,10 @@ go test ./...
 
 herm is built on top of [langdag](https://langdag.com), a Go library for managing LLM conversations as directed acyclic graphs with multi-provider support. This project originally started as a way to dogfood langdag.
 
+## Community
+
+Join the [Discord](https://discord.gg/xMEF646A) to chat, ask questions, or share feedback.
+
 ## License
 
 [MIT](LICENSE)
