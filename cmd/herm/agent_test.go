@@ -86,6 +86,9 @@ func TestNewAgentDefaults(t *testing.T) {
 	if agent.approval == nil {
 		t.Error("approval channel should not be nil")
 	}
+	if agent.doneCh == nil {
+		t.Error("doneCh should not be nil")
+	}
 	// Default option values
 	if agent.explorationModel != "" {
 		t.Errorf("explorationModel = %q, want empty", agent.explorationModel)
@@ -1989,5 +1992,74 @@ func TestDrainStreamErrorChunk(t *testing.T) {
 	_, _, streamOK := agent.drainStream(ctx, result)
 	if streamOK {
 		t.Error("drainStream should return streamOK=false on error chunk")
+	}
+}
+
+// --- Phase 2: doneCh tests ---
+
+func TestDoneChClosedOnEventDone(t *testing.T) {
+	// Verify that doneCh is closed when EventDone is emitted.
+	client := newTestClient("hello")
+	agent := NewAgent(client, nil, nil, "", "", 0)
+
+	go agent.Run(context.Background(), "hello", "")
+
+	// Drain events until done.
+	for range agent.Events() {
+	}
+
+	// doneCh should be closed.
+	select {
+	case <-agent.DoneCh():
+		// OK — doneCh was closed.
+	case <-time.After(2 * time.Second):
+		t.Fatal("doneCh was not closed after agent completed")
+	}
+}
+
+func TestDoneChClosedUnderBackpressure(t *testing.T) {
+	// When the events channel is full and EventDone is dropped, doneCh
+	// should still be closed so the consumer can detect completion.
+	client := newTestClient("hello")
+	// Use a tiny event buffer so it fills up quickly.
+	agent := &Agent{
+		id:                 generateAgentID(),
+		client:             client,
+		tools:              make(map[string]Tool),
+		systemPrompt:       "",
+		model:              "",
+		streamChunkTimeout: defaultStreamChunkTimeout,
+		events:             make(chan AgentEvent, 1), // tiny buffer
+		approval:           make(chan ApprovalResponse, 1),
+		doneCh:             make(chan struct{}),
+	}
+
+	// Fill the events channel so EventDone will be dropped.
+	agent.events <- AgentEvent{Type: EventTextDelta, Text: "filler"}
+
+	// Emit EventDone — it will be dropped from events but doneCh should close.
+	agent.emit(AgentEvent{Type: EventDone})
+
+	select {
+	case <-agent.DoneCh():
+		// OK — doneCh closed despite EventDone being dropped.
+	case <-time.After(2 * time.Second):
+		t.Fatal("doneCh was not closed when EventDone was dropped due to backpressure")
+	}
+}
+
+func TestDoneChIdempotent(t *testing.T) {
+	// Emitting EventDone twice should not panic (sync.Once protects the close).
+	client := newTestClient("ok")
+	agent := NewAgent(client, nil, nil, "", "", 0)
+
+	agent.emit(AgentEvent{Type: EventDone})
+	agent.emit(AgentEvent{Type: EventDone}) // should not panic
+
+	select {
+	case <-agent.DoneCh():
+		// OK
+	default:
+		t.Fatal("doneCh should be closed after EventDone")
 	}
 }

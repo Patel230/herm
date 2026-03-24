@@ -55,15 +55,15 @@ Ensure `EventDone` and `EventError` events are never silently dropped. These are
 
 **Contract:** `EventDone` and `EventError` must always reach the consumer. Text deltas and other events can still be dropped under backpressure.
 
-- [ ] 2a: **Add a `done` signaling channel to Agent** — Add a `doneCh chan struct{}` that is closed when `EventDone` is emitted. The TUI can `select` on both `a.events` and `a.doneCh` to detect completion even if the event was dropped from the buffer. This is simpler and more robust than making `emit()` blocking for certain event types (which risks reintroducing deadlocks).
+- [x] 2a: **Add a `done` signaling channel to Agent** — Add a `doneCh chan struct{}` that is closed when `EventDone` is emitted. The TUI can `select` on both `a.events` and `a.doneCh` to detect completion even if the event was dropped from the buffer. This is simpler and more robust than making `emit()` blocking for certain event types (which risks reintroducing deadlocks).
 
-- [ ] 2b: **Close `doneCh` on EventDone emission** — In `emit()`, when the event type is `EventDone`, close `a.doneCh` (using `sync.Once` to prevent double-close). The regular event channel send is still non-blocking — the `doneCh` is a backup signal.
+- [x] 2b: **Close `doneCh` on EventDone emission** — In `emit()`, when the event type is `EventDone`, close `a.doneCh` (using `sync.Once` to prevent double-close). The regular event channel send is still non-blocking — the `doneCh` is a backup signal.
 
-- [ ] 2c: **Update TUI to check `doneCh`** — In `drainAgentEvents()` (`agentui.go:255-275`), add a case that selects on the agent's done channel. When it fires and the events channel has been fully drained, mark `a.agentRunning = false`. This ensures the TUI always exits the "running" state.
+- [x] 2c: **Update TUI to check `doneCh`** — In `drainAgentEvents()` (`agentui.go:255-275`), add a case that selects on the agent's done channel. When it fires and the events channel has been fully drained, mark `a.agentRunning = false`. This ensures the TUI always exits the "running" state.
 
-- [ ] 2d: **Apply same pattern to sub-agent `forward()`** — In `SubAgentTool`, when forwarding `EventDone` or `EventError`, use a dedicated signal or blocking send to ensure the parent receives these critical events. The `for event := range agent.Events()` loop in `Execute()` (`subagent.go:238`) should also check the agent's done channel so it doesn't hang if `EventDone` was dropped.
+- [x] 2d: **Apply same pattern to sub-agent `forward()`** — In `SubAgentTool`, when forwarding `EventDone` or `EventError`, use a dedicated signal or blocking send to ensure the parent receives these critical events. The `for event := range agent.Events()` loop in `Execute()` (`subagent.go:238`) should also check the agent's done channel so it doesn't hang if `EventDone` was dropped.
 
-- [ ] 2e: **Test critical event delivery under backpressure** — Fill the event buffer to capacity, then trigger agent completion. Verify that the TUI (or test consumer) still detects that the agent is done, even though the `EventDone` event was dropped from the main channel.
+- [x] 2e: **Test critical event delivery under backpressure** — Fill the event buffer to capacity, then trigger agent completion. Verify that the TUI (or test consumer) still detects that the agent is done, even though the `EventDone` event was dropped from the main channel.
 
 **Failure modes:**
 - Double-close panic on `doneCh`: mitigated by `sync.Once`

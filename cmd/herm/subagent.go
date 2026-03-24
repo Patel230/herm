@@ -235,66 +235,95 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 
 	turns := 0
 	responseCounted := false // tracks whether the current LLM response has been counted as a turn
-	for event := range agent.Events() {
-		switch event.Type {
-		case EventTextDelta:
-			textParts = append(textParts, event.Text)
-			t.forward(AgentEvent{Type: EventSubAgentDelta, AgentID: agentID, Text: event.Text})
-		case EventToolCallStart:
-			if !responseCounted {
-				turns++
-				responseCounted = true
+	doneCh := agent.DoneCh()
+	eventCh := agent.Events()
+	drainLoop:
+	for {
+		select {
+		case event, ok := <-eventCh:
+			if !ok {
+				// Channel closed — fall through to finalize.
+				break drainLoop
 			}
-			currentTool = event.ToolName
-			if turns > t.maxTurns {
-				agent.Cancel()
-			}
-			t.forward(AgentEvent{Type: EventSubAgentStatus, AgentID: agentID, Text: fmt.Sprintf("tool: %s", event.ToolName)})
-		case EventToolCallDone:
-			currentTool = ""
-		case EventUsage:
-			// EventUsage fires once per LLM response — reset the flag so the
-			// next batch of tool calls counts as a new turn.
-			responseCounted = false
-			if event.Usage != nil {
-				totalInputTokens += event.Usage.InputTokens + event.Usage.CacheReadInputTokens
-				totalOutputTokens += event.Usage.OutputTokens
-			}
-			// Forward usage events so sub-agent costs are tracked.
-			t.forward(event)
-		case EventDone:
-			t.forward(AgentEvent{
-				Type:    EventSubAgentStatus,
-				AgentID: agentID,
-				Text:    "done",
-				Usage: &types.Usage{
-					InputTokens:  totalInputTokens,
-					OutputTokens: totalOutputTokens,
-				},
-				Task: fmt.Sprintf("turns:%d/%d", turns, t.maxTurns),
-			})
-			// Save the nodeID for potential resume.
-			if event.NodeID != "" {
-				t.saveNodeID(agentID, event.NodeID)
-			}
-			// Wait for the goroutine to finish.
-			<-done
-			return t.buildResult(ctx, agentID, textParts, agentErrors, totalInputTokens, totalOutputTokens, turns), nil
-		case EventError:
-			if event.Error != nil && event.Error.Error() != "context canceled" {
-				errMsg := event.Error.Error()
-				if currentTool != "" {
-					errMsg = fmt.Sprintf("during tool %q (turn %d): %s", currentTool, turns, errMsg)
-				} else {
-					errMsg = fmt.Sprintf("turn %d: %s", turns, errMsg)
+			switch event.Type {
+			case EventTextDelta:
+				textParts = append(textParts, event.Text)
+				t.forward(AgentEvent{Type: EventSubAgentDelta, AgentID: agentID, Text: event.Text})
+			case EventToolCallStart:
+				if !responseCounted {
+					turns++
+					responseCounted = true
 				}
-				agentErrors = append(agentErrors, errMsg)
+				currentTool = event.ToolName
+				if turns > t.maxTurns {
+					agent.Cancel()
+				}
+				t.forward(AgentEvent{Type: EventSubAgentStatus, AgentID: agentID, Text: fmt.Sprintf("tool: %s", event.ToolName)})
+			case EventToolCallDone:
+				currentTool = ""
+			case EventUsage:
+				// EventUsage fires once per LLM response — reset the flag so the
+				// next batch of tool calls counts as a new turn.
+				responseCounted = false
+				if event.Usage != nil {
+					totalInputTokens += event.Usage.InputTokens + event.Usage.CacheReadInputTokens
+					totalOutputTokens += event.Usage.OutputTokens
+				}
+				// Forward usage events so sub-agent costs are tracked.
+				t.forward(event)
+			case EventDone:
+				t.forward(AgentEvent{
+					Type:    EventSubAgentStatus,
+					AgentID: agentID,
+					Text:    "done",
+					Usage: &types.Usage{
+						InputTokens:  totalInputTokens,
+						OutputTokens: totalOutputTokens,
+					},
+					Task: fmt.Sprintf("turns:%d/%d", turns, t.maxTurns),
+				})
+				// Save the nodeID for potential resume.
+				if event.NodeID != "" {
+					t.saveNodeID(agentID, event.NodeID)
+				}
+				// Wait for the goroutine to finish.
+				<-done
+				return t.buildResult(ctx, agentID, textParts, agentErrors, totalInputTokens, totalOutputTokens, turns), nil
+			case EventError:
+				if event.Error != nil && event.Error.Error() != "context canceled" {
+					errMsg := event.Error.Error()
+					if currentTool != "" {
+						errMsg = fmt.Sprintf("during tool %q (turn %d): %s", currentTool, turns, errMsg)
+					} else {
+						errMsg = fmt.Sprintf("turn %d: %s", turns, errMsg)
+					}
+					agentErrors = append(agentErrors, errMsg)
+				}
+			}
+		case <-doneCh:
+			// doneCh closed — agent is done but EventDone may have been
+			// dropped from the events channel. Drain any remaining buffered
+			// events, then finalize.
+			for {
+				select {
+				case event, ok := <-eventCh:
+					if !ok {
+						break drainLoop
+					}
+					if event.Type == EventDone {
+						if event.NodeID != "" {
+							t.saveNodeID(agentID, event.NodeID)
+						}
+					}
+				default:
+					break drainLoop
+				}
 			}
 		}
 	}
 
-	// Channel closed without EventDone (e.g., EventDone was dropped, or agent
-	// exited without emitting it). Handle gracefully.
+	// Channel closed or doneCh fired without EventDone in the events channel.
+	// Handle gracefully.
 	t.forward(AgentEvent{
 		Type:    EventSubAgentStatus,
 		AgentID: agentID,

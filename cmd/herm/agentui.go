@@ -269,6 +269,29 @@ func (a *App) drainAgentEvents() {
 			}
 			a.handleAgentEvent(event)
 		default:
+			// No more buffered events. Check if doneCh signals completion
+			// (backup for when EventDone was dropped from the full channel).
+			select {
+			case <-a.agent.DoneCh():
+				// Agent is done. Drain any final events that arrived between
+				// the default case above and now, then mark as not running.
+				for {
+					select {
+					case event, ok := <-a.agent.Events():
+						if !ok {
+							a.agentRunning = false
+							a.cancelSent = false
+							return
+						}
+						a.handleAgentEvent(event)
+					default:
+						a.agentRunning = false
+						a.cancelSent = false
+						return
+					}
+				}
+			default:
+			}
 			return
 		}
 	}

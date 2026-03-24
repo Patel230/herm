@@ -181,6 +181,8 @@ type Agent struct {
 
 	events   chan AgentEvent
 	approval chan ApprovalResponse
+	doneCh   chan struct{} // closed when EventDone is emitted; backup signal for TUI
+	doneOnce sync.Once    // prevents double-close of doneCh
 
 	streamChunkTimeout time.Duration // max time to wait for the next stream chunk; 0 = use default
 
@@ -241,6 +243,7 @@ func NewAgent(client *langdag.Client, tools []Tool, serverTools []types.ToolDefi
 		streamChunkTimeout: defaultStreamChunkTimeout,
 		events:             make(chan AgentEvent, 4096),
 		approval:           make(chan ApprovalResponse, 1),
+		doneCh:             make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -251,6 +254,13 @@ func NewAgent(client *langdag.Client, tools []Tool, serverTools []types.ToolDefi
 // Events returns the channel that receives agent events.
 func (a *Agent) Events() <-chan AgentEvent {
 	return a.events
+}
+
+// DoneCh returns a channel that is closed when EventDone is emitted.
+// This provides a reliable completion signal even if the EventDone event
+// is dropped from the main events channel due to backpressure.
+func (a *Agent) DoneCh() <-chan struct{} {
+	return a.doneCh
 }
 
 // Approve sends an approval response to the agent.
@@ -323,6 +333,12 @@ func (a *Agent) emit(e AgentEvent) {
 	default:
 		// Channel full — drop the event to prevent deadlock.
 		debugLog("event dropped: channel full (type=%d)", e.Type)
+	}
+	// Close doneCh as a backup signal for EventDone. The regular channel
+	// send above is non-blocking and may drop — doneCh ensures the TUI
+	// always learns the agent has finished.
+	if e.Type == EventDone {
+		a.doneOnce.Do(func() { close(a.doneCh) })
 	}
 }
 
