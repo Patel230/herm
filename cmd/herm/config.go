@@ -30,6 +30,7 @@ type Config struct {
 	Personality           string          `json:"personality,omitempty"` // optional agent personality/tone
 	HistoryMaxEntries     int             `json:"history_max_entries,omitempty"`
 	GitCoAuthor           *bool           `json:"git_co_author,omitempty"` // nil (default) or explicit true/false
+	DebugMode             bool            `json:"debug_mode,omitempty"`
 }
 
 func (c Config) effectiveGitCoAuthor() bool {
@@ -214,6 +215,7 @@ type ProjectConfig struct {
 	SubAgentMaxTurns  int    `json:"sub_agent_max_turns,omitempty"`
 	MaxToolIterations int    `json:"max_tool_iterations,omitempty"`
 	MaxAgentDepth     int    `json:"max_agent_depth,omitempty"`
+	DebugMode         *bool  `json:"debug_mode,omitempty"` // nil = not overridden
 }
 
 // mergeConfigs overlays non-zero ProjectConfig fields onto a global Config.
@@ -236,6 +238,9 @@ func mergeConfigs(global Config, project ProjectConfig) Config {
 	}
 	if project.MaxAgentDepth != 0 {
 		merged.MaxAgentDepth = project.MaxAgentDepth
+	}
+	if project.DebugMode != nil {
+		merged.DebugMode = *project.DebugMode
 	}
 	return merged
 }

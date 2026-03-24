@@ -49,13 +49,13 @@ Add config field, debug file creation/management, and the core logging writer. N
 - File permissions prevent writing → log error to stderr, continue without debug
 - Disk full → same graceful degradation
 
-- [ ] 1a: **Add `DebugMode` to Config and ProjectConfig** — Add `DebugMode bool` field to both `Config` (`config.go`) and `ProjectConfig`. Update `mergeConfigs()` to handle the new field. Remove `DisplaySystemPrompts` from being the mechanism for debug — it stays as its own independent toggle.
+- [x] 1a: **Add `DebugMode` to Config and ProjectConfig** — Add `DebugMode bool` field to both `Config` (`config.go`) and `ProjectConfig`. Update `mergeConfigs()` to handle the new field. Remove `DisplaySystemPrompts` from being the mechanism for debug — it stays as its own independent toggle.
 
-- [ ] 1b: **Add `--debug` and `--prompt` CLI flags** — In `main()`, parse `--debug` (enables debug mode regardless of config) and `--prompt "<text>"` (non-interactive mode: submit prompt, wait for agent to finish, exit). Store both on the `App` struct as `cliDebug bool` and `cliPrompt string`.
+- [x] 1b: **Add `--debug` and `--prompt` CLI flags** — In `main()`, parse `--debug` (enables debug mode regardless of config) and `--prompt "<text>"` (non-interactive mode: submit prompt, wait for agent to finish, exit). Store both on the `App` struct as `cliDebug bool` and `cliPrompt string`.
 
-- [ ] 1c: **Create debug file manager** — New file `debuglog.go` with: `initDebugLog(repoRoot string) (*os.File, string, error)` creates `.herm/debug/` dir and opens `debug-<timestamp>.log`. `debugWrite(f *os.File, section string, content string)` writes `\n── <section> ──\n<content>\n` to the file. `closeDebugLog(f *os.File)`. Timestamp format: `20060102-150405` for filename-safe sorting.
+- [x] 1c: **Create debug file manager** — New file `debuglog.go` with: `initDebugLog(repoRoot string) (*os.File, string, error)` creates `.herm/debug/` dir and opens `debug-<timestamp>.log`. `debugWrite(f *os.File, section string, content string)` writes `\n── <section> ──\n<content>\n` to the file. `closeDebugLog(f *os.File)`. Timestamp format: `20060102-150405` for filename-safe sorting.
 
-- [ ] 1d: **Wire debug file lifecycle into App** — Add `debugFile *os.File` and `debugFilePath string` to `App`. In `Run()`, after config is loaded and repo root is known, call `initDebugLog()` if debug mode is active (config or CLI flag). On app exit, close the file. Ensure `.herm/debug/` is gitignored (check/append to `.herm/.gitignore`).
+- [x] 1d: **Wire debug file lifecycle into App** — Add `debugFile *os.File` and `debugFilePath string` to `App`. In `Run()`, after config is loaded and repo root is known, call `initDebugLog()` if debug mode is active (config or CLI flag). On app exit, close the file. Ensure `.herm/debug/` is gitignored (check/append to `.herm/.gitignore`).
 
 ---
 

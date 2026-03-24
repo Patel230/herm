@@ -211,6 +211,12 @@ type App struct {
 
 	// CLI flags
 	displaySystemPrompts bool
+	cliDebug             bool   // --debug flag
+	cliPrompt            string // --prompt flag (non-interactive mode)
+
+	// Debug file
+	debugFile     *os.File
+	debugFilePath string
 }
 
 func newApp() *App {
@@ -785,6 +791,7 @@ func (a *App) handleResult(result any) {
 		a.projectConfig = loadProjectConfig(a.repoRoot)
 		a.config = mergeConfigs(a.globalConfig, a.projectConfig)
 		a.configReady = true
+		a.initAppDebugLog()
 		a.history = newHistory(msg.worktreePath, a.config.effectiveMaxHistory())
 		a.history.Load()
 		a.maybeShowInitialModels()
@@ -889,6 +896,8 @@ func (a *App) cleanup() {
 		a.toolTimer.Stop()
 		a.toolTimer = nil
 	}
+	closeDebugLog(a.debugFile)
+	a.debugFile = nil
 	close(a.stopCh)
 	if a.agent != nil {
 		a.agent.Cancel()
@@ -937,9 +946,16 @@ func main() {
 	app := newApp()
 
 	app.displaySystemPrompts = app.config.DisplaySystemPrompts
-	for _, arg := range os.Args[1:] {
-		if arg == "--display-system-prompts" {
+	for i, arg := range os.Args[1:] {
+		switch arg {
+		case "--display-system-prompts":
 			app.displaySystemPrompts = true
+		case "--debug":
+			app.cliDebug = true
+		case "--prompt":
+			if i+1 < len(os.Args[1:]) {
+				app.cliPrompt = os.Args[i+2] // i is 0-based in the slice, +2 to get next arg in os.Args
+			}
 		}
 	}
 
