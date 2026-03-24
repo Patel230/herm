@@ -58,4 +58,4 @@ Replace `len()` with `visibleWidth()` and byte-level truncation with `truncateVi
 
 ## Phase 3: Verify
 
-- [ ] 3a: Run full test suite, confirm all tests pass
+- [x] 3a: Run full test suite, confirm all tests pass
