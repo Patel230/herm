@@ -86,6 +86,10 @@ func newLangdagClientForProvider(cfg Config, provider string) (*langdag.Client, 
 // defaultMaxToolIterations caps the agent loop to prevent runaway tool calls.
 const defaultMaxToolIterations = 25
 
+// defaultStreamChunkTimeout is the maximum time to wait for the next stream
+// chunk before treating the stream as stalled. Resets on every chunk received.
+const defaultStreamChunkTimeout = 90 * time.Second
+
 // Tool is the interface that all agent tools must implement.
 type Tool interface {
 	// Definition returns the langdag tool definition for LLM consumption.
@@ -178,6 +182,8 @@ type Agent struct {
 	events   chan AgentEvent
 	approval chan ApprovalResponse
 
+	streamChunkTimeout time.Duration // max time to wait for the next stream chunk; 0 = use default
+
 	mu       sync.Mutex
 	running  bool
 	cancelFn context.CancelFunc
@@ -206,6 +212,11 @@ func WithMaxToolIterations(n int) AgentOption {
 	return func(a *Agent) { a.maxToolIterations = n }
 }
 
+// WithStreamChunkTimeout sets the per-chunk inactivity timeout for streaming.
+func WithStreamChunkTimeout(d time.Duration) AgentOption {
+	return func(a *Agent) { a.streamChunkTimeout = d }
+}
+
 // NewAgent creates an agent with the given langdag client, tools, and configuration.
 // serverTools are provider-side tools (e.g. web search) that are declared in the
 // tool list but executed by the LLM provider, not the client.
@@ -220,15 +231,16 @@ func NewAgent(client *langdag.Client, tools []Tool, serverTools []types.ToolDefi
 	toolDefs = append(toolDefs, serverTools...)
 
 	a := &Agent{
-		id:            generateAgentID(),
-		client:        client,
-		tools:         toolMap,
-		toolDefs:      toolDefs,
-		systemPrompt:  systemPrompt,
-		model:         model,
-		contextWindow: contextWindow,
-		events:        make(chan AgentEvent, 4096),
-		approval:      make(chan ApprovalResponse, 1),
+		id:                 generateAgentID(),
+		client:             client,
+		tools:              toolMap,
+		toolDefs:           toolDefs,
+		systemPrompt:       systemPrompt,
+		model:              model,
+		contextWindow:      contextWindow,
+		streamChunkTimeout: defaultStreamChunkTimeout,
+		events:             make(chan AgentEvent, 4096),
+		approval:           make(chan ApprovalResponse, 1),
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -579,26 +591,66 @@ func (a *Agent) retryablePrompt(ctx context.Context, cfg retryConfig, promptFn f
 // deltas and collecting tool calls. Returns the tool calls, the assistant node
 // ID from the Done chunk, and whether the stream completed normally.
 //
+// A per-chunk inactivity timeout (a.streamChunkTimeout) prevents indefinite
+// blocking when the provider stops sending chunks mid-stream. The timer resets
+// on every chunk received, so long responses with steady chunk flow are fine.
+//
 // The NodeID is extracted from the Done chunk rather than from result.NodeID
 // to avoid a race with the background goroutine that sets result.NodeID.
-func (a *Agent) drainStream(result *langdag.PromptResult) ([]types.ContentBlock, string, bool) {
+func (a *Agent) drainStream(ctx context.Context, result *langdag.PromptResult) ([]types.ContentBlock, string, bool) {
+	timeout := a.streamChunkTimeout
+	if timeout <= 0 {
+		timeout = defaultStreamChunkTimeout
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
 	var toolCalls []types.ContentBlock
-	for chunk := range result.Stream {
-		if chunk.Error != nil {
-			a.emit(AgentEvent{Type: EventError, Error: chunk.Error})
+	for {
+		select {
+		case <-ctx.Done():
 			return nil, "", false
-		}
-		if chunk.Done {
-			return toolCalls, chunk.NodeID, true
-		}
-		if chunk.Content != "" {
-			a.emit(AgentEvent{Type: EventTextDelta, Text: chunk.Content})
-		}
-		if chunk.ContentBlock != nil && chunk.ContentBlock.Type == "tool_use" {
-			toolCalls = append(toolCalls, *chunk.ContentBlock)
+		case <-timer.C:
+			a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("stream stalled: no chunk received for %s", timeout)})
+			// Drain any remaining buffered chunks (non-blocking).
+			for {
+				select {
+				case _, ok := <-result.Stream:
+					if !ok {
+						return nil, "", false
+					}
+				default:
+					return nil, "", false
+				}
+			}
+		case chunk, ok := <-result.Stream:
+			if !ok {
+				return toolCalls, "", false // channel closed without Done
+			}
+			// Reset the inactivity timer on every chunk.
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(timeout)
+
+			if chunk.Error != nil {
+				a.emit(AgentEvent{Type: EventError, Error: chunk.Error})
+				return nil, "", false
+			}
+			if chunk.Done {
+				return toolCalls, chunk.NodeID, true
+			}
+			if chunk.Content != "" {
+				a.emit(AgentEvent{Type: EventTextDelta, Text: chunk.Content})
+			}
+			if chunk.ContentBlock != nil && chunk.ContentBlock.Type == "tool_use" {
+				toolCalls = append(toolCalls, *chunk.ContentBlock)
+			}
 		}
 	}
-	return toolCalls, "", false // channel closed without Done
 }
 
 // runLoop is the core agent loop: call LLM, handle tool calls, repeat.
@@ -619,7 +671,7 @@ func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID st
 	}
 
 	// Process streaming response, collecting tool calls from content blocks.
-	toolCalls, nodeID, streamOK := a.drainStream(result)
+	toolCalls, nodeID, streamOK := a.drainStream(ctx, result)
 	if !streamOK {
 		a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("stream interrupted: closed without completion")})
 		a.emit(AgentEvent{Type: EventDone})
@@ -844,7 +896,7 @@ func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID st
 		}
 
 		// Stream the follow-up response, collecting tool calls.
-		toolCalls, nodeID, streamOK = a.drainStream(result)
+		toolCalls, nodeID, streamOK = a.drainStream(ctx, result)
 		if !streamOK {
 			a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("stream interrupted: closed without completion")})
 			break

@@ -1874,3 +1874,120 @@ func TestResilienceNoDeadlockOnMultipleFailures(t *testing.T) {
 		t.Errorf("expected 2 error tool results, got %d", errorResults)
 	}
 }
+
+// --- Phase 1: Stream timeout tests ---
+
+func TestDrainStreamTimeout(t *testing.T) {
+	// A stream that sends a few chunks then stalls should trigger a timeout.
+	client := newTestClient("ok")
+	agent := NewAgent(client, nil, nil, "", "", 0, WithStreamChunkTimeout(100*time.Millisecond))
+
+	stream := make(chan langdag.StreamChunk, 10)
+	// Send a couple of chunks, then stop (no Done, no close).
+	stream <- langdag.StreamChunk{Content: "hello "}
+	stream <- langdag.StreamChunk{Content: "world"}
+	// Don't close and don't send Done — simulates a stall.
+
+	result := &langdag.PromptResult{Stream: stream}
+	ctx := context.Background()
+
+	toolCalls, nodeID, streamOK := agent.drainStream(ctx, result)
+	if streamOK {
+		t.Error("drainStream should return streamOK=false on timeout")
+	}
+	if nodeID != "" {
+		t.Errorf("nodeID should be empty, got %q", nodeID)
+	}
+	if len(toolCalls) != 0 {
+		t.Errorf("expected no tool calls, got %d", len(toolCalls))
+	}
+
+	// Verify that the timeout error was emitted.
+	var foundTimeoutError bool
+	for {
+		select {
+		case ev := <-agent.events:
+			if ev.Type == EventError && ev.Error != nil && strings.Contains(ev.Error.Error(), "stream stalled") {
+				foundTimeoutError = true
+			}
+		default:
+			goto done
+		}
+	}
+done:
+	if !foundTimeoutError {
+		t.Error("expected a 'stream stalled' error event")
+	}
+}
+
+func TestDrainStreamSlowButSteady(t *testing.T) {
+	// A stream that sends chunks just within the timeout should complete normally.
+	client := newTestClient("ok")
+	agent := NewAgent(client, nil, nil, "", "", 0, WithStreamChunkTimeout(200*time.Millisecond))
+
+	stream := make(chan langdag.StreamChunk)
+	go func() {
+		defer close(stream)
+		for i := 0; i < 5; i++ {
+			time.Sleep(100 * time.Millisecond) // well within 200ms timeout
+			stream <- langdag.StreamChunk{Content: fmt.Sprintf("chunk%d ", i)}
+		}
+		stream <- langdag.StreamChunk{Done: true, NodeID: "node-123"}
+	}()
+
+	result := &langdag.PromptResult{Stream: stream}
+	ctx := context.Background()
+
+	_, nodeID, streamOK := agent.drainStream(ctx, result)
+	if !streamOK {
+		t.Error("drainStream should return streamOK=true for slow-but-steady stream")
+	}
+	if nodeID != "node-123" {
+		t.Errorf("nodeID = %q, want %q", nodeID, "node-123")
+	}
+}
+
+func TestDrainStreamContextCancellation(t *testing.T) {
+	// Canceling the context should make drainStream return immediately.
+	client := newTestClient("ok")
+	agent := NewAgent(client, nil, nil, "", "", 0, WithStreamChunkTimeout(5*time.Second))
+
+	stream := make(chan langdag.StreamChunk) // never sends anything
+	result := &langdag.PromptResult{Stream: stream}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, _, streamOK := agent.drainStream(ctx, result)
+	elapsed := time.Since(start)
+
+	if streamOK {
+		t.Error("drainStream should return streamOK=false on context cancellation")
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("drainStream took %v, should have returned quickly on cancel", elapsed)
+	}
+}
+
+func TestDrainStreamErrorChunk(t *testing.T) {
+	// A stream that sends an error chunk should return streamOK=false.
+	client := newTestClient("ok")
+	agent := NewAgent(client, nil, nil, "", "", 0, WithStreamChunkTimeout(5*time.Second))
+
+	stream := make(chan langdag.StreamChunk, 10)
+	stream <- langdag.StreamChunk{Content: "partial"}
+	stream <- langdag.StreamChunk{Error: fmt.Errorf("provider error")}
+	close(stream)
+
+	result := &langdag.PromptResult{Stream: stream}
+	ctx := context.Background()
+
+	_, _, streamOK := agent.drainStream(ctx, result)
+	if streamOK {
+		t.Error("drainStream should return streamOK=false on error chunk")
+	}
+}

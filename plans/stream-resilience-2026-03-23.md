@@ -37,11 +37,11 @@ Add a timeout to `drainStream` so that if no chunk arrives within a configurable
 
 **Contract:** `drainStream` should return `streamOK=false` if no chunk arrives within the timeout window. The timeout resets on every chunk received (it's an inactivity timeout, not a total timeout — long responses are fine as long as chunks keep flowing).
 
-- [ ] 1a: **Add `streamChunkTimeout` field to Agent** — Default to 90 seconds. This allows future configurability without a constant. Set it in `NewAgent()` alongside existing defaults.
+- [x] 1a: **Add `streamChunkTimeout` field to Agent** — Default to 90 seconds. This allows future configurability without a constant. Set it in `NewAgent()` alongside existing defaults.
 
-- [ ] 1b: **Rewrite `drainStream` with per-chunk timeout** — Replace the `for chunk := range result.Stream` loop with a `select` that reads from `result.Stream` or a `time.After` timer that resets on each chunk. On timeout, drain any remaining buffered chunks (non-blocking), then return `streamOK=false`. The context should also be checked so cancellation still works.
+- [x] 1b: **Rewrite `drainStream` with per-chunk timeout** — Replace the `for chunk := range result.Stream` loop with a `select` that reads from `result.Stream` or a `time.After` timer that resets on each chunk. On timeout, drain any remaining buffered chunks (non-blocking), then return `streamOK=false`. The context should also be checked so cancellation still works.
 
-- [ ] 1c: **Test stream timeout** — Test with a mock stream that sends a few chunks then stalls. Verify `drainStream` returns `streamOK=false` after the timeout, not blocking forever. Also test that a slow-but-steady stream (chunks arriving just within the timeout) completes normally.
+- [x] 1c: **Test stream timeout** — Test with a mock stream that sends a few chunks then stalls. Verify `drainStream` returns `streamOK=false` after the timeout, not blocking forever. Also test that a slow-but-steady stream (chunks arriving just within the timeout) completes normally.
 
 **Failure modes:**
 - Timeout too short: legitimate slow streams (e.g., thinking models) get killed. 90s is generous — even the slowest models emit at least one chunk within 90s.
