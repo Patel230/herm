@@ -87,7 +87,14 @@ func (a *App) exitConfigMode(save bool) {
 		a.globalConfig = a.cfgDraft
 		a.projectConfig = a.cfgProjectDraft
 		a.config = mergeConfigs(a.globalConfig, a.projectConfig)
-		a.displaySystemPrompts = a.config.DisplaySystemPrompts
+		// Re-initialize debug log if debug mode changed
+		if a.debugActive() && a.debugFile == nil {
+			a.initAppDebugLog()
+		} else if !a.debugActive() && a.debugFile != nil {
+			closeDebugLog(a.debugFile)
+			a.debugFile = nil
+			a.debugFilePath = ""
+		}
 		var saveErr bool
 		if err := saveConfig(a.globalConfig); err != nil {
 			a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error saving global config: %v", err)})
@@ -242,7 +249,7 @@ func (a *App) settingsTabFields() []cfgField {
 		{label: "Active Model", get: func(c Config) string { return c.ActiveModel }, set: func(c *Config, v string) { c.ActiveModel = v }, picker: func(a *App) { a.openConfigModelPicker(func() string { return a.cfgDraft.ActiveModel }, func(id string) { a.cfgDraft.ActiveModel = id }) }},
 		{label: "Exploration Model", get: func(c Config) string { return c.ExplorationModel }, set: func(c *Config, v string) { c.ExplorationModel = v }, picker: func(a *App) { a.openConfigModelPicker(func() string { return a.cfgDraft.ExplorationModel }, func(id string) { a.cfgDraft.ExplorationModel = id }) }},
 		{label: "Paste Collapse", get: func(c Config) string { return strconv.Itoa(c.PasteCollapseMinChars) }, set: func(c *Config, v string) { if n, err := strconv.Atoi(v); err == nil { c.PasteCollapseMinChars = n } }},
-		{label: "Show System Prompt", get: func(c Config) string { if c.DisplaySystemPrompts { return "on" }; return "off" }, toggle: func(c *Config) { c.DisplaySystemPrompts = !c.DisplaySystemPrompts }},
+		{label: "Debug Mode", get: func(c Config) string { if c.DebugMode { return "on" }; return "off" }, toggle: func(c *Config) { c.DebugMode = !c.DebugMode }},
 		{label: "Sub-Agent Max Turns", get: func(c Config) string { n := c.SubAgentMaxTurns; if n <= 0 { n = 15 }; return strconv.Itoa(n) }, set: func(c *Config, v string) { if n, err := strconv.Atoi(v); err == nil && n > 0 { c.SubAgentMaxTurns = n } }},
 		{label: "Personality", get: func(c Config) string { return c.Personality }, set: func(c *Config, v string) { c.Personality = v }},
 		{label: "Git Co-Author", get: func(c Config) string { if c.effectiveGitCoAuthor() { return "on" }; return "off" }, toggle: func(c *Config) { if c.GitCoAuthor == nil { f := false; c.GitCoAuthor = &f } else { v := !*c.GitCoAuthor; c.GitCoAuthor = &v } }},

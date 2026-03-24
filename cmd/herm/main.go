@@ -210,7 +210,6 @@ type App struct {
 	cancelSent bool
 
 	// CLI flags
-	displaySystemPrompts bool
 	cliDebug             bool   // --debug flag
 	cliPrompt            string // --prompt flag (non-interactive mode)
 	headless             bool   // true when running in --prompt mode (no TUI)
@@ -1043,11 +1042,8 @@ func main() {
 
 	app := newApp()
 
-	app.displaySystemPrompts = app.config.DisplaySystemPrompts
 	for i, arg := range os.Args[1:] {
 		switch arg {
-		case "--display-system-prompts":
-			app.displaySystemPrompts = true
 		case "--debug":
 			app.cliDebug = true
 		case "--prompt":
