@@ -12,6 +12,7 @@ import (
 
 // isOllamaOffline reports whether modelID is an Ollama model that is not
 // present in the current live model list (i.e. Ollama is configured but down).
+// Returns false if no Ollama URL is configured.
 func (a *App) isOllamaOffline(modelID string) bool {
 	if modelID == "" {
 		return false
@@ -28,7 +29,7 @@ func (a *App) isOllamaOffline(modelID string) bool {
 			return false // it's a different provider's model
 		}
 	}
-	return true // unknown to catalog, Ollama URL set → assume offline Ollama model
+	return true // unknown to catalog → assume offline Ollama model
 }
 
 func maskKey(key string) string {

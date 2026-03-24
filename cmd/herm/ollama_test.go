@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // --- fetchOllamaModels tests ---
@@ -120,5 +121,79 @@ func TestFetchOllamaModelsEmpty(t *testing.T) {
 	models := fetchOllamaModels(srv.URL)
 	if len(models) != 0 {
 		t.Errorf("expected 0 models for empty list, got %d", len(models))
+	}
+}
+
+// --- ollamaContextWindow tests ---
+
+func TestOllamaContextWindow_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"model_info": map[string]any{
+				"llama.context_length": 32768,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	got := ollamaContextWindow(client, srv.URL, "llama3:latest")
+	if got != 32768 {
+		t.Errorf("ollamaContextWindow = %d, want 32768", got)
+	}
+}
+
+func TestOllamaContextWindow_GemmaKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"model_info": map[string]any{
+				"gemma3.context_length": 131072,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	got := ollamaContextWindow(client, srv.URL, "gemma3:latest")
+	if got != 131072 {
+		t.Errorf("ollamaContextWindow = %d, want 131072", got)
+	}
+}
+
+func TestOllamaContextWindow_NoContextKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"model_info": map[string]any{
+				"general.embedding_length": 4096,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	got := ollamaContextWindow(client, srv.URL, "some-model")
+	if got != 0 {
+		t.Errorf("ollamaContextWindow = %d, want 0 when no context_length key", got)
+	}
+}
+
+func TestOllamaContextWindow_ServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "error", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	got := ollamaContextWindow(client, srv.URL, "some-model")
+	if got != 0 {
+		t.Errorf("ollamaContextWindow = %d, want 0 on server error", got)
+	}
+}
+
+func TestOllamaContextWindow_Unreachable(t *testing.T) {
+	client := &http.Client{Timeout: 100 * time.Millisecond}
+	got := ollamaContextWindow(client, "http://127.0.0.1:1", "some-model")
+	if got != 0 {
+		t.Errorf("ollamaContextWindow = %d, want 0 for unreachable server", got)
 	}
 }

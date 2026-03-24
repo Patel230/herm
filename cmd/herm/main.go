@@ -750,6 +750,7 @@ func (a *App) handleResult(result any) {
 			if a.sweLoaded && a.sweScores != nil {
 				matchSWEScores(a.models, a.sweScores)
 			}
+			a.maybeShowInitialModels()
 		}
 
 	case openPickerMsg:
