@@ -118,7 +118,7 @@ Enable headless operation for agent-driven workflows.
 
 - [x] 5b: **Headless event loop** — Replace the interactive `Run()` select loop with a simplified loop that only drains agent events (no stdin, no resize, no tick rendering). On `EventDone`, print final assistant text to stdout. On `EventError`, print error to stderr. Exit after agent completes.
 
-- [ ] 5c: **Print debug file path to stderr** — At startup in headless mode, `fmt.Fprintf(os.Stderr, "debug: %s\n", debugFilePath)` so the calling process can locate and read the debug file.
+- [x] 5c: **Print debug file path to stderr** — At startup in headless mode, `fmt.Fprintf(os.Stderr, "debug: %s\n", debugFilePath)` so the calling process can locate and read the debug file.
 
 ---
 

@@ -446,6 +446,11 @@ ready:
 		return fmt.Errorf("no API key configured")
 	}
 
+	// Print debug file path to stderr so the calling process can locate it.
+	if a.debugFilePath != "" {
+		fmt.Fprintf(os.Stderr, "debug: %s\n", a.debugFilePath)
+	}
+
 	// Submit the prompt.
 	a.messages = append(a.messages, chatMessage{kind: msgUser, content: a.cliPrompt, leadBlank: true})
 	a.startAgent(a.cliPrompt)
