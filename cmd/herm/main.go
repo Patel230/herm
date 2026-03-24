@@ -213,6 +213,7 @@ type App struct {
 	displaySystemPrompts bool
 	cliDebug             bool   // --debug flag
 	cliPrompt            string // --prompt flag (non-interactive mode)
+	headless             bool   // true when running in --prompt mode (no TUI)
 
 	// Debug file
 	debugFile     *os.File
@@ -414,6 +415,70 @@ done:
 	return nil
 }
 
+
+// RunHeadless runs herm in non-interactive mode: submits the --prompt text,
+// waits for the agent to finish, and exits. No TUI, no stdin, no resize handling.
+func (a *App) RunHeadless() error {
+	a.startInit()
+
+	// Wait for essential initialization: config, API client, models, and container.
+	timeout := time.After(60 * time.Second)
+	for {
+		select {
+		case result := <-a.resultCh:
+			a.handleResult(result)
+			if a.configReady && a.langdagClient != nil && a.models != nil &&
+				(a.containerReady || a.containerErr != nil) {
+				goto ready
+			}
+		case <-timeout:
+			if a.langdagClient == nil {
+				fmt.Fprintln(os.Stderr, "error: timed out waiting for initialization")
+				return fmt.Errorf("initialization timeout")
+			}
+			goto ready
+		}
+	}
+ready:
+
+	if a.langdagClient == nil {
+		fmt.Fprintln(os.Stderr, "error: no API key configured — use herm /config to add one")
+		return fmt.Errorf("no API key configured")
+	}
+
+	// Submit the prompt.
+	a.messages = append(a.messages, chatMessage{kind: msgUser, content: a.cliPrompt, leadBlank: true})
+	a.startAgent(a.cliPrompt)
+
+	if !a.agentRunning {
+		// startAgent failed (e.g. no model found).
+		for _, msg := range a.messages {
+			if msg.kind == msgError {
+				fmt.Fprintln(os.Stderr, "error: "+msg.content)
+			}
+		}
+		a.cleanup()
+		return fmt.Errorf("agent failed to start")
+	}
+
+	// Process agent events and async results until the agent is done.
+	for a.agentRunning {
+		select {
+		case event, ok := <-a.agent.Events():
+			if !ok {
+				a.agentRunning = false
+				break
+			}
+			a.handleAgentEvent(event)
+		case result := <-a.resultCh:
+			a.handleResult(result)
+			a.drainAgentEvents()
+		}
+	}
+
+	a.cleanup()
+	return nil
+}
 
 // tryAttachFile checks if s is a valid file path, reads and base64-encodes it,
 // stores it in the attachment map, and returns the placeholder string.
@@ -958,6 +1023,14 @@ func main() {
 				app.cliPrompt = os.Args[i+2] // i is 0-based in the slice, +2 to get next arg in os.Args
 			}
 		}
+	}
+
+	if app.cliPrompt != "" {
+		app.headless = true
+		if err := app.RunHeadless(); err != nil {
+			os.Exit(1)
+		}
+		return
 	}
 
 	if err := app.Run(); err != nil {

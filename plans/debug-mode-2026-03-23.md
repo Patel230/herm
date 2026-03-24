@@ -114,7 +114,7 @@ Enable headless operation for agent-driven workflows.
 - Agent hangs → respect existing stream timeouts; after agent done or error, exit
 - No repo root (not in a git repo) → use current directory for `.herm/debug/`
 
-- [ ] 5a: **Add headless mode to App** — Add `headless bool` field. When `cliPrompt` is set, skip terminal raw mode, skip TUI rendering, skip stdin goroutine. After config/container initialization completes, call `submitToAgent()` with the prompt text.
+- [x] 5a: **Add headless mode to App** — Add `headless bool` field. When `cliPrompt` is set, skip terminal raw mode, skip TUI rendering, skip stdin goroutine. After config/container initialization completes, call `submitToAgent()` with the prompt text.
 
 - [ ] 5b: **Headless event loop** — Replace the interactive `Run()` select loop with a simplified loop that only drains agent events (no stdin, no resize, no tick rendering). On `EventDone`, print final assistant text to stdout. On `EventError`, print error to stderr. Exit after agent completes.
 

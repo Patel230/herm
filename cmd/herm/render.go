@@ -753,6 +753,9 @@ func (a *App) positionCursor(buf *strings.Builder) {
 }
 
 func (a *App) render() {
+	if a.headless {
+		return
+	}
 	blockRows := a.buildBlockRows()
 
 	a.sepRow = len(blockRows) + 1
@@ -804,12 +807,18 @@ func (a *App) render() {
 // renderFull clears the visible screen and scrollback, then does a full render.
 // Use on resize (SIGWINCH) for an artifact-free re-render.
 func (a *App) renderFull() {
+	if a.headless {
+		return
+	}
 	a.scrollShift = 0 // reset so render() writes from top
 	os.Stdout.WriteString("\033[?25l\033[H\033[2J\033[3J") // hide cursor, clear screen + scrollback
 	a.render() // render() → positionCursor() restores cursor visibility
 }
 
 func (a *App) renderInput() {
+	if a.headless {
+		return
+	}
 	inputRows := a.buildInputRows()
 	totalRows := a.sepRow - 1 + len(inputRows)
 	th := getTerminalHeight()
