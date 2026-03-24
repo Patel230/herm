@@ -18,6 +18,7 @@ type Config struct {
 	GrokAPIKey            string          `json:"grok_api_key,omitempty"`
 	OpenAIAPIKey          string          `json:"openai_api_key,omitempty"`
 	GeminiAPIKey          string          `json:"gemini_api_key,omitempty"`
+	OllamaBaseURL         string          `json:"ollama_base_url,omitempty"` // e.g., "http://localhost:11434"
 	ActiveModel           string          `json:"active_model,omitempty"`
 	ExplorationModel      string          `json:"exploration_model,omitempty"` // model for sub-agents; falls back to ActiveModel
 	ModelSortCol          string          `json:"model_sort_col,omitempty"`   // "name","provider","price","context"
@@ -60,6 +61,9 @@ func (c Config) configuredProviders() map[string]bool {
 	if c.GeminiAPIKey != "" {
 		providers[ProviderGemini] = true
 	}
+	if c.OllamaBaseURL != "" {
+		providers[ProviderOllama] = true
+	}
 	return providers
 }
 
@@ -77,6 +81,9 @@ func (c Config) defaultLangdagProvider() string {
 	if c.GeminiAPIKey != "" {
 		return ProviderGemini
 	}
+	if c.OllamaBaseURL != "" {
+		return ProviderOllama
+	}
 	return ""
 }
 
@@ -88,6 +95,8 @@ func (c Config) availableModels(models []ModelDef) []ModelDef {
 // defaultActiveModels maps provider to the preferred default active model ID.
 // These are checked against the runtime catalog — if the ID isn't present, we
 // fall back to the first available model.
+// Ollama is intentionally omitted: locally installed models are user-specific
+// and there is no canonical default to suggest.
 var defaultActiveModels = map[string]string{
 	ProviderAnthropic: "claude-sonnet-4-6",
 	ProviderOpenAI:    "gpt-4.1-2025-04-14",
@@ -97,6 +106,8 @@ var defaultActiveModels = map[string]string{
 
 // defaultExplorationModels maps provider to the preferred cheap/fast model
 // for sub-agents and exploration tasks.
+// Ollama is intentionally omitted: locally installed models are user-specific
+// and there is no canonical cheap/fast default to suggest.
 var defaultExplorationModels = map[string]string{
 	ProviderAnthropic: "claude-haiku-4-5",
 	ProviderOpenAI:    "gpt-4.1-mini-2025-04-14",
