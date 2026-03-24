@@ -285,36 +285,16 @@ func formatContextWindow(tokens int) string {
 // Columns: Model (ID), Provider, Price (prompt), Context Window.
 // Returns a header string and the data lines.
 // The active model is marked with ● at the end.
-// visibleLen returns the visible length of a string, ignoring ANSI escape codes.
-func visibleLen(s string) int {
-	inEscape := false
-	n := 0
-	for _, c := range s {
-		if c == '\033' {
-			inEscape = true
-			continue
-		}
-		if inEscape {
-			if c == 'm' {
-				inEscape = false
-			}
-			continue
-		}
-		n++
-	}
-	return n
-}
-
 // sortCol (0-3) determines which column header is highlighted.
 func formatModelMenuLines(models []ModelDef, activeID string, sortCol int, sortAsc bool) (string, []string) {
 	// Column headers
 	headers := [4]string{"Model", "Provider", "Price", "Context"}
 
 	// Compute column widths (at least as wide as headers)
-	maxName := visibleLen(headers[0])
-	maxProv := visibleLen(headers[1])
-	maxPrice := visibleLen(headers[2])
-	maxCtx := visibleLen(headers[3])
+	maxName := visibleWidth(headers[0])
+	maxProv := visibleWidth(headers[1])
+	maxPrice := visibleWidth(headers[2])
+	maxCtx := visibleWidth(headers[3])
 
 	type entry struct {
 		name, prov, price, ctx string
@@ -333,8 +313,8 @@ func formatModelMenuLines(models []ModelDef, activeID string, sortCol int, sortA
 			ctx:    formatContextWindow(m.ContextWindow),
 			active: m.ID == activeID,
 		}
-		if visibleLen(e.name) > maxName {
-			maxName = visibleLen(e.name)
+		if visibleWidth(e.name) > maxName {
+			maxName = visibleWidth(e.name)
 		}
 		if len(e.prov) > maxProv {
 			maxProv = len(e.prov)
@@ -362,7 +342,7 @@ func formatModelMenuLines(models []ModelDef, activeID string, sortCol int, sortA
 		if j == sortCol {
 			label = h + arrow
 		}
-		pad := widths[j] - visibleLen(label)
+		pad := widths[j] - visibleWidth(label)
 		if pad < 0 {
 			pad = 0
 		}
@@ -381,7 +361,7 @@ func formatModelMenuLines(models []ModelDef, activeID string, sortCol int, sortA
 			marker = "●"
 		}
 		// Pad name manually to account for invisible ANSI escape bytes.
-		namePad := maxName - visibleLen(e.name)
+		namePad := maxName - visibleWidth(e.name)
 		if namePad < 0 {
 			namePad = 0
 		}

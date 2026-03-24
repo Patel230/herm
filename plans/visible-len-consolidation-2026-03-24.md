@@ -47,7 +47,7 @@ These status line calculations are correct by design and don't need changing.
 
 Move `ansiEscRe` and `visibleWidth()` from `render.go` to `helpers.go`. Remove `visibleLen()` from `models.go`. Update all callers in `models.go` to use `visibleWidth()`. Adapt the 6 tests in `model_test.go` (TestVisibleLen_*) to call `visibleWidth()` instead — expected values stay the same since the test strings are all ASCII with basic `\033[…m` codes.
 
-- [ ] 1a: Move `ansiEscRe` and `visibleWidth` from `render.go` to `helpers.go`; remove `visibleLen` from `models.go`; update all callers; adapt tests
+- [x] 1a: Move `ansiEscRe` and `visibleWidth` from `render.go` to `helpers.go`; remove `visibleLen` from `models.go`; update all callers; adapt tests
 
 ## Phase 2: Harden display calculations
 

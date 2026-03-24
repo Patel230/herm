@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -85,14 +84,6 @@ func cursorVisualPos(input []rune, cursor int, width int) (int, int) {
 	last := len(vlines) - 1
 	vl := vlines[last]
 	return last, vl.startCol + vl.length
-}
-
-// ansiEscRe matches ANSI escape sequences (CSI and OSC).
-var ansiEscRe = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]|\x1b\].*?\x1b\\`)
-
-// visibleWidth returns the visual column width of s, ignoring ANSI escapes.
-func visibleWidth(s string) int {
-	return uniseg.StringWidth(ansiEscRe.ReplaceAllString(s, ""))
 }
 
 // padCodeBlockRow pads a code block row with spaces so the background fills

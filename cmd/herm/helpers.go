@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -16,6 +17,14 @@ import (
 	"golang.org/x/term"
 	"github.com/rivo/uniseg"
 )
+
+// ansiEscRe matches ANSI escape sequences (CSI and OSC).
+var ansiEscRe = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]|\x1b\].*?\x1b\\`)
+
+// visibleWidth returns the visual column width of s, ignoring ANSI escapes.
+func visibleWidth(s string) int {
+	return uniseg.StringWidth(ansiEscRe.ReplaceAllString(s, ""))
+}
 
 // formatDuration returns a human-readable duration string, or "" if under 500ms.
 func formatDuration(d time.Duration) string {
