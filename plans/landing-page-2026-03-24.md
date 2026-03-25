@@ -46,8 +46,8 @@ This is a **product landing page**, not a library docs page. It should feel conf
 
 ## Phase 3: Testing & Verification
 
-- [ ] 3a: Verify the page opens correctly from `docs/index.html` in a browser (check relative paths, no broken references, GitHub stars fetch works with CORS). Fix any issues found.
-- [ ] 3b: Verify the GitHub Action workflow is valid YAML and the deployment steps are correct. Do a dry-run check of the sed version injection logic.
+- [x] 3a: Verify the page opens correctly from `docs/index.html` in a browser (check relative paths, no broken references, GitHub stars fetch works with CORS). Fix any issues found.
+- [x] 3b: Verify the GitHub Action workflow is valid YAML and the deployment steps are correct. Do a dry-run check of the sed version injection logic.
 
 ## Success Criteria
 
