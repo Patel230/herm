@@ -42,7 +42,7 @@ This is a **product landing page**, not a library docs page. It should feel conf
 
 - [x] 2a: Copy `img/demo.gif` into `docs/img/` so the page can reference it with a relative path (works both locally and deployed). Also copy `demo.mp4` for a potential video element with GIF fallback.
 - [x] 2b: Add a `docs/favicon.ico` or SVG favicon (simple hermit crab shell icon, can be a minimal SVG inline in the HTML head if preferred)
-- [ ] 2c: Add Open Graph / Twitter Card meta tags to `index.html` for social sharing previews (title, description, image pointing to the demo GIF or a dedicated OG image)
+- [x] 2c: Add Open Graph / Twitter Card meta tags to `index.html` for social sharing previews (title, description, image pointing to the demo GIF or a dedicated OG image)
 
 ## Phase 3: Testing & Verification
 
