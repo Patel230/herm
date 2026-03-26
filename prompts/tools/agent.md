@@ -15,6 +15,8 @@ Runs inside the dev container. Spawn a sub-agent with its own context window. Ea
 - Self-contained implementation work that would produce verbose output -> `implement`
 - Running multiple independent investigations in parallel (spawn several sub-agents) -> `explore`
 
+When spawning multiple implement-mode sub-agents, ensure they work on separate files — parallel edits to the same file will conflict. Partition work by file or directory.
+
 **When NOT to use — act directly instead:**
 - A single grep, glob, or file read
 - A small edit (even edit -> test -> fix cycles)
