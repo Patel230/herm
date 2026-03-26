@@ -205,6 +205,10 @@ type Agent struct {
 	sessionInputTokens  int
 	sessionOutputTokens int
 	sessionAgentCalls   int
+
+	// Background sub-agent completions, injected into the next LLM call.
+	bgMu          sync.Mutex
+	bgCompletions []string
 }
 
 // AgentOption configures optional Agent parameters.
@@ -285,6 +289,28 @@ func (a *Agent) Approve(resp ApprovalResponse) {
 	case a.approval <- resp:
 	default:
 	}
+}
+
+// InjectBackgroundResult adds a background sub-agent's result to the pending
+// queue. The result will be included in the next LLM call as a text content block
+// alongside the tool results. Thread-safe; can be called from any goroutine.
+func (a *Agent) InjectBackgroundResult(result string) {
+	a.bgMu.Lock()
+	defer a.bgMu.Unlock()
+	a.bgCompletions = append(a.bgCompletions, result)
+}
+
+// drainBackgroundResults returns and clears all pending background sub-agent
+// completions. Returns nil if there are none.
+func (a *Agent) drainBackgroundResults() []string {
+	a.bgMu.Lock()
+	defer a.bgMu.Unlock()
+	if len(a.bgCompletions) == 0 {
+		return nil
+	}
+	results := a.bgCompletions
+	a.bgCompletions = nil
+	return results
 }
 
 // Cancel stops the running agent loop.

@@ -256,6 +256,7 @@ func (a *App) startAgent(userMessage string) {
 		WithMaxToolIterations(mainMaxIter),
 		WithThinking(a.config.Thinking))
 	subAgentTool.parentEvents = agent.events
+	subAgentTool.onBgComplete = agent.InjectBackgroundResult
 	a.agent = agent
 	if a.traceCollector != nil {
 		a.traceCollector.SetMainAgentID(agent.ID())

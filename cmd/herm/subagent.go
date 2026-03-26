@@ -59,6 +59,7 @@ type SubAgentTool struct {
 	containerImage string
 	doneTimeout    time.Duration    // max time to wait for goroutine after stream ends
 	parentEvents   chan<- AgentEvent // set after construction; forwards live events to TUI
+	onBgComplete   func(string)     // set after construction; called when a background sub-agent finishes
 
 	mu         sync.Mutex
 	agentNodes map[string]string        // agentID → last nodeID (for resume)
@@ -165,6 +166,13 @@ func (t *SubAgentTool) loadNodeID(agentID string) (string, bool) {
 	defer t.mu.Unlock()
 	nodeID, ok := t.agentNodes[agentID]
 	return nodeID, ok
+}
+
+// lookupBgAgent returns the background agent state for the given ID, or nil.
+func (t *SubAgentTool) lookupBgAgent(agentID string) *bgAgentState {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.bgAgents[agentID]
 }
 
 // exploreToolAllowlist is the set of tools available to explore-mode sub-agents.
@@ -552,6 +560,9 @@ drainLoop:
 				state.done = true
 				state.result = result
 				state.mu.Unlock()
+				if t.onBgComplete != nil {
+					t.onBgComplete(result)
+				}
 				return
 			case EventError:
 				if event.Error != nil && event.Error.Error() != "context canceled" {
@@ -623,6 +634,9 @@ drainLoop:
 	state.done = true
 	state.result = result
 	state.mu.Unlock()
+	if t.onBgComplete != nil {
+		t.onBgComplete(result)
+	}
 }
 
 // buildResult constructs the final tool result from collected sub-agent state.
