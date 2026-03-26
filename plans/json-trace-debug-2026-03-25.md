@@ -249,7 +249,7 @@ Wire the trace collector into the App lifecycle and event handlers, replacing al
 
 **Contract:** The App owns a `TraceCollector`. All events feed into it. The collector writes the JSON file after each complete LLM turn and on session end. No resize-based regeneration. File extension changes from `.log` to `.json`.
 
-- [ ] 3a: **Update App struct and lifecycle** — Replace `debugFile *os.File` + `debugFilePath string` with `traceCollector *TraceCollector` + `traceFilePath string`. Update `initAppDebugLog()` to create the trace collector and set the file path (`.json` extension). Update `closeDebugLog` → finalize collector and do final write. Update config editor toggle.
+- [x] 3a: **Update App struct and lifecycle** — Replace `debugFile *os.File` + `debugFilePath string` with `traceCollector *TraceCollector` + `traceFilePath string`. Update `initAppDebugLog()` to create the trace collector and set the file path (`.json` extension). Update `closeDebugLog` → finalize collector and do final write. Update config editor toggle.
 
 - [ ] 3b: **Feed events from submitToAgent** — In `agentui.go:submitToAgent()`, replace the three `debugWriteSection` calls (system prompt, tool definitions, user message) with `traceCollector.SetSystemPrompt()`, `traceCollector.SetTools()`, `traceCollector.AddUserMessage()`. Capture `agentStartTime` in the trace info.
 

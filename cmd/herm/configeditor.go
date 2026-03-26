@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -88,12 +89,15 @@ func (a *App) exitConfigMode(save bool) {
 		a.projectConfig = a.cfgProjectDraft
 		a.config = mergeConfigs(a.globalConfig, a.projectConfig)
 		// Re-initialize debug log if debug mode changed
-		if a.debugActive() && a.debugFile == nil {
+		if a.debugActive() && a.traceCollector == nil {
 			a.initAppDebugLog()
-		} else if !a.debugActive() && a.debugFile != nil {
-			closeDebugLog(a.debugFile)
-			a.debugFile = nil
-			a.debugFilePath = ""
+		} else if !a.debugActive() && a.traceCollector != nil {
+			a.traceCollector.Finalize()
+			if err := a.traceCollector.FlushToFile(a.traceFilePath); err != nil {
+				fmt.Fprintf(os.Stderr, "debug: failed to write trace: %v\n", err)
+			}
+			a.traceCollector = nil
+			a.traceFilePath = ""
 		}
 		var saveErr bool
 		if err := saveConfig(a.globalConfig); err != nil {

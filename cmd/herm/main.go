@@ -215,9 +215,9 @@ type App struct {
 	cliPrompt            string // --prompt flag (non-interactive mode)
 	headless             bool   // true when running in --prompt mode (no TUI)
 
-	// Debug file
-	debugFile     *os.File
-	debugFilePath string
+	// JSON trace debug file
+	traceCollector *TraceCollector
+	traceFilePath  string
 }
 
 func newApp() *App {
@@ -447,8 +447,8 @@ ready:
 	}
 
 	// Print debug file path to stderr so the calling process can locate it.
-	if a.debugFilePath != "" {
-		fmt.Fprintf(os.Stderr, "debug: %s\n", a.debugFilePath)
+	if a.traceFilePath != "" {
+		fmt.Fprintf(os.Stderr, "debug: %s\n", a.traceFilePath)
 	}
 
 	// Submit the prompt.
@@ -1010,8 +1010,13 @@ func (a *App) cleanup() {
 		a.toolTimer.Stop()
 		a.toolTimer = nil
 	}
-	closeDebugLog(a.debugFile)
-	a.debugFile = nil
+	if a.traceCollector != nil {
+		a.traceCollector.Finalize()
+		if err := a.traceCollector.FlushToFile(a.traceFilePath); err != nil {
+			fmt.Fprintf(os.Stderr, "debug: failed to write trace: %v\n", err)
+		}
+		a.traceCollector = nil
+	}
 	close(a.stopCh)
 	if a.agent != nil {
 		a.agent.Cancel()

@@ -64,11 +64,14 @@ func (a *App) handleCommand(input string) {
 		a.agentElapsed = 0
 		a.shownInitialModel = false
 		a.lastModelID = ""
-		// Close old debug file and create a new one for the new conversation.
-		if a.debugFile != nil {
-			closeDebugLog(a.debugFile)
-			a.debugFile = nil
-			a.debugFilePath = ""
+		// Finalize old trace and create a new one for the new conversation.
+		if a.traceCollector != nil {
+			a.traceCollector.Finalize()
+			if err := a.traceCollector.FlushToFile(a.traceFilePath); err != nil {
+				fmt.Fprintf(os.Stderr, "debug: failed to write trace: %v\n", err)
+			}
+			a.traceCollector = nil
+			a.traceFilePath = ""
 			a.initAppDebugLog()
 		}
 		a.maybeShowInitialModels()
@@ -376,7 +379,7 @@ func (a *App) switchToWorktree(wtPath, name, branch string) {
 			attachDir := filepath.Join(wtPath, ".herm", "attachments", a.sessionID)
 			_ = os.MkdirAll(attachDir, 0o755)
 			mounts := []MountSpec{
-				{Source: wtPath, Destination: "/workspace"},
+				{Source: wtPath, Destination: wtPath},
 				{Source: attachDir, Destination: "/attachments", ReadOnly: true},
 			}
 			if err := a.container.Start(wtPath, mounts); err != nil {

@@ -678,11 +678,11 @@ func (a *App) buildInputRows() []string {
 		}
 		rows = append(rows, branchLabel+diffLabel+commitLabel+costLabel+strings.Repeat(" ", padding)+bar+" ")
 
-		// Debug mode: show debug file path
-		if a.debugFilePath != "" {
-			relPath := a.debugFilePath
+		// Debug mode: show trace file path
+		if a.traceFilePath != "" {
+			relPath := a.traceFilePath
 			if a.repoRoot != "" {
-				if r, err := filepath.Rel(a.repoRoot, a.debugFilePath); err == nil {
+				if r, err := filepath.Rel(a.repoRoot, a.traceFilePath); err == nil {
 					relPath = r
 				}
 			}
