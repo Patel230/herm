@@ -175,6 +175,26 @@ func (t *SubAgentTool) lookupBgAgent(agentID string) *bgAgentState {
 	return t.bgAgents[agentID]
 }
 
+// bgAgentStatus returns the current state of a background sub-agent.
+func (t *SubAgentTool) bgAgentStatus(agentID string) (string, error) {
+	state := t.lookupBgAgent(agentID)
+	if state == nil {
+		return "", fmt.Errorf("agent_id %q is not a background agent; provide a task description to resume it", agentID)
+	}
+
+	state.mu.Lock()
+	done := state.done
+	result := state.result
+	state.mu.Unlock()
+
+	if done {
+		return fmt.Sprintf("[agent_id: %s] [status: completed]\n\n%s", agentID, result), nil
+	}
+
+	elapsed := time.Since(state.started).Truncate(time.Second)
+	return fmt.Sprintf("[agent_id: %s] [status: running] Task: %s (elapsed: %s)", agentID, state.task, elapsed), nil
+}
+
 // exploreToolAllowlist is the set of tools available to explore-mode sub-agents.
 // These are read-only tools plus bash (needed for read-only commands like ls,
 // tree, and build checks — an accepted escape hatch consistent with Claude Code).
@@ -220,6 +240,12 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 	if in.Task == "" {
 		return "", fmt.Errorf("task is required")
 	}
+
+	// Status check for background sub-agents (mode not required).
+	if in.AgentID != "" && in.Task == "status" {
+		return t.bgAgentStatus(in.AgentID)
+	}
+
 	if in.Mode != "explore" && in.Mode != "implement" {
 		return "", fmt.Errorf("mode must be \"explore\" or \"implement\", got %q", in.Mode)
 	}
