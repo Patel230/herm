@@ -86,7 +86,7 @@ func (t *GlobTool) Definition() types.ToolDefinition {
 				},
 				"path": {
 					"type": "string",
-					"description": "Directory to search in, relative to /workspace (default: /workspace root)"
+					"description": "Directory to search in, relative to the project root (default: project root)"
 				}
 			},
 			"required": ["pattern"]
@@ -113,12 +113,12 @@ func (t *GlobTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 
 	// Build command: cd into search dir, run rg --files with glob filter.
 	// Running from the directory gives relative paths in output (compact).
-	searchDir := "/workspace"
+	searchDir := t.container.WorkDir()
 	if in.Path != "" {
 		p := in.Path
-		// Make relative paths resolve against /workspace.
+		// Make relative paths resolve against the project root.
 		if !strings.HasPrefix(p, "/") {
-			p = "/workspace/" + p
+			p = t.container.WorkDir() + "/" + p
 		}
 		searchDir = p
 	}
@@ -181,7 +181,7 @@ func (t *GrepTool) Definition() types.ToolDefinition {
 				},
 				"path": {
 					"type": "string",
-					"description": "Directory or file to search in, relative to /workspace (default: /workspace root)"
+					"description": "Directory or file to search in, relative to the project root (default: project root)"
 				},
 				"glob": {
 					"type": "string",
@@ -253,17 +253,17 @@ func (t *GrepTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 	args = append(args, "--", shellQuote(in.Pattern))
 
 	// Search path.
-	searchDir := "/workspace"
+	searchDir := t.container.WorkDir()
 	if in.Path != "" {
 		p := in.Path
 		if !strings.HasPrefix(p, "/") {
-			p = "/workspace/" + p
+			p = t.container.WorkDir() + "/" + p
 		}
 		searchDir = p
 	}
 
-	cmd := fmt.Sprintf("cd /workspace && %s %s 2>&1",
-		strings.Join(args, " "), shellQuote(searchDir))
+	cmd := fmt.Sprintf("cd %s && %s %s 2>&1",
+		shellQuote(t.container.WorkDir()), strings.Join(args, " "), shellQuote(searchDir))
 
 	result, err := t.container.Exec(cmd, 30)
 	if err != nil {
@@ -314,7 +314,7 @@ func (t *ReadFileTool) Definition() types.ToolDefinition {
 			"properties": {
 				"file_path": {
 					"type": "string",
-					"description": "Path to the file, relative to /workspace (e.g. 'src/main.go')"
+					"description": "Path to the file, relative to the project root (e.g. 'src/main.go')"
 				},
 				"offset": {
 					"type": "integer",
@@ -353,10 +353,10 @@ func (t *ReadFileTool) Execute(ctx context.Context, input json.RawMessage) (stri
 		return "", fmt.Errorf("file_path is required")
 	}
 
-	// Resolve path relative to /workspace.
+	// Resolve path relative to the project root.
 	filePath := in.FilePath
 	if !strings.HasPrefix(filePath, "/") {
-		filePath = "/workspace/" + filePath
+		filePath = t.container.WorkDir() + "/" + filePath
 	}
 
 	offset := in.Offset
@@ -439,7 +439,7 @@ func (t *EditFileTool) Definition() types.ToolDefinition {
 			"properties": {
 				"file_path": {
 					"type": "string",
-					"description": "Path to the file, relative to /workspace (e.g. 'src/main.go')"
+					"description": "Path to the file, relative to the project root (e.g. 'src/main.go')"
 				},
 				"old_string": {
 					"type": "string",
@@ -548,7 +548,7 @@ func (t *WriteFileTool) Definition() types.ToolDefinition {
 			"properties": {
 				"file_path": {
 					"type": "string",
-					"description": "Path to the file, relative to /workspace (e.g. 'src/main.go')"
+					"description": "Path to the file, relative to the project root (e.g. 'src/main.go')"
 				},
 				"content": {
 					"type": "string",
@@ -656,12 +656,12 @@ func (t *OutlineTool) Definition() types.ToolDefinition {
 			"properties": {
 				"file_path": {
 					"type": "string",
-					"description": "Path to a single file, relative to /workspace (e.g. 'src/main.go')"
+					"description": "Path to a single file, relative to the project root (e.g. 'src/main.go')"
 				},
 				"file_paths": {
 					"type": "array",
 					"items": {"type": "string"},
-					"description": "Paths to multiple files, relative to /workspace. Use instead of file_path to outline several files in one call (max 20)."
+					"description": "Paths to multiple files, relative to the project root. Use instead of file_path to outline several files in one call (max 20)."
 				}
 			}
 		}`),

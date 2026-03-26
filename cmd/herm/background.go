@@ -190,7 +190,7 @@ func bootContainerCmd(workspace string, sessionID string, ch chan<- any) {
 	_ = os.MkdirAll(attachDir, 0o755)
 
 	mounts := []MountSpec{
-		{Source: workspace, Destination: "/workspace", ReadOnly: false},
+		{Source: workspace, Destination: workspace, ReadOnly: false},
 		{Source: attachDir, Destination: "/attachments", ReadOnly: true},
 	}
 

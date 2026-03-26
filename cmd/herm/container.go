@@ -71,6 +71,7 @@ type ContainerClient struct {
 	containerID string
 	mu          sync.Mutex
 	running     bool
+	workDir     string
 }
 
 // NewContainerClient creates a new client with the given config.
@@ -138,6 +139,7 @@ func (c *ContainerClient) Start(workspace string, mounts []MountSpec) error {
 
 	c.containerID = strings.TrimSpace(stdout.String())
 	c.running = true
+	c.workDir = workspace
 	return nil
 }
 
@@ -225,6 +227,11 @@ func (c *ContainerClient) ContainerID() string {
 	return c.containerID
 }
 
+// WorkDir returns the working directory (mount destination) for the project.
+func (c *ContainerClient) WorkDir() string {
+	return c.workDir
+}
+
 // ShellCmd returns an exec.Cmd that opens an interactive shell in the container.
 // Busybox ash (Alpine's /bin/sh) sends \033[6n (cursor position query) on every
 // prompt. The CPR response travels through docker's double-PTY proxy chain with
@@ -243,7 +250,7 @@ else
   stty sane 2>/dev/null
   exec /bin/sh -l
 fi`
-	cmd := exec.Command("docker", "exec", "-it", "-w", "/workspace", c.containerID,
+	cmd := exec.Command("docker", "exec", "-it", "-w", c.workDir, c.containerID,
 		"/bin/sh", "-c", script)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
