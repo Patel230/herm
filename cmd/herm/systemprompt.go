@@ -98,18 +98,17 @@ func buildSystemPrompt(tools []Tool, serverTools []types.ToolDefinition, skills 
 	return buf.String()
 }
 
-// readContainerEnv reads .herm/environment.md if it exists.
-// Returns the content with each line prefixed by "- " for bullet rendering
-// in the environment template, or empty string if the file is absent.
+// readContainerEnv reads .herm/environment.md if it exists, falling back to
+// the base image manifest. Returns each line prefixed by "- " for bullet
+// rendering in the environment template.
 func readContainerEnv(workDir string) string {
-	data, err := os.ReadFile(filepath.Join(workDir, ".herm", manifestFile))
-	if err != nil {
-		return ""
+	raw := baseManifest // default to base image description
+	if data, err := os.ReadFile(filepath.Join(workDir, ".herm", manifestFile)); err == nil {
+		if trimmed := strings.TrimSpace(string(data)); trimmed != "" {
+			raw = trimmed
+		}
 	}
-	raw := strings.TrimSpace(string(data))
-	if raw == "" {
-		return ""
-	}
+
 	lines := strings.Split(raw, "\n")
 	for i, l := range lines {
 		lines[i] = "- " + l

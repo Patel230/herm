@@ -557,7 +557,7 @@ func (t *DevEnvTool) buildAndReplace() (string, error) {
 		}
 	}
 
-	// Generate environment manifest from the new container.
+	// Generate environment manifest from the Dockerfile.
 	if err := t.generateManifest(); err != nil {
 		// Non-fatal: the build succeeded, manifest is a nice-to-have.
 		return fmt.Sprintf("Container rebuilt successfully with image %s.\n(Warning: failed to generate environment manifest: %v)", imageName, err), nil

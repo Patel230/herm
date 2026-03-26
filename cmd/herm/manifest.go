@@ -1,155 +1,55 @@
 // manifest.go generates .herm/environment.md — a compact manifest of what's
 // installed in the dev container, injected into the system prompt so the agent
 // knows available runtimes and tools without running discovery commands.
+//
+// Two modes:
+//   - Base image (no .herm/Dockerfile): use the pre-defined baseManifest.
+//   - Custom image (after devenv build): parse the Dockerfile to describe
+//     what was added on top of the base image.
 package main
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
 const manifestFile = "environment.md"
 
-// envDetectScript runs inside the container to discover installed runtimes and tools.
-// Output is delimited by =RUNTIMES= and =TOOLS= markers, parsed by parseManifest.
-const envDetectScript = `echo "=RUNTIMES="
-command -v go >/dev/null 2>&1 && go version
-command -v node >/dev/null 2>&1 && node --version
-command -v python3 >/dev/null 2>&1 && python3 --version
-command -v ruby >/dev/null 2>&1 && ruby --version
-command -v rustc >/dev/null 2>&1 && rustc --version
-command -v java >/dev/null 2>&1 && java -version 2>&1 | head -1
-echo "=TOOLS="
-for cmd in git rg tree curl wget make cmake gcc g++ clang; do command -v "$cmd" >/dev/null 2>&1 && printf "%s " "$cmd"; done
-echo ""`
+// baseManifest describes the unextended herm base image (aduermael/herm).
+// Used when no .herm/Dockerfile exists. Keep in sync with the project Dockerfile.
+const baseManifest = `Pre-installed: git, ripgrep (rg), tree, python3
+Herm tools: edit-file, write-file, outline
+Base: debian bookworm-slim`
 
 // manifestPath returns the path to .herm/environment.md.
 func (t *DevEnvTool) manifestPath() string {
 	return filepath.Join(t.hermDir, manifestFile)
 }
 
-// parseManifest parses the output of envDetectScript into a compact manifest string.
-// Format (target <5 lines):
-//
-//	Runtimes: go 1.22.5, node 22.14.0, python3 3.11.2
-//	System tools: git, rg, tree, curl, wget, make
-func parseManifest(output string) string {
-	lines := strings.Split(output, "\n")
-
-	var runtimes []string
-	var toolsRaw string
-	section := ""
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		switch line {
-		case "=RUNTIMES=":
-			section = "runtimes"
-			continue
-		case "=TOOLS=":
-			section = "tools"
-			continue
-		}
-		if line == "" {
-			continue
-		}
-
-		switch section {
-		case "runtimes":
-			if name, ver := parseVersionLine(line); name != "" {
-				runtimes = append(runtimes, name+" "+ver)
-			}
-		case "tools":
-			toolsRaw = line
-		}
-	}
-
-	var parts []string
-	if len(runtimes) > 0 {
-		parts = append(parts, "Runtimes: "+strings.Join(runtimes, ", "))
-	}
-	if t := strings.TrimSpace(toolsRaw); t != "" {
-		toolList := strings.Fields(t)
-		parts = append(parts, "System tools: "+strings.Join(toolList, ", "))
-	}
-
-	return strings.Join(parts, "\n")
-}
-
-// parseVersionLine extracts a runtime name and version from common version output formats.
-func parseVersionLine(line string) (name, version string) {
-	// "go version go1.22.5 linux/amd64"
-	if strings.HasPrefix(line, "go version go") {
-		parts := strings.Fields(line)
-		if len(parts) >= 3 {
-			return "go", strings.TrimPrefix(parts[2], "go")
-		}
-	}
-	// "v22.14.0" (node --version)
-	if strings.HasPrefix(line, "v") && !strings.Contains(line, " ") {
-		return "node", strings.TrimPrefix(line, "v")
-	}
-	// "Python 3.11.2"
-	if strings.HasPrefix(line, "Python ") {
-		return "python3", strings.TrimPrefix(line, "Python ")
-	}
-	// "ruby 3.1.2p20 (2022-04-12 revision ...)  ..."
-	if strings.HasPrefix(line, "ruby ") {
-		parts := strings.Fields(line)
-		if len(parts) >= 2 {
-			ver := parts[1]
-			if idx := strings.Index(ver, "p"); idx > 0 {
-				ver = ver[:idx]
-			}
-			return "ruby", ver
-		}
-	}
-	// "rustc 1.75.0 (82e1608df 2023-12-21)"
-	if strings.HasPrefix(line, "rustc ") {
-		parts := strings.Fields(line)
-		if len(parts) >= 2 {
-			return "rustc", parts[1]
-		}
-	}
-	// "openjdk 21.0.1 2023-10-17" or "openjdk version \"21.0.1\" ..."
-	if strings.Contains(line, "openjdk") || strings.Contains(line, "java version") {
-		parts := strings.Fields(line)
-		for _, p := range parts {
-			p = strings.Trim(p, `"`)
-			if len(p) > 0 && p[0] >= '0' && p[0] <= '9' {
-				return "java", p
-			}
-		}
-	}
-	return "", ""
-}
-
-// generateManifest runs detection commands in the container and writes .herm/environment.md.
-// Silently returns nil if the container is nil or the script produces no output.
+// generateManifest writes .herm/environment.md based on the current state:
+//   - If no Dockerfile exists, writes the base image manifest.
+//   - If a Dockerfile exists, parses it to describe the environment.
 func (t *DevEnvTool) generateManifest() error {
-	if t.container == nil {
-		return nil
-	}
-
-	result, err := t.container.Exec(envDetectScript, 10)
-	if err != nil {
-		return fmt.Errorf("detecting environment: %w", err)
-	}
-
-	manifest := parseManifest(result.Stdout)
-	if manifest == "" {
-		return nil
-	}
-
 	if err := os.MkdirAll(t.hermDir, 0o755); err != nil {
-		return fmt.Errorf("creating .herm directory: %w", err)
+		return err
 	}
+
+	dockerfile, err := os.ReadFile(t.dockerfilePath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return os.WriteFile(t.manifestPath(), []byte(baseManifest+"\n"), 0o644)
+		}
+		return err
+	}
+
+	manifest := manifestFromDockerfile(string(dockerfile))
 	return os.WriteFile(t.manifestPath(), []byte(manifest+"\n"), 0o644)
 }
 
 // manifestStale returns true if the manifest is missing or older than the Dockerfile.
+// Also returns true if neither exists (so the base manifest gets written).
 func (t *DevEnvTool) manifestStale() bool {
 	mInfo, err := os.Stat(t.manifestPath())
 	if err != nil {
@@ -158,8 +58,80 @@ func (t *DevEnvTool) manifestStale() bool {
 
 	dfInfo, err := os.Stat(t.dockerfilePath())
 	if err != nil {
-		return false // no Dockerfile means nothing to regenerate from
+		return false // no Dockerfile, base manifest is current
 	}
 
 	return dfInfo.ModTime().After(mInfo.ModTime())
+}
+
+// manifestFromDockerfile parses a Dockerfile and generates a compact environment
+// description. Extracts ENV variables (especially *_VERSION), apt-get packages,
+// and PATH additions — everything the agent needs to know what's available.
+//
+// The output format mirrors baseManifest so the system prompt reads consistently.
+func manifestFromDockerfile(dockerfile string) string {
+	var sections []string
+
+	// Always start with base image info.
+	sections = append(sections, "Pre-installed: git, ripgrep (rg), tree, python3")
+	sections = append(sections, "Herm tools: edit-file, write-file, outline")
+
+	// Extract ENV declarations — these often declare versions and paths.
+	if envs := extractEnvVars(dockerfile); len(envs) > 0 {
+		sections = append(sections, "Environment: "+strings.Join(envs, ", "))
+	}
+
+	// Extract apt-get installed packages (beyond what's in the base).
+	if pkgs := extractAptPackages(dockerfile); len(pkgs) > 0 {
+		sections = append(sections, "Packages: "+strings.Join(pkgs, ", "))
+	}
+
+	return strings.Join(sections, "\n")
+}
+
+// envVarRe matches ENV KEY=VALUE or ENV KEY VALUE lines.
+var envVarRe = regexp.MustCompile(`(?m)^\s*ENV\s+(\S+?)=(\S+)`)
+
+// extractEnvVars pulls ENV KEY=VALUE declarations from a Dockerfile.
+// Returns compact "KEY=VALUE" pairs, useful for version and PATH info.
+func extractEnvVars(dockerfile string) []string {
+	matches := envVarRe.FindAllStringSubmatch(dockerfile, -1)
+	var result []string
+	for _, m := range matches {
+		result = append(result, m[1]+"="+m[2])
+	}
+	return result
+}
+
+// aptInstallRe matches apt-get install lines and captures the package list.
+var aptInstallRe = regexp.MustCompile(`apt-get\s+install\s+(?:-\S+\s+)*(.+?)(?:\s*&&|\s*\\?\s*$)`)
+
+// basePackages are packages already in the base image — filter them out.
+var basePackages = map[string]bool{
+	"git": true, "tree": true, "ca-certificates": true, "ripgrep": true, "python3": true,
+}
+
+// extractAptPackages finds packages installed via apt-get in the Dockerfile.
+// Filters out packages already in the base image.
+func extractAptPackages(dockerfile string) []string {
+	seen := make(map[string]bool)
+	var result []string
+
+	// Normalize line continuations so multi-line RUN commands are on one line.
+	normalized := strings.ReplaceAll(dockerfile, "\\\n", " ")
+
+	for _, match := range aptInstallRe.FindAllStringSubmatch(normalized, -1) {
+		pkgStr := match[1]
+		for _, pkg := range strings.Fields(pkgStr) {
+			// Skip flags and cleanup commands.
+			if strings.HasPrefix(pkg, "-") || pkg == "&&" || pkg == "rm" || strings.HasPrefix(pkg, "/") {
+				break // rest of line is likely cleanup
+			}
+			if !basePackages[pkg] && !seen[pkg] {
+				seen[pkg] = true
+				result = append(result, pkg)
+			}
+		}
+	}
+	return result
 }

@@ -211,12 +211,16 @@ func TestBuildSystemPromptContainerEnv(t *testing.T) {
 	}
 }
 
-func TestBuildSystemPromptContainerEnvAbsent(t *testing.T) {
+func TestBuildSystemPromptContainerEnvFallsBackToBase(t *testing.T) {
 	dir := t.TempDir() // no .herm/environment.md
 	prompt := buildSystemPrompt(nil, nil, nil, dir, "", "alpine:latest", "", nil)
 
-	if strings.Contains(prompt, "Runtimes:") {
-		t.Error("prompt should not contain Runtimes when no manifest exists")
+	// Should fall back to base manifest.
+	if !strings.Contains(prompt, "Pre-installed:") {
+		t.Error("prompt should contain base manifest when no custom manifest exists")
+	}
+	if !strings.Contains(prompt, "edit-file") {
+		t.Error("base manifest should list herm tools")
 	}
 }
 
