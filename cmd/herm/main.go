@@ -1003,7 +1003,6 @@ func (a *App) handleResult(result any) {
 	case resizeMsg:
 		a.width = getWidth() // re-read in case of further changes
 		a.renderFull()
-		a.regenerateDebugFile()
 		return
 	}
 

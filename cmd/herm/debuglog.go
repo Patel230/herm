@@ -18,10 +18,6 @@ func (a *App) debugActive() bool {
 	return a.config.DebugMode || a.cliDebug
 }
 
-// debugWriteSection is a legacy no-op kept during migration.
-// All callers will be replaced with trace collector methods.
-func (a *App) debugWriteSection(section, content string) {}
-
 // initAppDebugLog initializes the JSON trace collector for the app if debug mode is active.
 // Should be called after repoRoot is known (i.e. after workspaceMsg).
 func (a *App) initAppDebugLog() {
@@ -43,11 +39,3 @@ func (a *App) initAppDebugLog() {
 	a.traceCollector = NewTraceCollector(a.sessionID, a.models)
 	a.traceCollector.SetGitInfo(a.status.Branch, a.repoRoot)
 }
-
-// debugWriteSessionSummary is a legacy no-op kept during migration.
-// The trace collector's info object replaces this.
-func (a *App) debugWriteSessionSummary() {}
-
-// regenerateDebugFile is a legacy no-op kept during migration.
-// JSON trace files are written on events, not on display changes.
-func (a *App) regenerateDebugFile() {}

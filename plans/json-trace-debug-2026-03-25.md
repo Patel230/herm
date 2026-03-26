@@ -257,7 +257,7 @@ Wire the trace collector into the App lifecycle and event handlers, replacing al
 
 - [x] 3d: **Periodic flush after each LLM turn** — After `EventToolResult` (when all tools for a turn are complete) or after `EventUsage` (if no tool calls), call `FlushToFile`. This provides crash resilience — at most one turn is lost.
 
-- [ ] 3e: **Remove regenerateDebugFile and resize trigger** — Delete `regenerateDebugFile()` from `debuglog.go`. Remove the `regenerateDebugFile()` call from the `resizeMsg` handler in `main.go`. The JSON trace is written on events, not on display changes.
+- [x] 3e: **Remove regenerateDebugFile and resize trigger** — Delete `regenerateDebugFile()` from `debuglog.go`. Remove the `regenerateDebugFile()` call from the `resizeMsg` handler in `main.go`. The JSON trace is written on events, not on display changes.
 
 - [ ] 3f: **Update /clear and headless mode** — In `/clear` handler: finalize current trace, start new collector with new `.json` file path. In headless mode: same lifecycle, print `.json` path to stderr.
 
