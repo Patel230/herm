@@ -255,7 +255,7 @@ Wire the trace collector into the App lifecycle and event handlers, replacing al
 
 - [x] 3c: **Feed events from handleAgentEvent** — Replace every `debugWriteSection` call in `handleAgentEvent()` with the corresponding trace collector method. Map: `EventTextDelta` → `AddTextDelta`, `EventToolCallStart` → `StartToolCall`, `EventToolResult` → `EndToolCall` + flush, `EventUsage` → `SetUsage`, `EventApprovalReq` → `AddApproval`, `EventCompacted` → `AddCompaction`, `EventSubAgentStart` → (record start time), `EventSubAgentStatus` (done) → `AddSubAgent(event.SubTrace)`, `EventStreamClear` → `AddStreamClear()`, `EventRetry` → `AddRetry`, `EventError` → `AddError`, `EventDone` → `Finalize` + final flush.
 
-- [ ] 3d: **Periodic flush after each LLM turn** — After `EventToolResult` (when all tools for a turn are complete) or after `EventUsage` (if no tool calls), call `FlushToFile`. This provides crash resilience — at most one turn is lost.
+- [x] 3d: **Periodic flush after each LLM turn** — After `EventToolResult` (when all tools for a turn are complete) or after `EventUsage` (if no tool calls), call `FlushToFile`. This provides crash resilience — at most one turn is lost.
 
 - [ ] 3e: **Remove regenerateDebugFile and resize trigger** — Delete `regenerateDebugFile()` from `debuglog.go`. Remove the `regenerateDebugFile()` call from the `resizeMsg` handler in `main.go`. The JSON trace is written on events, not on display changes.
 

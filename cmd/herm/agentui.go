@@ -404,6 +404,7 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 		}
 		if a.traceCollector != nil {
 			a.traceCollector.EndToolCall(event.ToolID, event.ToolResult, event.IsError, event.Duration)
+			a.traceCollector.FlushToFile(a.traceFilePath)
 		}
 		a.messages = append(a.messages, chatMessage{kind: msgToolResult, content: result, isError: event.IsError, duration: event.Duration})
 		a.render()
@@ -426,6 +427,7 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 			if a.traceCollector != nil {
 				a.traceCollector.SetUsage(event.AgentID, event.Model, event.NodeID,
 					traceUsageFromTypes(event.Usage), cost)
+				a.traceCollector.FlushToFile(a.traceFilePath)
 			}
 			a.renderInput()
 		}
