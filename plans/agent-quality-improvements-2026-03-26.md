@@ -94,7 +94,7 @@ Currently sub-agents block the parent until completion. For long-running tasks (
 - [x] 5b: Background sub-agent lifecycle — store running background agents in a map on `SubAgentTool` (agent_id → goroutine channel). The goroutine collects events as usual. When done, it stores the final result and signals completion.
 - [x] 5c: Result surfacing — when a background sub-agent completes, forward the completion event to the parent's event channel. In `agentui.go`, handle this as an injected tool result that gets included in the next LLM call's context. Design the injection so it appears as a natural "background agent completed" message.
 - [x] 5d: Status checking — when `agent(agent_id: "<id>", task: "status")` is called, return the current state: "running" with turns/tools so far, or "completed" with the full result. Reuse the existing resume infrastructure (`agentNodes` map).
-- [ ] 5e: Update `agent.md` tool description — document background mode: when to use it (long-running explorations, parallel independent tasks), how results are delivered (automatic notification on completion), how to check status.
+- [x] 5e: Update `agent.md` tool description — document background mode: when to use it (long-running explorations, parallel independent tasks), how results are delivered (automatic notification on completion), how to check status.
 - [ ] 5f: Tests — verify background execution returns immediately, result surfacing works, status checking returns correct state for running and completed agents.
 
 ## Phase 6: Trace Improvements (Nice-to-Have)

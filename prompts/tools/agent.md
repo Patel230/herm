@@ -23,6 +23,13 @@ When spawning multiple implement-mode sub-agents, ensure they work on separate f
 - Running one command and interpreting the output
 - Any task completable in ~5 or fewer tool calls
 
+**Background mode** (`background: true`):
+- The sub-agent runs asynchronously. You get an agent_id immediately and can continue working.
+- When the background agent completes, its result is automatically injected into your next LLM context — you will see a "[Background agent completed]" notification.
+- Use for long-running explorations or parallel independent tasks where you don't need the result right away.
+- Check status anytime: `agent(agent_id: "<id>", task: "status")` — returns "running" or "completed" with the full result.
+- Cannot be combined with agent_id (no background resume).
+
 **Usage:**
 - Provide a clear, self-contained task description — the sub-agent has the same tools you do but no shared memory.
 - Resume a previous sub-agent by passing its agent_id with a new task — this continues from where it left off with full context preserved.
