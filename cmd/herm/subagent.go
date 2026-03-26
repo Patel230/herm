@@ -223,7 +223,7 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 	agentID := agent.ID()
 
 	// Create a local trace collector for this sub-agent's events.
-	subTC := NewTraceCollector("", nil)
+	subTC := NewTraceCollector("")
 	subTC.SetMainAgentID(agentID)
 
 	// Notify the TUI that a sub-agent is starting, with its task label.

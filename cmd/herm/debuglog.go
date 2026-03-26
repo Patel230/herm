@@ -36,6 +36,6 @@ func (a *App) initAppDebugLog() {
 	}
 	name := fmt.Sprintf("debug-%s.json", time.Now().Format("20060102-150405"))
 	a.traceFilePath = filepath.Join(dir, name)
-	a.traceCollector = NewTraceCollector(a.sessionID, a.models)
+	a.traceCollector = NewTraceCollector(a.sessionID)
 	a.traceCollector.SetGitInfo(a.status.Branch, a.repoRoot)
 }

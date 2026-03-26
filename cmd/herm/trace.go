@@ -200,13 +200,10 @@ type TraceCollector struct {
 
 	// Track main agent ID for distinguishing main vs sub-agent LLM calls.
 	mainAgentID string
-
-	// Models list for cost computation.
-	models []ModelDef
 }
 
 // NewTraceCollector creates a new trace collector.
-func NewTraceCollector(sessionID string, models []ModelDef) *TraceCollector {
+func NewTraceCollector(sessionID string) *TraceCollector {
 	now := time.Now()
 	return &TraceCollector{
 		info: TraceInfo{
@@ -218,7 +215,6 @@ func NewTraceCollector(sessionID string, models []ModelDef) *TraceCollector {
 		currentTurn:  make(map[string]*TraceLLMResponse),
 		pendingTools: make(map[string]*TraceToolCall),
 		toolAgent:    make(map[string]string),
-		models:       models,
 	}
 }
 
