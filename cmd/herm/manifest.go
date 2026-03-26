@@ -4,6 +4,8 @@
 package main
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -122,4 +124,42 @@ func parseVersionLine(line string) (name, version string) {
 		}
 	}
 	return "", ""
+}
+
+// generateManifest runs detection commands in the container and writes .herm/environment.md.
+// Silently returns nil if the container is nil or the script produces no output.
+func (t *DevEnvTool) generateManifest() error {
+	if t.container == nil {
+		return nil
+	}
+
+	result, err := t.container.Exec(envDetectScript, 10)
+	if err != nil {
+		return fmt.Errorf("detecting environment: %w", err)
+	}
+
+	manifest := parseManifest(result.Stdout)
+	if manifest == "" {
+		return nil
+	}
+
+	if err := os.MkdirAll(t.hermDir, 0o755); err != nil {
+		return fmt.Errorf("creating .herm directory: %w", err)
+	}
+	return os.WriteFile(t.manifestPath(), []byte(manifest+"\n"), 0o644)
+}
+
+// manifestStale returns true if the manifest is missing or older than the Dockerfile.
+func (t *DevEnvTool) manifestStale() bool {
+	mInfo, err := os.Stat(t.manifestPath())
+	if err != nil {
+		return true // missing
+	}
+
+	dfInfo, err := os.Stat(t.dockerfilePath())
+	if err != nil {
+		return false // no Dockerfile means nothing to regenerate from
+	}
+
+	return dfInfo.ModTime().After(mInfo.ModTime())
 }

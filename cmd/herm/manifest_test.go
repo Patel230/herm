@@ -1,8 +1,11 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseVersionLine_Go(t *testing.T) {
@@ -122,5 +125,77 @@ func TestManifestPath(t *testing.T) {
 	got := tool.manifestPath()
 	if got != "/tmp/.herm/environment.md" {
 		t.Errorf("manifestPath() = %q, want /tmp/.herm/environment.md", got)
+	}
+}
+
+func TestManifestStale_Missing(t *testing.T) {
+	dir := t.TempDir()
+	hermDir := filepath.Join(dir, ".herm")
+	os.MkdirAll(hermDir, 0o755)
+
+	// Dockerfile exists but no manifest.
+	os.WriteFile(filepath.Join(hermDir, "Dockerfile"), []byte("FROM x\n"), 0o644)
+
+	tool := NewDevEnvTool(nil, hermDir, dir, nil, "", nil, nil)
+	if !tool.manifestStale() {
+		t.Error("manifest should be stale when missing")
+	}
+}
+
+func TestManifestStale_OlderThanDockerfile(t *testing.T) {
+	dir := t.TempDir()
+	hermDir := filepath.Join(dir, ".herm")
+	os.MkdirAll(hermDir, 0o755)
+
+	// Write manifest first, then Dockerfile (newer).
+	mPath := filepath.Join(hermDir, manifestFile)
+	os.WriteFile(mPath, []byte("Runtimes: go 1.22\n"), 0o644)
+	// Ensure Dockerfile has a later mtime.
+	time.Sleep(10 * time.Millisecond)
+	os.WriteFile(filepath.Join(hermDir, "Dockerfile"), []byte("FROM x\n"), 0o644)
+
+	tool := NewDevEnvTool(nil, hermDir, dir, nil, "", nil, nil)
+	if !tool.manifestStale() {
+		t.Error("manifest should be stale when older than Dockerfile")
+	}
+}
+
+func TestManifestStale_Fresh(t *testing.T) {
+	dir := t.TempDir()
+	hermDir := filepath.Join(dir, ".herm")
+	os.MkdirAll(hermDir, 0o755)
+
+	// Dockerfile first, then manifest (newer).
+	os.WriteFile(filepath.Join(hermDir, "Dockerfile"), []byte("FROM x\n"), 0o644)
+	time.Sleep(10 * time.Millisecond)
+	os.WriteFile(filepath.Join(hermDir, manifestFile), []byte("Runtimes: go 1.22\n"), 0o644)
+
+	tool := NewDevEnvTool(nil, hermDir, dir, nil, "", nil, nil)
+	if tool.manifestStale() {
+		t.Error("manifest should not be stale when newer than Dockerfile")
+	}
+}
+
+func TestManifestStale_NoDockerfile(t *testing.T) {
+	dir := t.TempDir()
+	hermDir := filepath.Join(dir, ".herm")
+	os.MkdirAll(hermDir, 0o755)
+
+	// Only manifest, no Dockerfile.
+	os.WriteFile(filepath.Join(hermDir, manifestFile), []byte("Runtimes: go 1.22\n"), 0o644)
+
+	tool := NewDevEnvTool(nil, hermDir, dir, nil, "", nil, nil)
+	if tool.manifestStale() {
+		t.Error("manifest should not be stale when no Dockerfile exists")
+	}
+}
+
+func TestGenerateManifest_NilContainer(t *testing.T) {
+	dir := t.TempDir()
+	hermDir := filepath.Join(dir, ".herm")
+
+	tool := NewDevEnvTool(nil, hermDir, dir, nil, "", nil, nil)
+	if err := tool.generateManifest(); err != nil {
+		t.Errorf("generateManifest with nil container should return nil, got: %v", err)
 	}
 }

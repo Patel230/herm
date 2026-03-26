@@ -406,6 +406,11 @@ func (t *DevEnvTool) readDockerfile() (string, error) {
 		return "", fmt.Errorf("reading Dockerfile: %w", err)
 	}
 
+	// Regenerate environment manifest if stale (missing or older than Dockerfile).
+	if t.manifestStale() {
+		_ = t.generateManifest() // best-effort; don't fail the read
+	}
+
 	// Also report any stale named Dockerfiles alongside the active one.
 	result := string(data)
 	if entries, globErr := filepath.Glob(filepath.Join(t.hermDir, "*.Dockerfile")); globErr == nil && len(entries) > 0 {
@@ -501,6 +506,12 @@ func (t *DevEnvTool) buildAndReplace() (string, error) {
 		} else if cid != "" {
 			t.onStatus(cid)
 		}
+	}
+
+	// Generate environment manifest from the new container.
+	if err := t.generateManifest(); err != nil {
+		// Non-fatal: the build succeeded, manifest is a nice-to-have.
+		return fmt.Sprintf("Container rebuilt successfully with image %s.\n(Warning: failed to generate environment manifest: %v)", imageName, err), nil
 	}
 
 	return fmt.Sprintf("Container rebuilt successfully with image %s.", imageName), nil
