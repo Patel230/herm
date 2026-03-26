@@ -710,6 +710,265 @@ func TestCleanupAgentOutputDirNonexistent(t *testing.T) {
 	cleanupAgentOutputDir("/nonexistent/path")
 }
 
+// --- Background sub-agent tests ---
+
+func TestSubAgentBackgroundReturnsImmediately(t *testing.T) {
+	client := newTestClient("background output")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest")
+
+	start := time.Now()
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"long task","mode":"explore","background":true}`))
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("background Execute took %v, expected near-instant return", elapsed)
+	}
+	if !strings.Contains(result, "[agent_id:") {
+		t.Errorf("result should contain [agent_id:], got: %q", result)
+	}
+	if !strings.Contains(result, "background") {
+		t.Errorf("result should mention background, got: %q", result)
+	}
+
+	// Wait for background goroutine to finish so TempDir cleanup succeeds.
+	agentID := extractAgentID(t, result)
+	waitForBgAgent(t, tool, agentID, 10*time.Second)
+}
+
+func TestSubAgentBackgroundCompletionStoresResult(t *testing.T) {
+	client := newTestClient("bg agent output")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest")
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"bg task","mode":"explore","background":true}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	agentID := extractAgentID(t, result)
+
+	// Wait for the background agent to finish.
+	deadline := time.After(10 * time.Second)
+	for {
+		state := tool.lookupBgAgent(agentID)
+		if state == nil {
+			t.Fatal("background agent state not found")
+		}
+		state.mu.Lock()
+		done := state.done
+		storedResult := state.result
+		state.mu.Unlock()
+		if done {
+			if !strings.Contains(storedResult, "bg agent output") {
+				t.Errorf("stored result should contain agent output, got: %q", storedResult)
+			}
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("background agent did not complete within 10s")
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func TestSubAgentBackgroundStatusRunning(t *testing.T) {
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(nil, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest")
+
+	// Manually create a running background agent state.
+	tool.mu.Lock()
+	tool.bgAgents["test-running"] = &bgAgentState{
+		task:    "long running task",
+		model:   "test-model",
+		started: time.Now(),
+	}
+	tool.mu.Unlock()
+
+	result, err := tool.bgAgentStatus("test-running")
+	if err != nil {
+		t.Fatalf("bgAgentStatus error: %v", err)
+	}
+	if !strings.Contains(result, "[status: running]") {
+		t.Errorf("expected running status, got: %q", result)
+	}
+	if !strings.Contains(result, "long running task") {
+		t.Errorf("expected task description in status, got: %q", result)
+	}
+}
+
+func TestSubAgentBackgroundStatusCompleted(t *testing.T) {
+	client := newTestClient("status check output")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest")
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"bg status task","mode":"explore","background":true}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	agentID := extractAgentID(t, result)
+
+	// Wait for completion.
+	deadline := time.After(10 * time.Second)
+	for {
+		state := tool.lookupBgAgent(agentID)
+		if state == nil {
+			t.Fatal("background agent state not found")
+		}
+		state.mu.Lock()
+		done := state.done
+		state.mu.Unlock()
+		if done {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("background agent did not complete within 10s")
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+
+	// Check status — should return completed with result.
+	statusResult, err := tool.bgAgentStatus(agentID)
+	if err != nil {
+		t.Fatalf("status check error: %v", err)
+	}
+	if !strings.Contains(statusResult, "[status: completed]") {
+		t.Errorf("status should be completed, got: %q", statusResult)
+	}
+	if !strings.Contains(statusResult, "status check output") {
+		t.Errorf("status result should contain agent output, got: %q", statusResult)
+	}
+}
+
+func TestSubAgentBackgroundStatusNotFound(t *testing.T) {
+	tool := NewSubAgentTool(nil, nil, nil, "", "", 10, 3, 0, "/workspace", "", "alpine:latest")
+	_, err := tool.bgAgentStatus("nonexistent")
+	if err == nil {
+		t.Fatal("expected error for non-existent background agent")
+	}
+	if !strings.Contains(err.Error(), "not a background agent") {
+		t.Errorf("error = %q, want 'not a background agent'", err.Error())
+	}
+}
+
+func TestSubAgentBackgroundRejectsWithAgentID(t *testing.T) {
+	tool := NewSubAgentTool(nil, nil, nil, "", "", 10, 3, 0, "/workspace", "", "alpine:latest")
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"resume","mode":"explore","background":true,"agent_id":"abc"}`))
+	if err == nil {
+		t.Fatal("expected error for background + agent_id combination")
+	}
+	if !strings.Contains(err.Error(), "cannot be used with agent_id") {
+		t.Errorf("error = %q, want to mention 'cannot be used with agent_id'", err.Error())
+	}
+}
+
+func TestSubAgentBackgroundCallsOnBgComplete(t *testing.T) {
+	client := newTestClient("complete callback output")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest")
+
+	var completedResult string
+	var completedMu sync.Mutex
+	tool.onBgComplete = func(result string) {
+		completedMu.Lock()
+		completedResult = result
+		completedMu.Unlock()
+	}
+
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"callback task","mode":"explore","background":true}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	// Wait for completion callback.
+	deadline := time.After(10 * time.Second)
+	for {
+		completedMu.Lock()
+		got := completedResult
+		completedMu.Unlock()
+		if got != "" {
+			if !strings.Contains(got, "complete callback output") {
+				t.Errorf("onBgComplete result should contain agent output, got: %q", got)
+			}
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("onBgComplete was not called within 10s")
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func TestSubAgentBackgroundForwardsEvents(t *testing.T) {
+	client := newTestClient("bg events output")
+	tmpDir := t.TempDir()
+	parentEvents := make(chan AgentEvent, 64)
+	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest")
+	tool.parentEvents = parentEvents
+
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"bg events task","mode":"explore","background":true}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	// Collect events until we see "done".
+	deadline := time.After(10 * time.Second)
+	var gotStart, gotDelta, gotDone bool
+	for !gotDone {
+		select {
+		case ev := <-parentEvents:
+			switch ev.Type {
+			case EventSubAgentStart:
+				gotStart = true
+			case EventSubAgentDelta:
+				gotDelta = true
+			case EventSubAgentStatus:
+				if ev.Text == "done" {
+					gotDone = true
+				}
+			}
+		case <-deadline:
+			t.Fatal("did not receive done event within 10s")
+		}
+	}
+	if !gotStart {
+		t.Error("expected EventSubAgentStart")
+	}
+	if !gotDelta {
+		t.Error("expected at least one EventSubAgentDelta")
+	}
+}
+
+// waitForBgAgent polls until a background agent completes or the timeout expires.
+func waitForBgAgent(t *testing.T, tool *SubAgentTool, agentID string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		state := tool.lookupBgAgent(agentID)
+		if state == nil {
+			return // not found, nothing to wait for
+		}
+		state.mu.Lock()
+		done := state.done
+		state.mu.Unlock()
+		if done {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("background agent %s did not complete within %v", agentID, timeout)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
 // extractOutputPath parses the output file path from a SubAgentTool result string.
 func extractOutputPath(t *testing.T, result string) string {
 	t.Helper()

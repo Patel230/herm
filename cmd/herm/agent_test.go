@@ -2671,3 +2671,52 @@ drained:
 	}
 	t.Logf("captured %d events from buffer of 4; EventDone in buffer: %v", len(events), doneInBuffer)
 }
+
+// --- Background result injection tests ---
+
+func TestAgentInjectAndDrainBackgroundResults(t *testing.T) {
+	agent := NewAgent(nil, nil, nil, "", "test-model", 0)
+
+	// Initially empty.
+	if results := agent.drainBackgroundResults(); results != nil {
+		t.Errorf("expected nil, got %v", results)
+	}
+
+	// Inject two results.
+	agent.InjectBackgroundResult("result-1")
+	agent.InjectBackgroundResult("result-2")
+
+	// Drain should return both.
+	results := agent.drainBackgroundResults()
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	if results[0] != "result-1" || results[1] != "result-2" {
+		t.Errorf("results = %v, want [result-1, result-2]", results)
+	}
+
+	// Drain again should return nil (cleared).
+	if results := agent.drainBackgroundResults(); results != nil {
+		t.Errorf("expected nil after drain, got %v", results)
+	}
+}
+
+func TestAgentInjectBackgroundResultConcurrent(t *testing.T) {
+	agent := NewAgent(nil, nil, nil, "", "test-model", 0)
+
+	// Inject from multiple goroutines concurrently.
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			agent.InjectBackgroundResult(fmt.Sprintf("result-%d", n))
+		}(i)
+	}
+	wg.Wait()
+
+	results := agent.drainBackgroundResults()
+	if len(results) != 10 {
+		t.Errorf("expected 10 results, got %d", len(results))
+	}
+}
