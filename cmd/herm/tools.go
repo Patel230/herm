@@ -78,6 +78,9 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 	if in.Timeout > 0 {
 		timeout = in.Timeout
 	}
+	if timeout > 600 {
+		timeout = 600
+	}
 
 	// LLMs (notably Gemini) sometimes HTML-encode characters in tool args
 	// (e.g. && → &amp;&amp;). Unescape before execution.
