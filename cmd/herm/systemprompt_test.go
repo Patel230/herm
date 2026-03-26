@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -189,6 +191,32 @@ func TestBuildSystemPromptEnvironment(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Date:") {
 		t.Error("prompt missing date")
+	}
+}
+
+func TestBuildSystemPromptContainerEnv(t *testing.T) {
+	// Create a temp dir with .herm/environment.md.
+	dir := t.TempDir()
+	hermDir := filepath.Join(dir, ".herm")
+	os.MkdirAll(hermDir, 0o755)
+	os.WriteFile(filepath.Join(hermDir, "environment.md"), []byte("Runtimes: go 1.22.5, python3 3.11.2\nSystem tools: git, rg, tree\n"), 0o644)
+
+	prompt := buildSystemPrompt(nil, nil, nil, dir, "", "alpine:latest", "", nil)
+
+	if !strings.Contains(prompt, "Runtimes: go 1.22.5, python3 3.11.2") {
+		t.Error("prompt missing container environment runtimes")
+	}
+	if !strings.Contains(prompt, "System tools: git, rg, tree") {
+		t.Error("prompt missing container environment tools")
+	}
+}
+
+func TestBuildSystemPromptContainerEnvAbsent(t *testing.T) {
+	dir := t.TempDir() // no .herm/environment.md
+	prompt := buildSystemPrompt(nil, nil, nil, dir, "", "alpine:latest", "", nil)
+
+	if strings.Contains(prompt, "Runtimes:") {
+		t.Error("prompt should not contain Runtimes when no manifest exists")
 	}
 }
 

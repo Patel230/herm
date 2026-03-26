@@ -13,6 +13,9 @@
 {{- if .HasBash}}
 - Attachments mounted at: /attachments (files attached to the current message are available here)
 {{- end}}
+{{- if .ContainerEnv}}
+{{.ContainerEnv}}
+{{- end}}
 {{- if or .TopLevelListing .RecentCommits .GitStatus}}
 
 ## Project context
