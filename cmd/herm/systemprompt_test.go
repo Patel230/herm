@@ -659,7 +659,7 @@ func TestToolDescriptionContainsGuidance(t *testing.T) {
 		keywords []string
 	}{
 		{"bash", []string{"dev container", "builds, tests"}},
-		{"git", []string{"on the host", "SSH keys", "Merge conflict", "Never force-push"}},
+		{"git", []string{"on the host", "SSH keys", "Never force-push"}},
 		{"devenv", []string{"Dockerfile", "aduermael/herm", "read", "write", "build"}},
 		{"agent", []string{"sub-agent", "explore", "implement", "agent_id", "[summary: model]", "[turns:"}},
 		{"glob", []string{"glob pattern", ".gitignore"}},

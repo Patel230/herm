@@ -48,9 +48,9 @@ The `traceUsageSeen` pattern in `agentui.go` triggers `FinalizeTurn` on `EventTo
 
 `git.md` is 42 lines — the longest tool description after devenv. Procedural workflows (merge conflicts, commit messages, exploration examples) belong in the system prompt, not the tool definition sent on every call.
 
-- [ ] 4a: Create a `prompts/content/git_practices.md` embedded file containing the merge conflict workflow, commit message style guide, and exploration examples currently in `git.md` lines 22-41.
-- [ ] 4b: Trim `git.md` to essentials (~12 lines): what it does, where it runs, allowed subcommands, credential requirement for remote ops, push requires approval, never force-push. Remove procedural sections.
-- [ ] 4c: Add git practices to system prompt — in `prompts/tools.md`, conditionally include the git practices content when `HasGit` is true via template reference or inline. This ensures the guidance is in the prompt once (not per-tool-definition) and only when git is available.
+- [x] 4a: Create a `prompts/content/git_practices.md` embedded file containing the merge conflict workflow, commit message style guide, and exploration examples currently in `git.md` lines 22-41.
+- [x] 4b: Trim `git.md` to essentials (~12 lines): what it does, where it runs, allowed subcommands, credential requirement for remote ops, push requires approval, never force-push. Remove procedural sections.
+- [x] 4c: Add git practices to system prompt — in `prompts/tools.md`, conditionally include the git practices content when `HasGit` is true via template reference or inline. This ensures the guidance is in the prompt once (not per-tool-definition) and only when git is available.
 
 ## Phase 5: Add Case-Insensitive Search to Grep
 
