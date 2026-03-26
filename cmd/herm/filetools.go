@@ -322,7 +322,7 @@ func (t *ReadFileTool) Definition() types.ToolDefinition {
 				},
 				"limit": {
 					"type": "integer",
-					"description": "Maximum lines to read (default: 2000)"
+					"description": "Maximum lines to read (default: 500)"
 				}
 			},
 			"required": ["file_path"]
