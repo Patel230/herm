@@ -114,7 +114,7 @@ type agentTickMsg struct{}
 // projectSnapshot holds a lightweight project context gathered at startup.
 type projectSnapshot struct {
 	TopLevel      string // ls -1 of worktree root
-	RecentCommits string // git log --oneline -20
+	RecentCommits string // git log --oneline -10
 	GitStatus     string // git status --short
 }
 
@@ -567,11 +567,11 @@ func fetchProjectSnapshot(worktreePath string) projectSnapshotMsg {
 		ch <- result{"ls", val}
 	}()
 
-	// git log --oneline -20
+	// git log --oneline -10
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "git", "log", "--oneline", "-20")
+		cmd := exec.CommandContext(ctx, "git", "log", "--oneline", "-10")
 		cmd.Dir = worktreePath
 		out, err := cmd.Output()
 		val := ""

@@ -31,11 +31,10 @@ Recent commits:
 {{.RecentCommits}}
 {{- end}}
 
-Uncommitted changes:
 {{- if .GitStatus}}
+
+Uncommitted changes:
 {{.GitStatus}}
-{{- else}}
-no uncommitted changes
 {{- end}}
 {{- end}}
 {{- end}}

@@ -80,9 +80,9 @@ The grep tool has no `-i` flag. Case-insensitive search is common (searching for
 
 The project snapshot includes 20 recent commits and always renders "Uncommitted changes: no uncommitted changes" even when clean. The devenv paragraph in `role.md` is always included even when the container is already configured.
 
-- [ ] 8a: Reduce recent commits from 20 to 10 — in `background.go`, change `git log --oneline -20` to `git log --oneline -10`. 10 commits is sufficient for orientation; commits beyond that are rarely useful.
-- [ ] 8b: Skip "Uncommitted changes" line when clean — in `environment.md`, remove the else branch (lines ~37-38) that renders "no uncommitted changes". Only render the "Uncommitted changes:" section when `.GitStatus` is non-empty.
-- [ ] 8c: Conditionalize devenv paragraph — in `role.md`, wrap the "The container starts from a minimal base image..." paragraph (line ~8) in `{{if not .ContainerEnv}}...{{end}}`. When a container environment manifest exists, the container is already configured and this paragraph wastes ~50 tokens.
+- [x] 8a: Reduce recent commits from 20 to 10 — in `background.go`, change `git log --oneline -20` to `git log --oneline -10`. 10 commits is sufficient for orientation; commits beyond that are rarely useful.
+- [x] 8b: Skip "Uncommitted changes" line when clean — in `environment.md`, remove the else branch (lines ~37-38) that renders "no uncommitted changes". Only render the "Uncommitted changes:" section when `.GitStatus` is non-empty.
+- [x] 8c: Conditionalize devenv paragraph — in `role.md`, wrap the "The container starts from a minimal base image..." paragraph (line ~8) in `{{if not .ContainerEnv}}...{{end}}`. When a container environment manifest exists, the container is already configured and this paragraph wastes ~50 tokens.
 
 ---
 

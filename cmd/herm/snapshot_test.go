@@ -197,8 +197,8 @@ func TestBuildSystemPromptCleanRepo(t *testing.T) {
 	if !strings.Contains(prompt, "## Project context") {
 		t.Error("prompt should contain Project context section")
 	}
-	if !strings.Contains(prompt, "no uncommitted changes") {
-		t.Error("prompt should show 'no uncommitted changes' when GitStatus is empty")
+	if strings.Contains(prompt, "Uncommitted changes") {
+		t.Error("prompt should omit 'Uncommitted changes' section when GitStatus is empty")
 	}
 }
 
