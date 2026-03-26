@@ -972,6 +972,17 @@ func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID st
 			toolResults = append(toolResults, agentResults...)
 		}
 
+		// Inject any completed background sub-agent results as text blocks
+		// alongside tool results. The LLM sees them in the same user message.
+		if bgResults := a.drainBackgroundResults(); len(bgResults) > 0 {
+			for _, bgr := range bgResults {
+				toolResults = append(toolResults, types.ContentBlock{
+					Type: "text",
+					Text: "[Background agent completed]\n" + bgr,
+				})
+			}
+		}
+
 		// Build tool results message and re-call LLM.
 		// Rebuild opts so the system prompt includes updated session stats.
 		opts = a.buildPromptOpts()
