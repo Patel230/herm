@@ -20,7 +20,7 @@ A coding agent CLI that's containerized by default. Every command runs inside a 
 
 ## Requirements
 
-- macOS (only platform tested so far — Linux should work but hasn't been verified yet)
+- macOS or Linux (arm64 and amd64)
 - Docker installed and running
 
 ## Install
@@ -60,7 +60,6 @@ You'll need an API key for at least one provider (Anthropic, OpenAI, Grok, or Ge
 ## Roadmap
 
 - OCI container support without Docker, using Apple's [Containerization framework](https://developer.apple.com/documentation/containerization)
-- Test and verify Linux support
 - Test and verify Windows support (WSL2 + Docker Desktop)
 
 ## Project Structure
