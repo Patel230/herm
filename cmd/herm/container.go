@@ -233,22 +233,21 @@ func (c *ContainerClient) WorkDir() string {
 }
 
 // ShellCmd returns an exec.Cmd that opens an interactive shell in the container.
-// Busybox ash (Alpine's /bin/sh) sends \033[6n (cursor position query) on every
-// prompt. The CPR response travels through docker's double-PTY proxy chain with
-// enough latency to arrive after the prompt, leaking as visible "[row;colR" text.
-// Bash/readline does NOT have this issue, so we prefer bash when available.
-// For ash, we pre-consume a CPR response to warm up the PTY chain before exec-ing
-// the interactive shell.
+// A cursor-position query (\033[6n) is sent first to force a full round-trip
+// through Docker's double-PTY proxy chain (host → CLI → daemon → container PTY
+// and back).  Without this warmup the async relay may not be ready when the
+// user types, causing the first keystroke to be lost.
 func (c *ContainerClient) ShellCmd() *exec.Cmd {
-	// Prefer bash (no CPR issue), fall back to ash with CPR pre-consumption.
-	script := `if command -v bash >/dev/null 2>&1; then
-  exec bash -l
+	script := `stty raw -echo 2>/dev/null
+printf '\033[6n'
+dd bs=32 count=1 >/dev/null 2>&1
+stty sane 2>/dev/null
+if command -v bash >/dev/null 2>&1; then
+  export PS1='herm-container$ '
+  exec bash --norc --noprofile
 else
-  stty raw -echo 2>/dev/null
-  printf '\033[6n'
-  dd bs=32 count=1 >/dev/null 2>&1
-  stty sane 2>/dev/null
-  exec /bin/sh -l
+  export PS1='herm-container$ '
+  exec /bin/sh
 fi`
 	cmd := exec.Command("docker", "exec", "-it", "-w", c.workDir, c.containerID,
 		"/bin/sh", "-c", script)

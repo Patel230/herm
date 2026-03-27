@@ -418,12 +418,19 @@ func (a *App) enterShellMode() {
 	// Stop the stdin reader so it doesn't compete with the shell
 	a.stopStdinReader()
 
-	// Clear screen and restore terminal before handing off to shell
+	// Clear screen and disable herm-specific terminal features before the shell.
+	// IMPORTANT: stay in raw mode — do NOT term.Restore to cooked mode.
+	// Docker saves and restores whatever terminal state it receives.  If we
+	// switched to cooked (canonical) mode here, any character the user types
+	// between Docker's restore and our MakeRaw would land in the canonical
+	// buffer, which macOS/BSD silently discards when ICANON is cleared —
+	// causing the "first character lost" bug.  Keeping raw mode throughout
+	// eliminates that gap entirely.  The container's own PTY handles line
+	// editing, echo, and signal generation independently of the host terminal.
 	fmt.Print("\033[H\033[2J\033[3J") // clear screen + scrollback
 	fmt.Print("\033[?25h")            // show cursor
 	fmt.Print("\033[>4;0m")           // disable modifyOtherKeys
 	fmt.Print("\033[?2004l")          // disable bracketed paste
-	term.Restore(a.fd, a.oldState)
 
 	// Brief pause + flush to discard any stale terminal responses still in-flight.
 	flushStdin(a.fd)
@@ -432,14 +439,19 @@ func (a *App) enterShellMode() {
 	shellCmd := a.container.ShellCmd()
 	shellErr := shellCmd.Run()
 
-	// Re-enter raw mode
-	oldState, err := term.MakeRaw(a.fd)
-	if err != nil {
+	// Docker preserved our raw-mode state.  Re-apply MakeRaw defensively
+	// (Docker or a crashed child may have altered flags) but do NOT overwrite
+	// a.oldState — that must remain the original cooked-mode snapshot so the
+	// terminal is properly restored when the app exits.
+	if _, err := term.MakeRaw(a.fd); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to re-enter raw mode: %v\n", err)
 		a.quit = true
 		return
 	}
-	a.oldState = oldState
+
+	// Flush any stale bytes left by the shell session (e.g. CPR responses
+	// still in-flight through Docker's PTY chain).
+	flushStdin(a.fd)
 
 	// Re-enable bracketed paste, modifyOtherKeys
 	fmt.Print("\033[?2004h")
