@@ -94,6 +94,12 @@ func newLangdagClientForProvider(cfg Config, provider string) (*langdag.Client, 
 // low enough to avoid wasting tokens on runaway generation.
 const defaultMaxOutputTokens = 16384
 
+// defaultMaxOutputGroupTokens is the total output token budget across all
+// continuation calls when a response is automatically continued after hitting
+// max_tokens. Set to 4× the per-call limit (65536) to allow multi-part
+// generation while bounding total cost.
+const defaultMaxOutputGroupTokens = defaultMaxOutputTokens * 4
+
 // defaultMaxToolIterations caps the agent loop to prevent runaway tool calls.
 const defaultMaxToolIterations = 25
 
@@ -565,6 +571,7 @@ func (a *Agent) buildPromptOpts() []langdag.PromptOption {
 	opts := []langdag.PromptOption{
 		langdag.WithSystemPrompt(a.systemPromptWithStats()),
 		langdag.WithMaxTokens(defaultMaxOutputTokens),
+		langdag.WithMaxOutputGroupTokens(defaultMaxOutputGroupTokens),
 		langdag.WithTools(a.toolDefs),
 	}
 	if a.model != "" {

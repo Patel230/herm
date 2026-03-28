@@ -1289,9 +1289,9 @@ func TestBuildPromptOptsIncludesModel(t *testing.T) {
 	agent := NewAgent(client, nil, nil, "prompt", "test-model", 0)
 
 	opts := agent.buildPromptOpts()
-	// Should have at least 4 options: system prompt, max tokens, tools, model.
-	if len(opts) != 4 {
-		t.Errorf("buildPromptOpts returned %d options, want 4", len(opts))
+	// Should have 5 options: system prompt, max tokens, max output group tokens, tools, model.
+	if len(opts) != 5 {
+		t.Errorf("buildPromptOpts returned %d options, want 5", len(opts))
 	}
 }
 
@@ -1300,9 +1300,9 @@ func TestBuildPromptOptsNoModel(t *testing.T) {
 	agent := NewAgent(client, nil, nil, "prompt", "", 0)
 
 	opts := agent.buildPromptOpts()
-	// No model → only 3 options: system prompt, max tokens, tools.
-	if len(opts) != 3 {
-		t.Errorf("buildPromptOpts returned %d options, want 3", len(opts))
+	// No model → only 4 options: system prompt, max tokens, max output group tokens, tools.
+	if len(opts) != 4 {
+		t.Errorf("buildPromptOpts returned %d options, want 4", len(opts))
 	}
 }
 
@@ -1312,9 +1312,9 @@ func TestBuildPromptOptsWithThinking(t *testing.T) {
 	agent := NewAgent(client, nil, nil, "prompt", "test-model", 0, WithThinking(&thinkTrue))
 
 	opts := agent.buildPromptOpts()
-	// Should have 5 options: system prompt, max tokens, tools, model, think.
-	if len(opts) != 5 {
-		t.Errorf("buildPromptOpts returned %d options, want 5", len(opts))
+	// Should have 6 options: system prompt, max tokens, max output group tokens, tools, model, think.
+	if len(opts) != 6 {
+		t.Errorf("buildPromptOpts returned %d options, want 6", len(opts))
 	}
 }
 
@@ -1323,9 +1323,9 @@ func TestBuildPromptOptsThinkingNil(t *testing.T) {
 	agent := NewAgent(client, nil, nil, "prompt", "test-model", 0)
 
 	opts := agent.buildPromptOpts()
-	// No thinking → 4 options: system prompt, max tokens, tools, model.
-	if len(opts) != 4 {
-		t.Errorf("buildPromptOpts returned %d options, want 4", len(opts))
+	// No thinking → 5 options: system prompt, max tokens, max output group tokens, tools, model.
+	if len(opts) != 5 {
+		t.Errorf("buildPromptOpts returned %d options, want 5", len(opts))
 	}
 }
 
