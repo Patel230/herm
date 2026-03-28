@@ -559,7 +559,7 @@ func (a *Agent) maybeCompact(ctx context.Context, nodeID string, inputTokens int
 func (a *Agent) buildPromptOpts() []langdag.PromptOption {
 	opts := []langdag.PromptOption{
 		langdag.WithSystemPrompt(a.systemPromptWithStats()),
-		langdag.WithMaxTokens(8192),
+		langdag.WithMaxTokens(16384),
 		langdag.WithTools(a.toolDefs),
 	}
 	if a.model != "" {

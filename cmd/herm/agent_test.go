@@ -1322,6 +1322,35 @@ func TestBuildPromptOptsThinkingNil(t *testing.T) {
 	}
 }
 
+func TestBuildPromptOptsMaxTokens16384(t *testing.T) {
+	prov := &mockProvider{responses: []string{"ok"}, model: "test-model"}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+	agent := NewAgent(client, nil, nil, "prompt", "test-model", 0)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	go agent.Run(ctx, "hello", "")
+	// Drain events until done.
+	for ev := range agent.Events() {
+		if ev.Type == EventDone {
+			break
+		}
+	}
+
+	prov.mu.Lock()
+	req := prov.lastRequest
+	prov.mu.Unlock()
+
+	if req == nil {
+		t.Fatal("expected provider to receive a request")
+	}
+	if req.MaxTokens != 16384 {
+		t.Errorf("MaxTokens = %d, want 16384", req.MaxTokens)
+	}
+}
+
 // --- Phase: Fix agent silent stops ---
 
 // panicTool is a tool that panics during Execute to test panic recovery.

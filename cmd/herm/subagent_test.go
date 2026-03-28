@@ -19,16 +19,18 @@ import (
 
 // mockProvider implements langdag.Provider, returning canned streaming responses.
 type mockProvider struct {
-	responses []string // text responses to return, one per Prompt/Stream call
-	mu        sync.Mutex
-	callIdx   int
-	model     string
+	responses   []string // text responses to return, one per Prompt/Stream call
+	mu          sync.Mutex
+	callIdx     int
+	model       string
+	lastRequest *types.CompletionRequest // captures the most recent request for assertions
 }
 
-func (p *mockProvider) Complete(_ context.Context, _ *types.CompletionRequest) (*types.CompletionResponse, error) {
+func (p *mockProvider) Complete(_ context.Context, req *types.CompletionRequest) (*types.CompletionResponse, error) {
 	p.mu.Lock()
 	idx := p.callIdx
 	p.callIdx++
+	p.lastRequest = req
 	p.mu.Unlock()
 
 	text := "ok"
@@ -48,6 +50,7 @@ func (p *mockProvider) Stream(_ context.Context, req *types.CompletionRequest) (
 	p.mu.Lock()
 	idx := p.callIdx
 	p.callIdx++
+	p.lastRequest = req
 	p.mu.Unlock()
 
 	text := "ok"

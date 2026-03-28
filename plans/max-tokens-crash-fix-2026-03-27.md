@@ -29,8 +29,8 @@ The option exists but is silently ignored. This is the foundation — all other 
 
 Claude Code uses 32K default. herm's 8192 is too low for common operations like writing full HTML files, large code files, or multi-tool responses. Raise to 16384 as a reasonable middle ground (high enough for most single-file writes, low enough to avoid wasting tokens on runaway generation). The langdag default (when 0/unset) stays at 4096 as a safe fallback for other consumers.
 
-- [ ] 2a: In `buildPromptOpts()` (`agent.go`), change `WithMaxTokens(8192)` to `WithMaxTokens(16384)`. Also update sub-agent creation in `subagent.go` if it sets its own max_tokens — both explore and implement mode sub-agents should use the same limit.
-- [ ] 2b: Add or update test in `agent_test.go` verifying the prompt options include `WithMaxTokens(16384)`.
+- [x] 2a: In `buildPromptOpts()` (`agent.go`), change `WithMaxTokens(8192)` to `WithMaxTokens(16384)`. Also update sub-agent creation in `subagent.go` if it sets its own max_tokens — both explore and implement mode sub-agents should use the same limit.
+- [x] 2b: Add or update test in `agent_test.go` verifying the prompt options include `WithMaxTokens(16384)`.
 
 **Success criteria:** Both main agent and sub-agents request 16384 max output tokens from the provider.
 
