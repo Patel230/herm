@@ -66,8 +66,8 @@ Even with langdag fixes, herm should gracefully handle truncation rather than si
 
 Build a deterministic reproduction that exercises the full crash chain, then verify all fixes together.
 
-- [ ] 6a: In `langdag` — add an integration test that reproduces the exact scenario: mock provider returns a response with `stop_reason=max_tokens` and empty content on the first call, then the caller does a `PromptFrom()` to continue. Before the fix: this would produce an empty node and the follow-up call would fail. After the fix: no empty node is created, follow-up call succeeds.
-- [ ] 6b: In `herm` — add an integration test in `agent_test.go` that simulates the full trace scenario: agent sends prompt → mock returns max_tokens with no content → verify agent emits appropriate error → verify the conversation state is not corrupted (a follow-up prompt works).
+- [x] 6a: In `langdag` — add an integration test that reproduces the exact scenario: mock provider returns a response with `stop_reason=max_tokens` and empty content on the first call, then the caller does a `PromptFrom()` to continue. Before the fix: this would produce an empty node and the follow-up call would fail. After the fix: no empty node is created, follow-up call succeeds.
+- [x] 6b: In `herm` — add an integration test in `agent_test.go` that simulates the full trace scenario: agent sends prompt → mock returns max_tokens with no content → verify agent emits appropriate error → verify the conversation state is not corrupted (a follow-up prompt works).
 
 **Success criteria:** Tests fail on the old code and pass on the fixed code, covering the exact crash chain from the trace.
 

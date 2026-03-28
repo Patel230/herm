@@ -2842,3 +2842,78 @@ func TestRunMaxTokensWithPartialText(t *testing.T) {
 		t.Error("expected EventDone")
 	}
 }
+
+func TestRunMaxTokensCrashChain_ConversationNotCorrupted(t *testing.T) {
+	// Full crash chain reproduction at the herm level:
+	// 1. Agent sends prompt → mock returns max_tokens with no content
+	// 2. Verify agent emits appropriate error
+	// 3. Verify the conversation state is not corrupted — a follow-up prompt works
+	//
+	// The scriptedProvider goes through langdag, so Phase 4b intercepts the
+	// empty max_tokens response. The agent should see errors and complete gracefully.
+	// Then a second Run() on the same client should succeed normally.
+
+	prov := &scriptedProvider{
+		model: "test-model",
+		responses: []scriptedResponse{
+			// Calls 0-1: max_tokens empty (call 0 is initial, call 1 is the retry)
+			{text: "", stopReason: "max_tokens", tokensIn: 100, tokensOut: 0},
+			{text: "", stopReason: "max_tokens", tokensIn: 100, tokensOut: 0},
+			// Call 2: normal response for the follow-up prompt
+			{text: "All good now", tokensIn: 100, tokensOut: 30},
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+
+	// First run: max_tokens with empty content → error expected.
+	agent1 := NewAgent(client, nil, nil, "", "test-model", 0)
+	go agent1.Run(context.Background(), "generate a huge file", "")
+	events1 := drainEvents(t, agent1.Events(), 5*time.Second)
+
+	var hasError1, hasDone1 bool
+	for _, ev := range events1 {
+		switch ev.Type {
+		case EventError:
+			hasError1 = true
+		case EventDone:
+			hasDone1 = true
+		}
+	}
+	if !hasError1 {
+		t.Error("first run: expected EventError for max_tokens with empty response")
+	}
+	if !hasDone1 {
+		t.Error("first run: expected EventDone")
+	}
+
+	// Second run: normal response — conversation state should not be corrupted.
+	agent2 := NewAgent(client, nil, nil, "", "test-model", 0)
+	go agent2.Run(context.Background(), "try something simpler", "")
+	events2 := drainEvents(t, agent2.Events(), 5*time.Second)
+
+	var hasText2, hasDone2, hasError2 bool
+	for _, ev := range events2 {
+		switch ev.Type {
+		case EventTextDelta:
+			hasText2 = true
+			if ev.Text != "All good now" {
+				t.Errorf("second run: text = %q, want %q", ev.Text, "All good now")
+			}
+		case EventError:
+			hasError2 = true
+			t.Errorf("second run: unexpected error: %v", ev.Error)
+		case EventDone:
+			hasDone2 = true
+		}
+	}
+	if !hasText2 {
+		t.Error("second run: expected EventTextDelta")
+	}
+	if hasError2 {
+		t.Error("second run: conversation state corrupted — follow-up prompt failed")
+	}
+	if !hasDone2 {
+		t.Error("second run: expected EventDone")
+	}
+}
