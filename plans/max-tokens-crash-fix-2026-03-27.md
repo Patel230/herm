@@ -38,8 +38,8 @@ Claude Code uses 32K default. herm's 8192 is too low for common operations like 
 
 Prevents the 400 crash even if an empty node somehow gets persisted.
 
-- [ ] 3a: In `toContentBlockArray()`, skip creating a text block when the text is empty (return empty slice instead). In `convertMessages()`, skip text blocks where `block.Text == ""` (line 95) and skip empty-string assistant messages (line 152). Both Anthropic-side and conversation-side need protection.
-- [ ] 3b: Add tests: `toContentBlockArray` with empty string input returns empty slice. `convertMessages` with an empty-text assistant message produces a valid (non-empty) message or is omitted. `buildMessages` with an empty-content assistant node produces valid output.
+- [x] 3a: In `toContentBlockArray()`, skip creating a text block when the text is empty (return empty slice instead). In `convertMessages()`, skip text blocks where `block.Text == ""` (line 95) and skip empty-string assistant messages (line 152). Both Anthropic-side and conversation-side need protection.
+- [x] 3b: Add tests: `toContentBlockArray` with empty string input returns empty slice. `convertMessages` with an empty-text assistant message produces a valid (non-empty) message or is omitted. `buildMessages` with an empty-content assistant node produces valid output.
 
 **Success criteria:** An assistant node with empty content never produces a 400 API error on the next call.
 
