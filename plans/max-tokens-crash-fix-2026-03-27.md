@@ -71,7 +71,62 @@ Build a deterministic reproduction that exercises the full crash chain, then ver
 
 **Success criteria:** Tests fail on the old code and pass on the fixed code, covering the exact crash chain from the trace.
 
+## Phase 7: max_tokens continuation via output groups
+
+When `stop_reason=max_tokens` and the response has usable content (partial text or complete tool_use blocks), langdag should automatically continue generation rather than truncating. This preserves the DAG — each continuation is a new child node linked by a shared group ID. No loop needed; it's a sequence of nodes in the same context.
+
+### Design
+
+```
+Node A (assistant, output_group=X): partial content (hit max_tokens)
+    └── Node B (assistant, output_group=X): A's content + new content (hit max_tokens)
+        └── Node C (assistant, output_group=X): full accumulated content (done)
+```
+
+- Each continuation node carries **accumulated content** (all previous group content + its own), so it's self-contained — any node works as a resumption point.
+- A **group token budget** (`WithMaxOutputGroupTokens(N)`) caps total output across the group, preventing runaway generation. Default: 4× the per-call max_tokens.
+- From the caller's perspective (herm), this is transparent — `streamResponse()` keeps streaming events on the same channel. `drainStream()` sees continuous chunks, unaware of the continuation boundary. The final `StreamEventNodeSaved` carries the last node's ID.
+- The `CompletionRequest` for the continuation includes the partial assistant response and a system-level instruction to continue (e.g., assistant prefill with the partial content).
+
+### Tasks
+
+- [ ] 7a: Add `OutputGroupID` field to `types.Node` (nullable string). Add `MaxOutputGroupTokens` to `CompletionRequest` or as a new `PromptOption`. Add `WithMaxOutputGroupTokens()` option to langdag.go.
+- [ ] 7b: In `streamResponse()`, when `stop_reason=max_tokens` and there is usable content: save the partial node with an `OutputGroupID`, then issue a continuation call to the provider with the accumulated content as assistant prefill. Keep streaming events on the same channel. Track cumulative output tokens against the group budget; stop if exceeded.
+- [ ] 7c: Update `buildMessages()` — when walking ancestors, if consecutive nodes share an `OutputGroupID`, only include the last node's content (since it's accumulated). This prevents sending duplicated content to the LLM on future turns.
+- [ ] 7d: Wire `WithMaxOutputGroupTokens()` from herm's `buildPromptOpts()` — set a reasonable default (e.g., 4× max_tokens = 65536).
+- [ ] 7e: Add tests: mock provider returns max_tokens 3 times then end_turn → verify 3 intermediate nodes + 1 final node all share the same group ID, final node has accumulated content, caller stream sees continuous chunks. Test group budget exceeded → verify generation stops gracefully. Test `buildMessages` deduplication for group nodes.
+
+**Success criteria:** A large write_file that exceeds max_tokens completes automatically across multiple continuation calls. The conversation tree has linked nodes. Follow-up prompts work correctly without duplicated content.
+
+## Phase 8: Conversation-level prompt caching
+
+Currently only system prompt and tools have cache breakpoints (2 of 4 allowed by Anthropic). Conversation history is re-sent at full cost every turn. The trace shows 239K input tokens with only 48K cached (20%) — this is the #1 cost driver.
+
+### Current state
+
+- `protocol.go:29-36` — system prompt gets `CacheControl: ephemeral`
+- `protocol.go:63-70` — last tool gets `CacheControl: ephemeral`
+- `convertMessages()` — **no cache control on any message content blocks**
+- Anthropic allows **up to 4 cache breakpoints** per request
+- Cache hits cost 10% of normal input tokens
+
+### Design
+
+Use the remaining 2 breakpoints on conversation messages. The strategy: place a cache breakpoint on the **last content block of the second-to-last message** in the conversation. This caches the entire conversation prefix (system + tools + all messages up to that point). On the next turn, only the new user message + new assistant response are uncached.
+
+Why second-to-last, not last? The last message is the new user message — it changes every turn. The second-to-last is the previous assistant response, which is stable across the current request.
+
+This is **Anthropic-specific** — OpenAI and Gemini have different caching models. The implementation belongs in the Anthropic provider, not in langdag's generic layer.
+
+### Tasks
+
+- [ ] 8a: In `convertMessages()` (Anthropic protocol.go), after building all message params, find the last content block of the second-to-last message and set `CacheControl: ephemeral` on it. This requires the Anthropic SDK's text/tool blocks to support cache control — verify the SDK API for this. Handle edge cases: single-message conversations (no second-to-last), messages with only tool_result blocks.
+- [ ] 8b: Add a test that verifies cache control is set on the correct message block in a multi-turn conversation. Verify single-turn conversations don't crash. Verify the breakpoint moves forward as conversation grows.
+- [ ] 8c: Validate with a real API call (manual or integration test) — check that `tokens_cache_read` increases substantially on the second turn of a multi-turn conversation compared to today's behavior.
+
+**Success criteria:** On a 10-turn conversation, turns 2+ should show >80% cache hit rate on input tokens (up from ~20% today). Cost per turn should drop proportionally.
+
 ## Open questions
 
-- **Should max_tokens auto-continue?** Some frameworks detect `stop_reason=max_tokens` and automatically re-prompt the model to continue. This would be valuable for large write operations but adds complexity to langdag (it doesn't have a tool loop). Decision: defer to a follow-up plan — for now, surface the truncation clearly so herm can handle it.
-- **Conversation-level prompt caching:** Only system prompt + tools are cached; conversation history is re-sent at full cost each turn. This is a significant cost issue but orthogonal to the crash bug. Defer to a separate plan.
+- **OpenAI/Gemini caching:** These providers have different caching models. OpenAI supports similar breakpoint caching but with automatic placement. Gemini uses file-based caching with TTL. Defer provider-specific implementations — Anthropic is the priority since it's herm's primary provider.
+- **Output group budget tuning:** The 4× default for group budget is a starting point. May need adjustment based on real-world usage patterns — monitor via the existing `tokens_cache_*` fields on nodes.
