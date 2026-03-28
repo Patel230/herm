@@ -18,10 +18,10 @@ Trace: `.herm/debug/debug-20260327-142925.json` (session 4ca76a1f, $1.10 wasted)
 
 The option exists but is silently ignored. This is the foundation — all other fixes depend on the model actually getting the right limit.
 
-- [ ] 1a: Add `maxTokens int` parameter to `conversation.Manager.Prompt()` and `PromptFrom()` signatures, pass it through to `streamResponse()` which uses it instead of the hardcoded 4096 (fall back to 4096 if 0)
-- [ ] 1b: Update `langdag.Client.Prompt()` and `PromptFrom()` to pass `o.maxTokens` to the conversation manager
-- [ ] 1c: Add tests in `conversation_test.go` — verify the `CompletionRequest.MaxTokens` passed to the provider matches the value set via option (use mock provider to capture the request)
-- [ ] 1d: Add test in `langdag_test.go` — end-to-end test that `WithMaxTokens(N)` propagates to the provider
+- [x] 1a: Add `maxTokens int` parameter to `conversation.Manager.Prompt()` and `PromptFrom()` signatures, pass it through to `streamResponse()` which uses it instead of the hardcoded 4096 (fall back to 4096 if 0)
+- [x] 1b: Update `langdag.Client.Prompt()` and `PromptFrom()` to pass `o.maxTokens` to the conversation manager
+- [x] 1c: Add tests in `conversation_test.go` — verify the `CompletionRequest.MaxTokens` passed to the provider matches the value set via option (use mock provider to capture the request)
+- [x] 1d: Add test in `langdag_test.go` — end-to-end test that `WithMaxTokens(N)` propagates to the provider
 
 **Success criteria:** `WithMaxTokens(N)` from herm results in `CompletionRequest.MaxTokens == N` at the provider.
 
