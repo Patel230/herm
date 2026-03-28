@@ -89,6 +89,11 @@ func newLangdagClientForProvider(cfg Config, provider string) (*langdag.Client, 
 	return langdag.New(langdagCfg)
 }
 
+// defaultMaxOutputTokens is the per-response output token limit sent to the
+// provider. 16384 is a middle ground: high enough for large single-file writes,
+// low enough to avoid wasting tokens on runaway generation.
+const defaultMaxOutputTokens = 16384
+
 // defaultMaxToolIterations caps the agent loop to prevent runaway tool calls.
 const defaultMaxToolIterations = 25
 
@@ -559,7 +564,7 @@ func (a *Agent) maybeCompact(ctx context.Context, nodeID string, inputTokens int
 func (a *Agent) buildPromptOpts() []langdag.PromptOption {
 	opts := []langdag.PromptOption{
 		langdag.WithSystemPrompt(a.systemPromptWithStats()),
-		langdag.WithMaxTokens(16384),
+		langdag.WithMaxTokens(defaultMaxOutputTokens),
 		langdag.WithTools(a.toolDefs),
 	}
 	if a.model != "" {

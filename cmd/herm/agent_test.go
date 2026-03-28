@@ -1322,7 +1322,7 @@ func TestBuildPromptOptsThinkingNil(t *testing.T) {
 	}
 }
 
-func TestBuildPromptOptsMaxTokens16384(t *testing.T) {
+func TestBuildPromptOptsMaxTokensDefault(t *testing.T) {
 	prov := &mockProvider{responses: []string{"ok"}, model: "test-model"}
 	store := newMockStorage()
 	client := langdag.NewWithDeps(store, prov)
@@ -1346,8 +1346,8 @@ func TestBuildPromptOptsMaxTokens16384(t *testing.T) {
 	if req == nil {
 		t.Fatal("expected provider to receive a request")
 	}
-	if req.MaxTokens != 16384 {
-		t.Errorf("MaxTokens = %d, want 16384", req.MaxTokens)
+	if req.MaxTokens != defaultMaxOutputTokens {
+		t.Errorf("MaxTokens = %d, want %d", req.MaxTokens, defaultMaxOutputTokens)
 	}
 }
 
