@@ -41,4 +41,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-pip pyt
 4. Missing -y flag on apt-get install.
 5. curl-pipe-to-bash setup scripts — use tarballs instead.
 
+## Persistent cache
+
+A persistent `/cache` directory is mounted read-write from the host into the container. It survives container rebuilds and restarts. Use it to avoid re-downloading dependencies and re-building artifacts across sessions.
+
+Configure tools to use `/cache` via ENV variables in the Dockerfile. Examples:
+
+```dockerfile
+# Go
+ENV GOMODCACHE=/cache/go/mod
+ENV GOCACHE=/cache/go/build
+
+# Node.js
+ENV npm_config_cache=/cache/npm
+# or for yarn:
+ENV YARN_CACHE_FOLDER=/cache/yarn
+
+# Python pip
+ENV PIP_CACHE_DIR=/cache/pip
+
+# Rust
+ENV CARGO_HOME=/cache/cargo
+```
+
+Adapt cache paths to the project's toolchain. The agent is responsible for deciding which caches to configure.
+
 **When a build fails**, read the full error. Fix only the failing step — don't rewrite the whole Dockerfile.
