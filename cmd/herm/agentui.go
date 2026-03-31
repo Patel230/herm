@@ -125,9 +125,11 @@ func (a *App) startAgent(userMessage string) {
 		tools = append(tools, NewWriteFileTool(a.container))
 		if a.worktreePath != "" {
 			hermDir := filepath.Join(a.worktreePath, ".herm")
+			cacheDir := filepath.Join(a.worktreePath, ".herm", "cache")
 			mounts := []MountSpec{
 				{Source: a.worktreePath, Destination: a.worktreePath},
 				{Source: a.attachmentDir(), Destination: "/attachments", ReadOnly: true},
+				{Source: cacheDir, Destination: "/cache", ReadOnly: false},
 			}
 			var projectID string
 			if repoRoot := gitRepoRoot(); repoRoot != "" {

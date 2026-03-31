@@ -190,9 +190,13 @@ func bootContainerCmd(workspace string, sessionID string, ch chan<- any) {
 	attachDir := filepath.Join(workspace, ".herm", "attachments", sessionID)
 	_ = os.MkdirAll(attachDir, 0o755)
 
+	cacheDir := filepath.Join(workspace, ".herm", "cache")
+	_ = os.MkdirAll(cacheDir, 0o755)
+
 	mounts := []MountSpec{
 		{Source: workspace, Destination: workspace, ReadOnly: false},
 		{Source: attachDir, Destination: "/attachments", ReadOnly: true},
+		{Source: cacheDir, Destination: "/cache", ReadOnly: false},
 	}
 
 	if err := client.Start(workspace, mounts); err != nil {
