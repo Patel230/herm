@@ -10,6 +10,30 @@
 
 ---
 
+## Repo Layout & Commit Strategy
+
+This plan spans **two separate git repositories**:
+
+| Repo | Path (relative to project root) | Covers |
+|------|------|--------|
+| **herm** | `.` (project root) | `cmd/herm/`, plans, herm-level tests |
+| **langdag** | `external-deps-workspace/langdag` | `internal/provider/`, `internal/conversation/`, `internal/api/`, SDKs, langdag-level tests |
+
+`external-deps-workspace/` is **gitignored** in herm — it's a local clone of `langdag` enabled via `./use-local-dep.sh`, which creates a `go.work` workspace so herm builds against the local langdag instead of a release tag. Not all devs use this setup (some use the published module).
+
+**How to commit:**
+- **Langdag changes** → commit inside `external-deps-workspace/langdag` (its own git repo)
+- **Herm changes** (including plan updates) → commit inside the herm root
+- A task touching both repos needs **two separate commits** (one per repo)
+- Always `cd` to the correct repo root before `git add`/`git commit`
+
+**How to run tests:**
+- Langdag: `cd external-deps-workspace/langdag && go test ./...`
+- Herm: `cd /Users/frl/Desktop/herm && go test ./cmd/herm/...`
+- Both repos' tests must pass at the end of each phase
+
+---
+
 ## Phase 1: Enhance Mock Provider for Error Simulation
 
 The current `mock.Provider` can only simulate clean responses and context cancellation. Many error scenarios require richer simulation. This phase extends the mock without breaking existing tests.
