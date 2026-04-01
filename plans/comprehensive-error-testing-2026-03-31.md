@@ -60,7 +60,7 @@ Each provider (Anthropic, OpenAI, Gemini, Grok) has protocol conversion code tha
 - [x] 2b: **OpenAI protocol** — Test `convertMessages()` with: tool_call blocks with empty function name, tool_result referencing non-existent tool_use_id, image blocks with invalid base64. Test `parseSSEStream()` with: malformed JSON lines (should skip, not crash), incomplete SSE data field, `[DONE]` sentinel mid-stream, empty delta chunks. Verify graceful handling.
 - [x] 2c: **Gemini protocol** — Test `convertMessages()` with: empty parts array, function_call with nil args, function_response with non-JSON content. Test `parseSSEStream()` with: response containing no candidates, candidate with empty content, finish_reason but no content. Verify each edge case.
 - [x] 2d: **Grok/Responses API** — Test the OpenAI Responses API path (`responses.go`) with: malformed response objects, missing output array, output items with unknown types, function_call without arguments field. This is newer code with potentially less battle-testing.
-- [ ] 2e: Fix any actual bugs found — Protocol code that panics on malformed input, produces empty content blocks, or silently drops errors must be fixed. Each fix gets its own test proving the fix.
+- [x] 2e: Fix any actual bugs found (none found) — Protocol code that panics on malformed input, produces empty content blocks, or silently drops errors must be fixed. Each fix gets its own test proving the fix.
 
 ---
 
