@@ -72,7 +72,7 @@ Each provider (Anthropic, OpenAI, Gemini, Grok) has protocol conversion code tha
 - [x] 3b: **Database failure mid-stream** — Test what happens when `storage.CreateNode()` fails during `streamResponse()` after partial content has been streamed. Verify: error event emitted, no hang, partial content either preserved or clearly reported as lost.
 - [x] 3c: **Malformed node content in buildMessages** — Test `buildMessages()` with nodes containing: non-JSON string content (plain text), JSON array with unknown block types, null/empty content field, very large content (>1MB). Verify graceful fallback (raw string) or clear error — never panic.
 - [x] 3d: **Output group budget boundary** — Test continuation when cumulative output tokens land exactly at the budget limit. Test with budget of 0 (should not continue). Test when continuation provider call fails (should emit last saved node, not crash).
-- [ ] 3e: **Orphaned tool_use edge cases** — Test `buildMessages()` with: multiple orphaned tool_use IDs in same message, tool_use with duplicate IDs, tool_result that references a tool_use from a different conversation branch. Verify synthetic results injected correctly.
+- [x] 3e: **Orphaned tool_use edge cases** — Test `buildMessages()` with: multiple orphaned tool_use IDs in same message, tool_use with duplicate IDs, tool_result that references a tool_use from a different conversation branch. Verify synthetic results injected correctly.
 - [ ] 3f: Fix any actual bugs found — Conversation code that hangs, panics, or silently corrupts state must be fixed.
 
 ---
