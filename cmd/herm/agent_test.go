@@ -3225,3 +3225,163 @@ func TestReplaceToolResultContent_MixedBlockTypes(t *testing.T) {
 		t.Errorf("tool_use block changed: name=%q", parsed[2].Name)
 	}
 }
+
+// --- Task 6b: Tool execution error edge cases ---
+
+// TestToolExecution_VeryLongError verifies that a tool returning an error with
+// a very long message (>30KB) is handled gracefully: emitted as IsError tool
+// result, no hang or crash.
+func TestToolExecution_VeryLongError(t *testing.T) {
+	longMsg := strings.Repeat("x", 35000) // 35KB error message
+	prov := &scriptedProvider{
+		model: "test-model",
+		responses: []scriptedResponse{
+			{
+				text: "Running tool",
+				toolCalls: []types.ContentBlock{{
+					Type:  "tool_use",
+					ID:    "call_1",
+					Name:  "failing_tool",
+					Input: json.RawMessage(`{}`),
+				}},
+			},
+			{text: "Handled the error"},
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+
+	tool := &testTool{name: "failing_tool", err: fmt.Errorf("%s", longMsg)}
+	agent := NewAgent(client, []Tool{tool}, nil, "", "test-model", 0)
+
+	go agent.Run(context.Background(), "run it", "")
+	events := drainEvents(t, agent.Events(), 5*time.Second)
+
+	var foundToolResult, hasDone bool
+	for _, ev := range events {
+		if ev.Type == EventToolResult && ev.ToolName == "failing_tool" {
+			foundToolResult = true
+			if !ev.IsError {
+				t.Error("tool result should be IsError=true")
+			}
+			if len(ev.ToolResult) < 30000 {
+				t.Errorf("error message truncated: len=%d, want >30000", len(ev.ToolResult))
+			}
+		}
+		if ev.Type == EventDone {
+			hasDone = true
+		}
+	}
+	if !foundToolResult {
+		t.Error("expected EventToolResult for the failing tool")
+	}
+	if !hasDone {
+		t.Error("expected EventDone — agent should handle long error gracefully")
+	}
+}
+
+// TestToolExecution_Panic verifies that a tool that panics during Execute()
+// is caught by the agent's top-level recover and produces EventError + EventDone.
+func TestToolExecution_Panic(t *testing.T) {
+	prov := &scriptedProvider{
+		model: "test-model",
+		responses: []scriptedResponse{
+			{
+				text: "Running tool",
+				toolCalls: []types.ContentBlock{{
+					Type:  "tool_use",
+					ID:    "call_1",
+					Name:  "panic_tool",
+					Input: json.RawMessage(`{}`),
+				}},
+			},
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+
+	tool := &panicTool{name: "panic_tool", msg: "tool exploded!"}
+	agent := NewAgent(client, []Tool{tool}, nil, "", "test-model", 0)
+
+	go agent.Run(context.Background(), "do it", "")
+	events := drainEvents(t, agent.Events(), 5*time.Second)
+
+	var hasError, hasDone bool
+	for _, ev := range events {
+		if ev.Type == EventError {
+			hasError = true
+			if !strings.Contains(ev.Error.Error(), "panic") {
+				t.Errorf("error should mention panic, got: %v", ev.Error)
+			}
+			if !strings.Contains(ev.Error.Error(), "tool exploded") {
+				t.Errorf("error should contain panic value, got: %v", ev.Error)
+			}
+		}
+		if ev.Type == EventDone {
+			hasDone = true
+		}
+	}
+	if !hasError {
+		t.Error("expected EventError from tool panic")
+	}
+	if !hasDone {
+		t.Error("expected EventDone after panic recovery")
+	}
+}
+
+// TestToolExecution_UnknownTool verifies that an LLM requesting an unknown tool
+// produces a tool result with IsError=true and the agent continues.
+func TestToolExecution_UnknownTool(t *testing.T) {
+	prov := &scriptedProvider{
+		model: "test-model",
+		responses: []scriptedResponse{
+			{
+				text: "Let me use a tool",
+				toolCalls: []types.ContentBlock{{
+					Type:  "tool_use",
+					ID:    "call_1",
+					Name:  "nonexistent_tool",
+					Input: json.RawMessage(`{}`),
+				}},
+			},
+			{text: "OK, that tool does not exist"},
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+
+	// Register a different tool — nonexistent_tool is not registered.
+	tool := &testTool{name: "other_tool", result: "ok"}
+	agent := NewAgent(client, []Tool{tool}, nil, "", "test-model", 0)
+
+	go agent.Run(context.Background(), "use tool", "")
+	events := drainEvents(t, agent.Events(), 5*time.Second)
+
+	var foundToolResult, hasDone, hasFollowup bool
+	for _, ev := range events {
+		if ev.Type == EventToolResult && ev.ToolName == "nonexistent_tool" {
+			foundToolResult = true
+			if !ev.IsError {
+				t.Error("unknown tool result should be IsError=true")
+			}
+			if !strings.Contains(ev.ToolResult, "unknown tool") {
+				t.Errorf("error should mention unknown tool, got: %q", ev.ToolResult)
+			}
+		}
+		if ev.Type == EventTextDelta && strings.Contains(ev.Text, "does not exist") {
+			hasFollowup = true
+		}
+		if ev.Type == EventDone {
+			hasDone = true
+		}
+	}
+	if !foundToolResult {
+		t.Error("expected EventToolResult for unknown tool")
+	}
+	if !hasFollowup {
+		t.Error("expected LLM follow-up response after unknown tool error")
+	}
+	if !hasDone {
+		t.Error("expected EventDone")
+	}
+}
