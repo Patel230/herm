@@ -310,6 +310,7 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 	// Track errors with context for actionable error reporting (5a).
 	var agentErrors []string
 	var currentTool string
+	maxTurnsExceeded := false // prevents duplicate max-turns error messages
 
 	turns := 0
 	responseCounted := false // tracks whether the current LLM response has been counted as a turn
@@ -340,6 +341,10 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 				}
 				currentTool = event.ToolName
 				if turns > t.maxTurns {
+					if !maxTurnsExceeded {
+						maxTurnsExceeded = true
+						agentErrors = append(agentErrors, fmt.Sprintf("sub-agent reached maximum turns (%d) — partial output returned", t.maxTurns))
+					}
 					agent.Cancel()
 				}
 				subTC.StartToolCall(agentID, event.ToolID, event.ToolName, event.ToolInput)
@@ -511,6 +516,7 @@ func (t *SubAgentTool) runBackground(ctx context.Context, agent *Agent, agentID 
 	var totalInputTokens, totalOutputTokens int
 	var agentErrors []string
 	var currentTool string
+	maxTurnsExceeded := false
 	turns := 0
 	responseCounted := false
 	usageSeen := false
@@ -541,6 +547,10 @@ drainLoop:
 				}
 				currentTool = event.ToolName
 				if turns > t.maxTurns {
+					if !maxTurnsExceeded {
+						maxTurnsExceeded = true
+						agentErrors = append(agentErrors, fmt.Sprintf("sub-agent reached maximum turns (%d) — partial output returned", t.maxTurns))
+					}
 					agent.Cancel()
 				}
 				subTC.StartToolCall(agentID, event.ToolID, event.ToolName, event.ToolInput)

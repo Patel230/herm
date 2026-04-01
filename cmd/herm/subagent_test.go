@@ -1426,3 +1426,211 @@ func TestSubAgentDoneTimeoutDoesNotHang(t *testing.T) {
 		t.Fatal("Execute hung — doneTimeout safety net is not working")
 	}
 }
+
+// --- Phase 5, Task 5a: Sub-agent output token overflow ---
+
+// firstFreeBlockingTool returns immediately for the first N calls, then blocks
+// until released or context canceled. This creates a deterministic synchronization
+// point for testing max_turns — the tool blocks on the turn that exceeds the limit,
+// giving the sub-agent time to detect the overflow and cancel the agent.
+type firstFreeBlockingTool struct {
+	name    string
+	mu      sync.Mutex
+	count   int
+	free    int            // first N calls return immediately
+	release chan struct{}  // close to release blocked calls
+}
+
+func (ft *firstFreeBlockingTool) Definition() types.ToolDefinition {
+	return types.ToolDefinition{Name: ft.name, Description: "test tool"}
+}
+
+func (ft *firstFreeBlockingTool) Execute(ctx context.Context, _ json.RawMessage) (string, error) {
+	ft.mu.Lock()
+	ft.count++
+	n := ft.count
+	ft.mu.Unlock()
+
+	if n <= ft.free {
+		return "ok", nil
+	}
+
+	select {
+	case <-ft.release:
+		return "released", nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+func (ft *firstFreeBlockingTool) RequiresApproval(_ json.RawMessage) bool { return false }
+func (ft *firstFreeBlockingTool) HostTool() bool                         { return false }
+
+func TestSubAgentMaxTurnsReached(t *testing.T) {
+	// When a sub-agent exceeds maxTurns, the result should contain:
+	// 1. Partial text output collected before cancellation
+	// 2. A descriptive error about max turns being reached
+	// 3. The turns count showing the limit was exceeded
+	//
+	// Uses a blocking tool: the first call returns immediately (turn 1 completes),
+	// the second call blocks until the sub-agent detects turns > maxTurns and
+	// cancels the agent, which releases the blocked tool via context cancellation.
+	release := make(chan struct{})
+	defer close(release)
+	mockTool := &firstFreeBlockingTool{name: "test_tool", free: 1, release: release}
+
+	prov := &failThenSucceedProvider{
+		model:       "test-model",
+		failOnCalls: map[int]error{},
+		responses: []scriptedResponse{
+			{
+				text: "First turn output.",
+				toolCalls: []types.ContentBlock{
+					{Type: "tool_use", ID: "tu1", Name: "test_tool", Input: json.RawMessage(`{}`)},
+				},
+				tokensIn: 100, tokensOut: 50,
+			},
+			{
+				text: "Second turn output.",
+				toolCalls: []types.ContentBlock{
+					{Type: "tool_use", ID: "tu2", Name: "test_tool", Input: json.RawMessage(`{}`)},
+				},
+				tokensIn: 100, tokensOut: 50,
+			},
+			{text: "Should not reach here.", tokensIn: 100, tokensOut: 50},
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+	tmpDir := t.TempDir()
+	// maxTurns=1: turn 1 completes (tool returns immediately),
+	// turn 2 triggers cancel (tool blocks until canceled).
+	tool := NewSubAgentTool(client, []Tool{mockTool}, nil, "test-model", "", 1, 3, 0, tmpDir, "", "alpine:latest")
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"looping task","mode":"explore"}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	// Should contain error about max turns.
+	if !strings.Contains(result, "maximum turns") {
+		t.Errorf("result should mention maximum turns, got: %q", result)
+	}
+
+	// Should contain partial output from at least the first turn.
+	if !strings.Contains(result, "First turn output.") {
+		t.Errorf("result should contain first turn output, got: %q", result)
+	}
+
+	// Turns count should show 2 (the turn that triggered cancel) against maxTurns=1.
+	if !strings.Contains(result, "[turns: 2/1]") {
+		t.Errorf("result should show turns 2/1, got: %q", result)
+	}
+}
+
+func TestSubAgentMaxTurnsPartialOutputPreserved(t *testing.T) {
+	// Verify that when max_turns is hit, all text collected up to that point
+	// is included in the result — not just from the last turn.
+	release := make(chan struct{})
+	defer close(release)
+	mockTool := &firstFreeBlockingTool{name: "test_tool", free: 2, release: release}
+
+	prov := &failThenSucceedProvider{
+		model:       "test-model",
+		failOnCalls: map[int]error{},
+		responses: []scriptedResponse{
+			{
+				text: "Alpha. ",
+				toolCalls: []types.ContentBlock{
+					{Type: "tool_use", ID: "tu1", Name: "test_tool", Input: json.RawMessage(`{}`)},
+				},
+				tokensIn: 100, tokensOut: 50,
+			},
+			{
+				text: "Beta. ",
+				toolCalls: []types.ContentBlock{
+					{Type: "tool_use", ID: "tu2", Name: "test_tool", Input: json.RawMessage(`{}`)},
+				},
+				tokensIn: 100, tokensOut: 50,
+			},
+			{
+				text: "Gamma. ",
+				toolCalls: []types.ContentBlock{
+					{Type: "tool_use", ID: "tu3", Name: "test_tool", Input: json.RawMessage(`{}`)},
+				},
+				tokensIn: 100, tokensOut: 50,
+			},
+			{text: "Final.", tokensIn: 100, tokensOut: 50},
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+	tmpDir := t.TempDir()
+	// maxTurns=2: turns 1,2 complete (tool returns immediately),
+	// turn 3 triggers cancel (tool blocks until canceled).
+	tool := NewSubAgentTool(client, []Tool{mockTool}, nil, "test-model", "", 2, 3, 0, tmpDir, "", "alpine:latest")
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"multi-turn","mode":"explore"}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	// Output from the first two turns should be present.
+	if !strings.Contains(result, "Alpha.") {
+		t.Errorf("result should contain first turn text, got: %q", result)
+	}
+	if !strings.Contains(result, "Beta.") {
+		t.Errorf("result should contain second turn text, got: %q", result)
+	}
+
+	// Should show turns 3/2 (the third turn triggered cancel).
+	if !strings.Contains(result, "[turns: 3/2]") {
+		t.Errorf("result should show turns 3/2, got: %q", result)
+	}
+
+	// Should have max turns error.
+	if !strings.Contains(result, "maximum turns (2)") {
+		t.Errorf("result should mention maximum turns (2), got: %q", result)
+	}
+}
+
+func TestSubAgentOutputTruncationClarity(t *testing.T) {
+	// When sub-agent output exceeds the summary limit, the result should:
+	// 1. Have a clear truncation indicator
+	// 2. Point to the full output file
+	// 3. Contain the beginning of the output
+	largeOutput := strings.Repeat("Detailed analysis of the codebase.\n", 100) // ~3500 bytes, well over 500
+	client := newTestClient(largeOutput)
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest")
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"large output","mode":"explore"}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	// Result should contain truncation note.
+	if !strings.Contains(result, "[... full output in file above]") {
+		t.Errorf("truncated result should contain file pointer note, got: %q", result)
+	}
+
+	// Result should contain output file path.
+	if !strings.Contains(result, "[output:") {
+		t.Errorf("result should contain output file path, got: %q", result)
+	}
+
+	// Result should contain the beginning of the output.
+	if !strings.Contains(result, "Detailed analysis") {
+		t.Errorf("result should contain beginning of output, got: %q", result)
+	}
+
+	// The full output file should contain the complete content.
+	outputPath := extractOutputPath(t, result)
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("reading output file: %v", err)
+	}
+	if len(data) < 3000 {
+		t.Errorf("output file should contain full output, got %d bytes", len(data))
+	}
+}
