@@ -81,7 +81,7 @@ Each provider (Anthropic, OpenAI, Gemini, Grok) has protocol conversion code tha
 
 **Files:** `internal/provider/router.go`, `internal/provider/retry.go`, `internal/provider/filter.go`
 
-- [ ] 4a: **Router concurrent access** — Test `Router.Stream()` called concurrently from multiple goroutines. Verify no race conditions (run with `-race`). Test fallback chain when primary provider fails with context cancellation vs. transient error — different behavior expected.
+- [x] 4a: **Router concurrent access** — Test `Router.Stream()` called concurrently from multiple goroutines. Verify no race conditions (run with `-race`). Test fallback chain when primary provider fails with context cancellation vs. transient error — different behavior expected.
 - [ ] 4b: **Retry edge cases** — Test retry when: context is canceled during backoff sleep (should exit immediately, not wait), error wrapping chain is deep (3+ levels of `fmt.Errorf`), `isTransient()` with edge-case error messages (e.g., "connection timeout" vs. "request timed out"). Test that `MaxRetries=1` means exactly 1 retry (2 total attempts).
 - [ ] 4c: **Filter with unknown models** — Test `WithServerToolFilter()` when the model ID is not in the known catalog. Verify it defaults to safe behavior (strips server tools) rather than panicking or allowing all.
 - [ ] 4d: Fix any actual bugs found.
