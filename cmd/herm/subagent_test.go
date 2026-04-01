@@ -1594,6 +1594,116 @@ func TestSubAgentMaxTurnsPartialOutputPreserved(t *testing.T) {
 	}
 }
 
+// --- Phase 5, Task 5b: Sub-agent LLM error propagation ---
+
+func TestSubAgentPermanentErrorPropagation(t *testing.T) {
+	// When the sub-agent's provider returns a non-retryable error (401),
+	// the error should appear in the result with turn context.
+	prov := &failThenSucceedProvider{
+		model: "test-model",
+		failOnCalls: map[int]error{
+			0: fmt.Errorf("HTTP 401: Unauthorized"),
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest")
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"auth test","mode":"explore"}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	// Result should contain the 401 error.
+	if !strings.Contains(result, "401") {
+		t.Errorf("result should contain 401, got: %q", result)
+	}
+	if !strings.Contains(result, "Unauthorized") {
+		t.Errorf("result should contain Unauthorized, got: %q", result)
+	}
+	// Error should include turn context.
+	if !strings.Contains(result, "turn") {
+		t.Errorf("result should include turn context, got: %q", result)
+	}
+	// Since there's no text output, errors should form the result body.
+	if !strings.Contains(result, "encountered errors") {
+		t.Errorf("result should mention errors, got: %q", result)
+	}
+}
+
+func TestSubAgentTransientErrorExhaustsRetries(t *testing.T) {
+	// When the provider returns retryable errors (429) that exhaust all retries,
+	// the final error should appear in the sub-agent result.
+	prov := &failThenSucceedProvider{
+		model: "test-model",
+		failOnCalls: map[int]error{
+			0: fmt.Errorf("HTTP 429: rate limited"),
+			1: fmt.Errorf("HTTP 429: rate limited"),
+			2: fmt.Errorf("HTTP 429: rate limited"),
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest")
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"retry test","mode":"explore"}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	// Result should contain the retry error.
+	if !strings.Contains(result, "429") || !strings.Contains(result, "rate limited") {
+		t.Errorf("result should contain retry exhaustion error, got: %q", result)
+	}
+	// Should be in the errors section.
+	if !strings.Contains(result, "[errors:") {
+		t.Errorf("result should have errors section, got: %q", result)
+	}
+}
+
+func TestSubAgentErrorDuringToolExecution(t *testing.T) {
+	// When a tool returns an error during sub-agent execution, the agent should
+	// continue (tool errors produce tool_result with IsError=true) and the
+	// error should NOT appear in agentErrors (tool errors are tool-level, not
+	// agent-level).
+	failingTool := &testTool{name: "test_tool", result: "", err: fmt.Errorf("tool crashed")}
+
+	prov := &failThenSucceedProvider{
+		model:       "test-model",
+		failOnCalls: map[int]error{},
+		responses: []scriptedResponse{
+			{
+				text: "Let me run the tool.",
+				toolCalls: []types.ContentBlock{
+					{Type: "tool_use", ID: "tu1", Name: "test_tool", Input: json.RawMessage(`{}`)},
+				},
+				tokensIn: 100, tokensOut: 50,
+			},
+			{text: "Tool failed, here's my analysis.", tokensIn: 100, tokensOut: 50},
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, []Tool{failingTool}, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest")
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"tool error test","mode":"explore"}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	// Agent should have recovered and produced output.
+	if !strings.Contains(result, "Tool failed, here's my analysis.") {
+		t.Errorf("result should contain agent's recovery text, got: %q", result)
+	}
+	// Should NOT have agent-level errors (tool errors are handled by the tool result flow).
+	if strings.Contains(result, "[errors:") {
+		t.Errorf("tool execution errors should not appear as agent errors, got: %q", result)
+	}
+}
+
 func TestSubAgentOutputTruncationClarity(t *testing.T) {
 	// When sub-agent output exceeds the summary limit, the result should:
 	// 1. Have a clear truncation indicator
