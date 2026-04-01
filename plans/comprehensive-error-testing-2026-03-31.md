@@ -121,7 +121,7 @@ Several places in the agent loop silently ignore errors. While some are intentio
 
 **Files:** `cmd/herm/container.go`, `cmd/herm/tools.go`
 
-- [ ] 7a: **Container exec failure during tool** — Test: `BashTool.Execute()` when the container returns a non-zero exit code, when the container is not running, when Docker daemon is unreachable. Verify each produces a tool result with `IsError: true` and a descriptive message (not just "exec failed").
+- [x] 7a: **Container exec failure during tool** — Tests verify: (1) non-zero exit code returns result string with "exit code: N" (existing test), (2) container not running returns ContainerError with ErrNotRunning (existing test), (3) docker daemon unreachable (docker exec binary fails to start) returns ContainerError with ErrExecFailed and descriptive "docker exec: ..." message — tested at both container level (Exec, ExecWithStdin) and BashTool level. No bugs found.
 - [ ] 7b: **Git tool error paths** — Test: `GitTool.Execute()` with credential failures (the `gitCredentialHint` path), with commands that produce stderr but succeed (exit 0), with commands that exceed output limits. Verify credential hints are included in error output, stderr is not discarded, truncation is applied correctly.
 - [ ] 7c: **Container rebuild during active tool execution** — Test: what happens if a container rebuild is triggered while a tool is executing. Verify: active tool execution fails gracefully (not hangs), error message indicates the container was restarted.
 - [ ] 7d: Fix any actual bugs found.

@@ -746,6 +746,50 @@ func TestGitToolRequiresApproval_ForceFlag(t *testing.T) {
 	}
 }
 
+// --- Task 7a: BashTool docker exec failure ---
+
+func TestBashToolExecute_DockerExecFailure(t *testing.T) {
+	orig := dockerCommand
+	defer func() { dockerCommand = orig }()
+
+	dockerCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		// For exec subcommand, return a command that fails to start (non-ExitError).
+		// Simulates docker daemon unreachable.
+		if len(args) > 0 && args[0] == "exec" {
+			return exec.CommandContext(ctx, "/nonexistent-docker-test-binary")
+		}
+		return fakeDockerCommand(func(a []string) (string, string, int) {
+			if len(a) >= 2 && a[1] == "run" {
+				return "cid123\n", "", 0
+			}
+			return "", "", 0
+		})(ctx, name, args...)
+	}
+
+	container := NewContainerClient(ContainerConfig{Image: "alpine:latest"})
+	_ = container.Start("/workspace", nil)
+	defer container.Stop()
+
+	tool := NewBashTool(container, 120)
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"echo hello"}`))
+	if err == nil {
+		t.Fatal("expected error when docker daemon is unreachable")
+	}
+
+	// Error should be a ContainerError propagated from container.Exec
+	cerr, ok := err.(*ContainerError)
+	if !ok {
+		t.Fatalf("expected *ContainerError, got %T: %v", err, err)
+	}
+	if cerr.Code != ErrExecFailed {
+		t.Errorf("expected code %s, got %s", ErrExecFailed, cerr.Code)
+	}
+	// Message must be descriptive (not just "exec failed")
+	if !strings.Contains(cerr.Message, "docker exec:") {
+		t.Errorf("error should include 'docker exec:', got: %s", cerr.Message)
+	}
+}
+
 // newGitCmd creates a git exec.Cmd in the given directory.
 func newGitCmd(dir string, args ...string) *exec.Cmd {
 	cmd := exec.Command("git", args...)

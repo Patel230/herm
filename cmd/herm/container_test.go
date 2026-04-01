@@ -560,6 +560,85 @@ func TestContainerClient_ExecWithStdinNotRunning(t *testing.T) {
 	}
 }
 
+func TestContainerClient_ExecDockerFailure(t *testing.T) {
+	orig := dockerCommand
+	defer func() { dockerCommand = orig }()
+
+	dockerCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		// For exec subcommand, return a command that fails to start (non-ExitError).
+		// Simulates docker daemon unreachable / exec binary not found.
+		if len(args) > 0 && args[0] == "exec" {
+			return exec.CommandContext(ctx, "/nonexistent-docker-test-binary")
+		}
+		return fakeDockerCommand(func(a []string) (string, string, int) {
+			if len(a) >= 2 && a[1] == "run" {
+				return "cid123\n", "", 0
+			}
+			return "", "", 0
+		})(ctx, name, args...)
+	}
+
+	c := NewContainerClient(ContainerConfig{Image: "alpine:latest"})
+	if err := c.Start("/workspace", nil); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer c.Stop()
+
+	_, err := c.Exec("echo hello", 5)
+	if err == nil {
+		t.Fatal("expected error when docker exec binary is unreachable")
+	}
+	cerr, ok := err.(*ContainerError)
+	if !ok {
+		t.Fatalf("expected *ContainerError, got %T: %v", err, err)
+	}
+	if cerr.Code != ErrExecFailed {
+		t.Errorf("expected code %s, got %s", ErrExecFailed, cerr.Code)
+	}
+	// Error message must be descriptive, not just "exec failed"
+	if !strings.Contains(cerr.Message, "docker exec:") {
+		t.Errorf("error should mention 'docker exec:', got: %s", cerr.Message)
+	}
+}
+
+func TestContainerClient_ExecWithStdinDockerFailure(t *testing.T) {
+	orig := dockerCommand
+	defer func() { dockerCommand = orig }()
+
+	dockerCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if len(args) > 0 && args[0] == "exec" {
+			return exec.CommandContext(ctx, "/nonexistent-docker-test-binary")
+		}
+		return fakeDockerCommand(func(a []string) (string, string, int) {
+			if len(a) >= 2 && a[1] == "run" {
+				return "cid123\n", "", 0
+			}
+			return "", "", 0
+		})(ctx, name, args...)
+	}
+
+	c := NewContainerClient(ContainerConfig{Image: "alpine:latest"})
+	if err := c.Start("/workspace", nil); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer c.Stop()
+
+	_, err := c.ExecWithStdin([]byte("test input"), 5, "cat")
+	if err == nil {
+		t.Fatal("expected error when docker exec binary is unreachable")
+	}
+	cerr, ok := err.(*ContainerError)
+	if !ok {
+		t.Fatalf("expected *ContainerError, got %T: %v", err, err)
+	}
+	if cerr.Code != ErrExecFailed {
+		t.Errorf("expected code %s, got %s", ErrExecFailed, cerr.Code)
+	}
+	if !strings.Contains(cerr.Message, "docker exec:") {
+		t.Errorf("error should mention 'docker exec:', got: %s", cerr.Message)
+	}
+}
+
 func TestContainerClient_RebuildStartFailure(t *testing.T) {
 	orig := dockerCommand
 	defer func() { dockerCommand = orig }()
