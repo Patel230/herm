@@ -3385,3 +3385,165 @@ func TestToolExecution_UnknownTool(t *testing.T) {
 		t.Error("expected EventDone")
 	}
 }
+
+// --- Task 6c: Approval flow interruption ---
+
+// TestApprovalFlow_ContextCanceled verifies that canceling the context while
+// the agent is waiting for approval produces EventError + EventDone, no
+// goroutine leak, no deadlock.
+func TestApprovalFlow_ContextCanceled(t *testing.T) {
+	prov := &scriptedProvider{
+		model: "test-model",
+		responses: []scriptedResponse{
+			{
+				text: "I need to run a command",
+				toolCalls: []types.ContentBlock{{
+					Type:  "tool_use",
+					ID:    "call_1",
+					Name:  "risky_tool",
+					Input: json.RawMessage(`{"cmd":"rm -rf /"}`),
+				}},
+			},
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+
+	tool := &testTool{name: "risky_tool", result: "done", requiresApproval: true}
+	agent := NewAgent(client, []Tool{tool}, nil, "", "test-model", 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go agent.Run(ctx, "do something dangerous", "")
+
+	// Wait for the approval request to be emitted.
+	var approvalSeen bool
+	timeout := time.After(5 * time.Second)
+	for !approvalSeen {
+		select {
+		case ev := <-agent.Events():
+			if ev.Type == EventApprovalReq {
+				approvalSeen = true
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for EventApprovalReq")
+		}
+	}
+
+	// Cancel context while approval is pending.
+	cancel()
+
+	// Drain remaining events.
+	var hasError, hasDone bool
+	for {
+		select {
+		case ev, ok := <-agent.Events():
+			if !ok {
+				goto done
+			}
+			if ev.Type == EventError {
+				hasError = true
+				if !strings.Contains(ev.Error.Error(), "context canceled") {
+					t.Errorf("error should be context canceled, got: %v", ev.Error)
+				}
+			}
+			if ev.Type == EventDone {
+				hasDone = true
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timeout waiting for events after cancel")
+		}
+	}
+done:
+	if !hasError {
+		t.Error("expected EventError with context canceled")
+	}
+	if !hasDone {
+		t.Error("expected EventDone after context cancellation during approval")
+	}
+}
+
+// TestApprovalFlow_Denied verifies that denying a tool call produces an
+// IsError tool result and the agent continues with the next LLM call.
+func TestApprovalFlow_Denied(t *testing.T) {
+	prov := &scriptedProvider{
+		model: "test-model",
+		responses: []scriptedResponse{
+			{
+				text: "I need to run a command",
+				toolCalls: []types.ContentBlock{{
+					Type:  "tool_use",
+					ID:    "call_1",
+					Name:  "risky_tool",
+					Input: json.RawMessage(`{"cmd":"rm -rf /"}`),
+				}},
+			},
+			{text: "OK, I won't do that"},
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+
+	tool := &testTool{name: "risky_tool", result: "done", requiresApproval: true}
+	agent := NewAgent(client, []Tool{tool}, nil, "", "test-model", 0)
+
+	go agent.Run(context.Background(), "delete everything", "")
+
+	// Wait for approval request, then deny.
+	timeout2 := time.After(5 * time.Second)
+	for {
+		select {
+		case ev := <-agent.Events():
+			if ev.Type == EventApprovalReq {
+				agent.Approve(ApprovalResponse{Approved: false})
+				goto drain
+			}
+		case <-timeout2:
+			t.Fatal("timeout waiting for approval request")
+		}
+	}
+drain:
+	var events []AgentEvent
+	for {
+		select {
+		case ev, ok := <-agent.Events():
+			if !ok {
+				goto check
+			}
+			events = append(events, ev)
+			if ev.Type == EventDone {
+				goto check
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timeout draining events")
+		}
+	}
+check:
+	var foundDenied, hasDone2, hasFollowup bool
+	for _, ev := range events {
+		if ev.Type == EventToolResult && ev.ToolName == "risky_tool" {
+			foundDenied = true
+			if !ev.IsError {
+				t.Error("denied tool result should be IsError=true")
+			}
+			if !strings.Contains(ev.ToolResult, "denied") {
+				t.Errorf("denied result should mention denial, got: %q", ev.ToolResult)
+			}
+		}
+		if ev.Type == EventTextDelta && strings.Contains(ev.Text, "won't") {
+			hasFollowup = true
+		}
+		if ev.Type == EventDone {
+			hasDone2 = true
+		}
+	}
+	if !foundDenied {
+		t.Error("expected denied tool result")
+	}
+	if !hasFollowup {
+		t.Error("expected follow-up response after denial")
+	}
+	if !hasDone2 {
+		t.Error("expected EventDone")
+	}
+}
