@@ -1804,6 +1804,135 @@ func TestSubAgentStreamStallTimeout(t *testing.T) {
 	}
 }
 
+// --- Phase 5, Task 5d: Background agent error surfacing ---
+
+func TestSubAgentBackgroundFatalErrorSurfacing(t *testing.T) {
+	// When a background sub-agent encounters a fatal error (401), the error
+	// should appear in: (1) bgAgentStatus result, (2) onBgComplete callback.
+	prov := &failThenSucceedProvider{
+		model: "test-model",
+		failOnCalls: map[int]error{
+			0: fmt.Errorf("HTTP 401: Unauthorized"),
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest")
+
+	var completedResult string
+	var completedMu sync.Mutex
+	tool.onBgComplete = func(result string) {
+		completedMu.Lock()
+		completedResult = result
+		completedMu.Unlock()
+	}
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"bg error task","mode":"explore","background":true}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	agentID := extractAgentID(t, result)
+
+	// Wait for background agent to complete.
+	waitForBgAgent(t, tool, agentID, 10*time.Second)
+
+	// (1) bgAgentStatus should return the error in the completed result.
+	status, err := tool.bgAgentStatus(agentID)
+	if err != nil {
+		t.Fatalf("bgAgentStatus error: %v", err)
+	}
+	if !strings.Contains(status, "[status: completed]") {
+		t.Errorf("status should be completed, got: %q", status)
+	}
+	if !strings.Contains(status, "401") || !strings.Contains(status, "Unauthorized") {
+		t.Errorf("status should contain the error, got: %q", status)
+	}
+
+	// (2) onBgComplete callback should include the error.
+	completedMu.Lock()
+	got := completedResult
+	completedMu.Unlock()
+	if !strings.Contains(got, "401") || !strings.Contains(got, "Unauthorized") {
+		t.Errorf("onBgComplete result should contain error, got: %q", got)
+	}
+}
+
+func TestSubAgentBackgroundErrorIncludesAgentContext(t *testing.T) {
+	// Verify background agent errors include agent_id and turn context.
+	prov := &failThenSucceedProvider{
+		model: "test-model",
+		failOnCalls: map[int]error{
+			0: fmt.Errorf("HTTP 500: internal server error"),
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest")
+
+	var completedResult string
+	var completedMu sync.Mutex
+	tool.onBgComplete = func(result string) {
+		completedMu.Lock()
+		completedResult = result
+		completedMu.Unlock()
+	}
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"bg context test","mode":"explore","background":true}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	agentID := extractAgentID(t, result)
+	waitForBgAgent(t, tool, agentID, 30*time.Second) // 500 is retryable, retries take time
+
+	completedMu.Lock()
+	got := completedResult
+	completedMu.Unlock()
+
+	// Result should include agent_id.
+	if !strings.Contains(got, "[agent_id:") {
+		t.Errorf("result should contain agent_id, got: %q", got)
+	}
+	// Result should include turn context.
+	if !strings.Contains(got, "turn") {
+		t.Errorf("result should contain turn context, got: %q", got)
+	}
+}
+
+func TestSubAgentBackgroundCompletionInjection(t *testing.T) {
+	// Verify InjectBackgroundResult works with background agent errors.
+	// When a background agent completes, onBgComplete fires, which in production
+	// calls agent.InjectBackgroundResult. Verify the result is injectable.
+	client := newTestClient("bg output text")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest")
+
+	// Create a parent agent to receive the injection.
+	parentAgent := NewAgent(nil, nil, nil, "", "test-model", 0)
+
+	tool.onBgComplete = parentAgent.InjectBackgroundResult
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"inject test","mode":"explore","background":true}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	agentID := extractAgentID(t, result)
+	waitForBgAgent(t, tool, agentID, 10*time.Second)
+
+	// The parent agent should have pending background results.
+	results := parentAgent.drainBackgroundResults()
+	if len(results) != 1 {
+		t.Fatalf("expected 1 background result, got %d", len(results))
+	}
+	if !strings.Contains(results[0], "bg output text") {
+		t.Errorf("injected result should contain agent output, got: %q", results[0])
+	}
+}
+
 func TestSubAgentStreamErrorMidResponse(t *testing.T) {
 	// When the stream sends an error event mid-response (simulating connection
 	// reset), the error should be collected and appear in the result.
