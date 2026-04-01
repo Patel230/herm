@@ -1744,3 +1744,90 @@ func TestSubAgentOutputTruncationClarity(t *testing.T) {
 		t.Errorf("output file should contain full output, got %d bytes", len(data))
 	}
 }
+
+// --- Phase 5, Task 5c: Sub-agent stream interruption ---
+
+// stallingStreamProvider sends partial text then stalls, simulating a provider
+// whose stream stops mid-response (e.g., network partition, server crash).
+type stallingStreamProvider struct {
+	model   string
+	release chan struct{} // close to release stalled goroutines (cleanup)
+}
+
+func (p *stallingStreamProvider) Complete(_ context.Context, _ *types.CompletionRequest) (*types.CompletionResponse, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *stallingStreamProvider) Stream(ctx context.Context, _ *types.CompletionRequest) (<-chan types.StreamEvent, error) {
+	ch := make(chan types.StreamEvent, 10)
+	go func() {
+		defer close(ch)
+		ch <- types.StreamEvent{Type: types.StreamEventDelta, Content: "partial text before stall..."}
+		// Stall until released or context canceled.
+		select {
+		case <-p.release:
+		case <-ctx.Done():
+		}
+	}()
+	return ch, nil
+}
+
+func (p *stallingStreamProvider) Name() string             { return "mock" }
+func (p *stallingStreamProvider) Models() []types.ModelInfo { return nil }
+
+func TestSubAgentStreamStallTimeout(t *testing.T) {
+	// When the sub-agent's stream stalls (no chunks), the stream chunk timeout
+	// should fire, producing a "stream stalled" error in the result.
+	release := make(chan struct{})
+	defer close(release)
+
+	prov := &stallingStreamProvider{model: "test-model", release: release}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest")
+	tool.streamTimeout = 200 * time.Millisecond // very short for test
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"stall test","mode":"explore"}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	// Result should contain the stream stall error.
+	if !strings.Contains(result, "stream stalled") {
+		t.Errorf("result should mention stream stall, got: %q", result)
+	}
+
+	// The partial text sent before the stall should be collected.
+	if !strings.Contains(result, "partial text before stall") {
+		t.Errorf("result should contain partial text, got: %q", result)
+	}
+}
+
+func TestSubAgentStreamErrorMidResponse(t *testing.T) {
+	// When the stream sends an error event mid-response (simulating connection
+	// reset), the error should be collected and appear in the result.
+	prov := &streamFailThenSucceedProvider{
+		model:           "test-model",
+		failStreamCalls: map[int]bool{0: true, 1: true}, // all streams fail
+		responses: []scriptedResponse{
+			{text: "Hello world", tokensIn: 100, tokensOut: 50},
+			{text: "Hello world", tokensIn: 100, tokensOut: 50},
+			// Stream retries exhaust, then connection-level retries exhaust too.
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest")
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"stream error test","mode":"explore"}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	// Result should contain stream-related error.
+	if !strings.Contains(result, "stream interrupted") && !strings.Contains(result, "connection reset") {
+		t.Errorf("result should contain stream error, got: %q", result)
+	}
+}

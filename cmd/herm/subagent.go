@@ -58,6 +58,7 @@ type SubAgentTool struct {
 	personality    string
 	containerImage string
 	doneTimeout    time.Duration    // max time to wait for goroutine after stream ends
+	streamTimeout  time.Duration    // stream chunk inactivity timeout for inner agents; 0 = default
 	parentEvents   chan<- AgentEvent // set after construction; forwards live events to TUI
 	onBgComplete   func(string)     // set after construction; called when a background sub-agent finishes
 
@@ -285,7 +286,11 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 	// skills, and uses a compact role section instead of the full orchestrator framing.
 	systemPrompt := buildSubAgentSystemPrompt(subTools, t.serverTools, t.workDir, t.containerImage, &snap.snapshot)
 
-	agent := NewAgent(t.client, subTools, t.serverTools, systemPrompt, model, 0)
+	var agentOpts []AgentOption
+	if t.streamTimeout > 0 {
+		agentOpts = append(agentOpts, WithStreamChunkTimeout(t.streamTimeout))
+	}
+	agent := NewAgent(t.client, subTools, t.serverTools, systemPrompt, model, 0, agentOpts...)
 	agentID := agent.ID()
 
 	// Create a local trace collector for this sub-agent's events.
@@ -475,7 +480,11 @@ func (t *SubAgentTool) executeBackground(_ context.Context, in subAgentInput) (s
 	snap := fetchProjectSnapshot(t.workDir)
 	systemPrompt := buildSubAgentSystemPrompt(subTools, t.serverTools, t.workDir, t.containerImage, &snap.snapshot)
 
-	agent := NewAgent(t.client, subTools, t.serverTools, systemPrompt, model, 0)
+	var agentOpts []AgentOption
+	if t.streamTimeout > 0 {
+		agentOpts = append(agentOpts, WithStreamChunkTimeout(t.streamTimeout))
+	}
+	agent := NewAgent(t.client, subTools, t.serverTools, systemPrompt, model, 0, agentOpts...)
 	agentID := agent.ID()
 
 	subTC := NewTraceCollector("")
