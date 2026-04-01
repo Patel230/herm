@@ -68,7 +68,7 @@ Each provider (Anthropic, OpenAI, Gemini, Grok) has protocol conversion code tha
 
 **Files:** `internal/conversation/conversation.go`, `internal/storage/sqlite/sqlite.go`
 
-- [ ] 3a: **Provider.Stream() returns error** — Test `streamResponse()` when the provider's `Stream()` method itself returns an error (not a stream event error). Verify the error is emitted as `StreamEventError` and the events channel is properly closed. Currently untested.
+- [x] 3a: **Provider.Stream() returns error** — Test `streamResponse()` when the provider's `Stream()` method itself returns an error (not a stream event error). Verify the error is emitted as `StreamEventError` and the events channel is properly closed. Currently untested.
 - [ ] 3b: **Database failure mid-stream** — Test what happens when `storage.CreateNode()` fails during `streamResponse()` after partial content has been streamed. Verify: error event emitted, no hang, partial content either preserved or clearly reported as lost.
 - [ ] 3c: **Malformed node content in buildMessages** — Test `buildMessages()` with nodes containing: non-JSON string content (plain text), JSON array with unknown block types, null/empty content field, very large content (>1MB). Verify graceful fallback (raw string) or clear error — never panic.
 - [ ] 3d: **Output group budget boundary** — Test continuation when cumulative output tokens land exactly at the budget limit. Test with budget of 0 (should not continue). Test when continuation provider call fails (should emit last saved node, not crash).
