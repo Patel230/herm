@@ -341,6 +341,7 @@ func approvalShortDesc(toolName string, input json.RawMessage) string {
 }
 
 func collapseToolResult(result string) string {
+	result = strings.TrimRight(result, "\n")
 	lines := strings.Split(result, "\n")
 	if len(lines) <= 4 {
 		return compactLineNumbers(result)
