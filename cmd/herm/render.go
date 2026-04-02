@@ -3,10 +3,12 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -534,6 +536,24 @@ func (a *App) subAgentDisplayLines() []string {
 	if len(visible) == 0 {
 		return nil
 	}
+
+	// Stable ordering: completed agents first (by completedAt ascending),
+	// then running agents (by startTime ascending).
+	slices.SortFunc(visible, func(a, b *subAgentDisplay) int {
+		// Completed before running.
+		if a.done != b.done {
+			if a.done {
+				return -1
+			}
+			return 1
+		}
+		if a.done {
+			// Both completed — sort by completedAt ascending.
+			return cmp.Compare(a.completedAt.UnixNano(), b.completedAt.UnixNano())
+		}
+		// Both running — sort by startTime ascending.
+		return cmp.Compare(a.startTime.UnixNano(), b.startTime.UnixNano())
+	})
 
 	// Check if any agent is still active — if all done, don't show the group.
 	allDone := true
