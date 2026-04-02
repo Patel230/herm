@@ -607,7 +607,7 @@ func formatSubAgentLine(sa *subAgentDisplay) string {
 
 	var metrics []string
 	if sa.toolCount > 0 {
-		metrics = append(metrics, fmt.Sprintf("%d 🛠️", sa.toolCount))
+		metrics = append(metrics, fmt.Sprintf("%d 🛠️ ", sa.toolCount))
 	}
 	var elapsed time.Duration
 	if !sa.startTime.IsZero() {
