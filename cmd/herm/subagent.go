@@ -312,7 +312,9 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 	// skills, and uses a compact role section instead of the full orchestrator framing.
 	systemPrompt := buildSubAgentSystemPrompt(subTools, t.serverTools, t.workDir, t.containerImage, &snap.snapshot)
 
-	var agentOpts []AgentOption
+	agentOpts := []AgentOption{
+		WithMaxToolIterations(t.maxTurns),
+	}
 	if t.streamTimeout > 0 {
 		agentOpts = append(agentOpts, WithStreamChunkTimeout(t.streamTimeout))
 	}
@@ -518,7 +520,9 @@ func (t *SubAgentTool) executeBackground(_ context.Context, in subAgentInput) (s
 	snap := fetchProjectSnapshot(t.workDir)
 	systemPrompt := buildSubAgentSystemPrompt(subTools, t.serverTools, t.workDir, t.containerImage, &snap.snapshot)
 
-	var agentOpts []AgentOption
+	agentOpts := []AgentOption{
+		WithMaxToolIterations(t.maxTurns),
+	}
 	if t.streamTimeout > 0 {
 		agentOpts = append(agentOpts, WithStreamChunkTimeout(t.streamTimeout))
 	}
