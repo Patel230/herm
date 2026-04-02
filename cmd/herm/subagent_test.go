@@ -2170,3 +2170,85 @@ func TestSubAgentStreamErrorMidResponse(t *testing.T) {
 		t.Errorf("result should contain stream error, got: %q", result)
 	}
 }
+
+func TestWaitForBackgroundAgents_NoAgents(t *testing.T) {
+	tool := NewSubAgentTool(nil, nil, nil, "m", "", 10, 1, 0, t.TempDir(), "", "")
+	results := tool.WaitForBackgroundAgents(time.Second)
+	if results != nil {
+		t.Errorf("expected nil for no bg agents, got %v", results)
+	}
+}
+
+func TestWaitForBackgroundAgents_AllDone(t *testing.T) {
+	tool := NewSubAgentTool(nil, nil, nil, "m", "", 10, 1, 0, t.TempDir(), "", "")
+
+	// Manually inject two already-completed background agents.
+	tool.mu.Lock()
+	tool.bgAgents["a1"] = &bgAgentState{done: true, result: "result-a1", task: "task1"}
+	tool.bgAgents["a2"] = &bgAgentState{done: true, result: "result-a2", task: "task2"}
+	tool.mu.Unlock()
+
+	results := tool.WaitForBackgroundAgents(time.Second)
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	joined := strings.Join(results, "|")
+	if !strings.Contains(joined, "result-a1") || !strings.Contains(joined, "result-a2") {
+		t.Errorf("expected both results, got %v", results)
+	}
+}
+
+func TestWaitForBackgroundAgents_WaitsForCompletion(t *testing.T) {
+	tool := NewSubAgentTool(nil, nil, nil, "m", "", 10, 1, 0, t.TempDir(), "", "")
+
+	state := &bgAgentState{task: "slow-task", started: time.Now()}
+	tool.mu.Lock()
+	tool.bgAgents["bg1"] = state
+	tool.mu.Unlock()
+
+	// Complete the agent after a short delay.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		state.mu.Lock()
+		state.done = true
+		state.result = "slow-result"
+		state.mu.Unlock()
+	}()
+
+	start := time.Now()
+	results := tool.WaitForBackgroundAgents(5 * time.Second)
+	elapsed := time.Since(start)
+
+	if len(results) != 1 || results[0] != "slow-result" {
+		t.Fatalf("expected [slow-result], got %v", results)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("waited too long: %v", elapsed)
+	}
+}
+
+func TestWaitForBackgroundAgents_Timeout(t *testing.T) {
+	tool := NewSubAgentTool(nil, nil, nil, "m", "", 10, 1, 0, t.TempDir(), "", "")
+
+	// One done, one still running.
+	tool.mu.Lock()
+	tool.bgAgents["done1"] = &bgAgentState{done: true, result: "done-result", task: "done-task"}
+	tool.bgAgents["hang1"] = &bgAgentState{task: "hanging-task", started: time.Now()}
+	tool.mu.Unlock()
+
+	results := tool.WaitForBackgroundAgents(300 * time.Millisecond)
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	joined := strings.Join(results, "|")
+	if !strings.Contains(joined, "done-result") {
+		t.Errorf("expected done result, got %v", results)
+	}
+	if !strings.Contains(joined, "timed out") {
+		t.Errorf("expected timeout notice, got %v", results)
+	}
+	if !strings.Contains(joined, "hanging-task") {
+		t.Errorf("expected task name in timeout notice, got %v", results)
+	}
+}

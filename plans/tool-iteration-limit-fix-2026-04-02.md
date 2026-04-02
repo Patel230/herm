@@ -27,9 +27,9 @@ The current default of 25 is insufficient. A single sub-agent spawn + status pol
 
 When the main agent exhausts its iteration budget, background sub-agents may still be running. We need a way to wait for them so their results can be included in a final synthesis.
 
-- [ ] 2a: Add a `WaitForBackgroundAgents(timeout time.Duration) []string` method to `SubAgentTool` that blocks until all entries in `bgAgents` are done (or timeout), returning their results. Use a polling approach: check `state.done` for each agent, sleep briefly, repeat. Return results in completion order
-- [ ] 2b: Add a `WaitForBackgroundAgents` method to the `Tool` interface or use a type assertion in `runLoop` to access the sub-agent tool. Since only the agent tool supports this, a type assertion on the `Tool` interface (checking for an optional `BackgroundWaiter` interface) is cleanest
-- [ ] 2c: Add tests for `WaitForBackgroundAgents`: returns immediately when no background agents exist, waits and returns results when agents are running, respects timeout
+- [x] 2a: Add a `WaitForBackgroundAgents(timeout time.Duration) []string` method to `SubAgentTool` that blocks until all entries in `bgAgents` are done (or timeout), returning their results. Use a polling approach: check `state.done` for each agent, sleep briefly, repeat. Return results in completion order
+- [x] 2b: Add a `WaitForBackgroundAgents` method to the `Tool` interface or use a type assertion in `runLoop` to access the sub-agent tool. Since only the agent tool supports this, a type assertion on the `Tool` interface (checking for an optional `BackgroundWaiter` interface) is cleanest
+- [x] 2c: Add tests for `WaitForBackgroundAgents`: returns immediately when no background agents exist, waits and returns results when agents are running, respects timeout
 
 ## Phase 3: Graceful exhaustion — final LLM call with accumulated context
 

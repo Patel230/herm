@@ -121,6 +121,13 @@ type Tool interface {
 	HostTool() bool
 }
 
+// BackgroundWaiter is an optional interface implemented by tools that manage
+// background sub-agents. Used by runLoop during graceful exhaustion to wait
+// for running background agents before the final synthesis call.
+type BackgroundWaiter interface {
+	WaitForBackgroundAgents(timeout time.Duration) []string
+}
+
 // AgentEventType identifies the kind of agent event.
 type AgentEventType int
 
@@ -330,6 +337,17 @@ func (a *Agent) drainBackgroundResults() []string {
 	results := a.bgCompletions
 	a.bgCompletions = nil
 	return results
+}
+
+// findBackgroundWaiter returns the BackgroundWaiter from the agent's tool set,
+// or nil if none of the registered tools implement the interface.
+func (a *Agent) findBackgroundWaiter() BackgroundWaiter {
+	for _, tool := range a.tools {
+		if bw, ok := tool.(BackgroundWaiter); ok {
+			return bw
+		}
+	}
+	return nil
 }
 
 // Cancel stops the running agent loop.

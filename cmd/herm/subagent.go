@@ -227,6 +227,73 @@ func (t *SubAgentTool) bgAgentStatus(agentID string) (string, error) {
 	return fmt.Sprintf("[agent_id: %s] [status: running] Task: %s (elapsed: %s)", agentID, state.task, elapsed), nil
 }
 
+// bgWaitPollInterval is the polling interval for WaitForBackgroundAgents.
+const bgWaitPollInterval = 250 * time.Millisecond
+
+// WaitForBackgroundAgents blocks until all background sub-agents are done or
+// the timeout expires, returning their results. Results are appended in
+// completion order (the order they are observed as done during polling).
+// Returns nil if there are no background agents.
+func (t *SubAgentTool) WaitForBackgroundAgents(timeout time.Duration) []string {
+	t.mu.Lock()
+	agents := make(map[string]*bgAgentState, len(t.bgAgents))
+	for id, st := range t.bgAgents {
+		agents[id] = st
+	}
+	t.mu.Unlock()
+
+	if len(agents) == 0 {
+		return nil
+	}
+
+	deadline := time.After(timeout)
+	var results []string
+	collected := make(map[string]bool)
+
+	for len(collected) < len(agents) {
+		for id, st := range agents {
+			if collected[id] {
+				continue
+			}
+			st.mu.Lock()
+			done := st.done
+			result := st.result
+			st.mu.Unlock()
+			if done {
+				results = append(results, result)
+				collected[id] = true
+			}
+		}
+		if len(collected) == len(agents) {
+			break
+		}
+		select {
+		case <-deadline:
+			// Timeout: collect whatever is done, note the rest as timed out.
+			for id, st := range agents {
+				if collected[id] {
+					continue
+				}
+				st.mu.Lock()
+				done := st.done
+				result := st.result
+				task := st.task
+				st.mu.Unlock()
+				if done {
+					results = append(results, result)
+				} else {
+					results = append(results, fmt.Sprintf("[agent %s] timed out waiting — task: %s", id, task))
+				}
+			}
+			return results
+		case <-time.After(bgWaitPollInterval):
+			// Poll again.
+		}
+	}
+
+	return results
+}
+
 // exploreToolAllowlist is the set of tools available to explore-mode sub-agents.
 // These are read-only tools plus bash (needed for read-only commands like ls,
 // tree, and build checks — an accepted escape hatch consistent with Claude Code).
