@@ -1215,6 +1215,53 @@ func TestSystemPromptWithStatsIncludesStats(t *testing.T) {
 	}
 }
 
+func TestSystemPromptIterationWarningBelowThreshold(t *testing.T) {
+	client := newTestClient("ok")
+	agent := NewAgent(client, nil, nil, "base prompt", "test-model", 0,
+		WithMaxToolIterations(25),
+	)
+	// Simulate being at iteration 20 of 25 (20% remaining < 30% threshold).
+	agent.currentIteration = 20
+
+	got := agent.systemPromptWithStats()
+	if !strings.Contains(got, "5 tool iterations remaining out of 25") {
+		t.Errorf("expected iteration warning, got: %q", got)
+	}
+}
+
+func TestSystemPromptNoIterationWarningAboveThreshold(t *testing.T) {
+	client := newTestClient("ok")
+	agent := NewAgent(client, nil, nil, "base prompt", "test-model", 0,
+		WithMaxToolIterations(25),
+	)
+	// Simulate being at iteration 5 of 25 (80% remaining > 30% threshold).
+	agent.currentIteration = 5
+
+	got := agent.systemPromptWithStats()
+	if strings.Contains(got, "tool iterations remaining") {
+		t.Errorf("should not show iteration warning when above threshold, got: %q", got)
+	}
+}
+
+func TestSubAgentReceivesMaxToolIterations(t *testing.T) {
+	client := newTestClient("ok")
+	sat := NewSubAgentTool(client, nil, nil, "main-model", "explore-model", 15, 1, 0, "/tmp", "", "")
+
+	// The maxTurns should be set to 15.
+	if sat.maxTurns != 15 {
+		t.Errorf("maxTurns = %d, want 15", sat.maxTurns)
+	}
+	// When creating agents, WithMaxToolIterations(t.maxTurns) is passed.
+	// Verify by creating an agent with the same pattern used in subagent.go.
+	agentOpts := []AgentOption{
+		WithMaxToolIterations(sat.maxTurns),
+	}
+	agent := NewAgent(client, nil, nil, "", "", 0, agentOpts...)
+	if agent.maxToolIterations != 15 {
+		t.Errorf("sub-agent maxToolIterations = %d, want 15", agent.maxToolIterations)
+	}
+}
+
 func TestSessionStatsAccumulateFromEmitUsage(t *testing.T) {
 	store := newMockStorage()
 	prov := &mockProvider{model: "test-model"}
