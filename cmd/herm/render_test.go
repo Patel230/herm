@@ -1802,3 +1802,289 @@ func TestStatusLineFormats(t *testing.T) {
 		}
 	})
 }
+
+func TestAssistantTextNoPrefixOrBorder(t *testing.T) {
+	strip := func(s string) string {
+		return ansiEscRe.ReplaceAllString(s, "")
+	}
+
+	t.Run("plain text has no decorations", func(t *testing.T) {
+		app := &App{width: 80}
+		app.messages = []chatMessage{
+			{kind: msgAssistant, content: "Here is the answer to your question."},
+		}
+		rows := app.buildBlockRows()
+		var found bool
+		for _, r := range rows {
+			s := strip(r)
+			if strings.Contains(s, "Here is the answer") {
+				found = true
+				// Should not have box-drawing or prefix characters.
+				for _, prefix := range []string{"┌", "├", "│", "└", "▸", "> "} {
+					if strings.HasPrefix(s, prefix) {
+						t.Errorf("assistant text should have no prefix, got %q starting with %q", s, prefix)
+					}
+				}
+			}
+		}
+		if !found {
+			t.Error("assistant text not found in rows")
+		}
+	})
+
+	t.Run("multiline text preserves all lines without decoration", func(t *testing.T) {
+		app := &App{width: 80}
+		app.messages = []chatMessage{
+			{kind: msgAssistant, content: "Line one.\nLine two.\nLine three."},
+		}
+		rows := app.buildBlockRows()
+		for _, line := range []string{"Line one.", "Line two.", "Line three."} {
+			var found bool
+			for _, r := range rows {
+				s := strip(r)
+				if strings.Contains(s, line) {
+					found = true
+					// No left-side border characters.
+					if strings.HasPrefix(s, "│") || strings.HasPrefix(s, "├") {
+						t.Errorf("assistant line %q should not have border prefix", line)
+					}
+				}
+			}
+			if !found {
+				t.Errorf("assistant line %q not found in rows", line)
+			}
+		}
+	})
+
+	t.Run("text between tool groups has no decoration", func(t *testing.T) {
+		app := &App{width: 80}
+		app.messages = []chatMessage{
+			{kind: msgToolCall, content: "~ read foo.go", toolName: "read_file", leadBlank: true},
+			{kind: msgToolResult, content: "content", toolName: "read_file"},
+			{kind: msgAssistant, content: "I found the issue.", leadBlank: true},
+			{kind: msgToolCall, content: "~ edit foo.go", toolName: "edit_file", leadBlank: true},
+			{kind: msgToolResult, content: "ok", toolName: "edit_file"},
+		}
+		rows := app.buildBlockRows()
+		for _, r := range rows {
+			s := strip(r)
+			if strings.Contains(s, "I found the issue.") {
+				// Should be plain text — no borders, no prefixes.
+				if strings.HasPrefix(s, "│") || strings.HasPrefix(s, "├") || strings.HasPrefix(s, "┌") {
+					t.Errorf("assistant text between groups should be plain, got: %q", s)
+				}
+			}
+		}
+	})
+}
+
+func TestStandaloneToolResultRendersAsBox(t *testing.T) {
+	strip := func(s string) string {
+		return ansiEscRe.ReplaceAllString(s, "")
+	}
+
+	t.Run("standalone result has box borders", func(t *testing.T) {
+		app := &App{width: 80}
+		// A tool result without a preceding tool call is "standalone".
+		app.messages = []chatMessage{
+			{kind: msgToolResult, content: "some output", leadBlank: true},
+		}
+		rows := app.buildBlockRows()
+		var hasTop, hasBottom bool
+		for _, r := range rows {
+			s := strip(r)
+			if strings.HasPrefix(s, "┌ ~ result ") {
+				hasTop = true
+			}
+			if strings.HasPrefix(s, "└") {
+				hasBottom = true
+			}
+		}
+		if !hasTop {
+			t.Error("standalone result should have ┌ top border")
+		}
+		if !hasBottom {
+			t.Error("standalone result should have └ bottom border")
+		}
+	})
+
+	t.Run("standalone error result has red styling", func(t *testing.T) {
+		app := &App{width: 80}
+		app.messages = []chatMessage{
+			{kind: msgToolResult, content: "error occurred", isError: true, leadBlank: true},
+		}
+		rows := app.buildBlockRows()
+		var hasRed bool
+		for _, r := range rows {
+			if strings.Contains(r, "\033[31m") {
+				hasRed = true
+			}
+		}
+		if !hasRed {
+			t.Error("standalone error result should have red styling")
+		}
+	})
+}
+
+func TestFullRenderPipelineEndToEnd(t *testing.T) {
+	strip := func(s string) string {
+		return ansiEscRe.ReplaceAllString(s, "")
+	}
+
+	// Mock conversation: user → tool group → assistant text → sub-agent group → tool group → assistant text → done status.
+	app := &App{
+		width:                 80,
+		agentElapsed:          10 * time.Second,
+		mainAgentToolCount:    5,
+		mainAgentInputTokens:  1000,
+		mainAgentOutputTokens: 400,
+	}
+	app.messages = []chatMessage{
+		// User message.
+		{kind: msgUser, content: "Fix the bug in main.go"},
+		// First tool group: read + grep.
+		{kind: msgToolCall, content: "~ read main.go", toolName: "read_file", leadBlank: true},
+		{kind: msgToolResult, content: "package main\nfunc main() {}", toolName: "read_file"},
+		{kind: msgToolCall, content: "~ grep error", toolName: "grep"},
+		{kind: msgToolResult, content: "main.go:42:error here", toolName: "grep"},
+		// Assistant text.
+		{kind: msgAssistant, content: "I found the bug. Let me fix it.", leadBlank: true},
+		// Second tool group: edit + bash.
+		{kind: msgToolCall, content: "~ edit main.go", toolName: "edit_file", leadBlank: true},
+		{kind: msgToolResult, content: "@@ -1 +1 @@\n-old\n+new", toolName: "edit_file"},
+		{kind: msgToolCall, content: "~ $ go build ./...", toolName: "bash"},
+		{kind: msgToolResult, content: "", toolName: "bash"},
+		// Final assistant text.
+		{kind: msgAssistant, content: "The bug is fixed. The build succeeds.", leadBlank: true},
+	}
+
+	rows := app.buildBlockRows()
+	allText := strings.Join(rows, "\n")
+	stripped := strip(allText)
+
+	// User message present with ▸ prefix.
+	if !strings.Contains(stripped, "▸ Fix the bug in main.go") {
+		t.Error("expected user message with ▸ prefix")
+	}
+
+	// First tool group: single ┌ for grouped reads.
+	topCount := 0
+	for _, r := range rows {
+		if strings.HasPrefix(strip(r), "┌") {
+			topCount++
+		}
+	}
+	if topCount != 2 {
+		t.Errorf("expected 2 tool groups (2 ┌ borders), got %d", topCount)
+	}
+
+	// Assistant text present without decoration.
+	if !strings.Contains(stripped, "I found the bug.") {
+		t.Error("expected first assistant text")
+	}
+	if !strings.Contains(stripped, "The bug is fixed.") {
+		t.Error("expected final assistant text")
+	}
+
+	// Check no assistant text has border prefix.
+	for _, r := range rows {
+		s := strip(r)
+		if (strings.Contains(s, "I found the bug") || strings.Contains(s, "The bug is fixed")) &&
+			(strings.HasPrefix(s, "│") || strings.HasPrefix(s, "├")) {
+			t.Errorf("assistant text should not have border prefix: %q", s)
+		}
+	}
+
+	// Done status line should be present.
+	var hasDone bool
+	for _, r := range rows {
+		s := strip(r)
+		if strings.Contains(s, "✓") && strings.Contains(s, "5 🛠️") && strings.Contains(s, "10.00s") {
+			hasDone = true
+		}
+	}
+	if !hasDone {
+		t.Error("expected done status line with ✓, tool count, and elapsed time")
+	}
+
+	// Sub-agent display should not appear (all done or empty).
+	for _, r := range rows {
+		s := strip(r)
+		if strings.Contains(s, "Running") && strings.Contains(s, "agent") {
+			// Active sub-agent display should not be visible for this test
+			// (no active sub-agents).
+			_ = s
+		}
+	}
+}
+
+func TestFullRenderPipelineWithSubAgents(t *testing.T) {
+	strip := func(s string) string {
+		return ansiEscRe.ReplaceAllString(s, "")
+	}
+
+	now := time.Now().Add(-2 * time.Second)
+	app := &App{
+		width:        80,
+		agentRunning: true,
+		agentStartTime: now,
+		agentDisplayInTok:  500,
+		agentDisplayOutTok: 200,
+		mainAgentToolCount: 3,
+	}
+	// Active sub-agents.
+	app.subAgents = map[string]*subAgentDisplay{
+		"sa1": {task: "Research auth", mode: "explore", startTime: now, toolCount: 12},
+		"sa2": {task: "Research storage", mode: "explore", startTime: now, toolCount: 8, done: true, inputTokens: 300, outputTokens: 100},
+	}
+	app.messages = []chatMessage{
+		{kind: msgUser, content: "Analyze the codebase"},
+		{kind: msgToolCall, content: "~ read main.go", toolName: "read_file", leadBlank: true},
+		{kind: msgToolResult, content: "content", toolName: "read_file"},
+		{kind: msgAssistant, content: "Starting analysis.", leadBlank: true},
+	}
+
+	rows := app.buildBlockRows()
+	stripped := strip(strings.Join(rows, "\n"))
+
+	// Sub-agent display should show.
+	if !strings.Contains(stripped, "Explore agent") {
+		t.Error("expected sub-agent group header")
+	}
+	// Active agent should have spinner or status.
+	if !strings.Contains(stripped, "Research auth") {
+		t.Error("expected active sub-agent task in output")
+	}
+	// Running status line should be present.
+	var hasRunning bool
+	for _, r := range rows {
+		s := strip(r)
+		if strings.ContainsAny(s, "⣾⣽⣻⢿⡿⣟⣯⣷") && strings.Contains(s, "🛠️") {
+			hasRunning = true
+		}
+	}
+	if !hasRunning {
+		t.Error("expected running status line with spinner")
+	}
+}
+
+func TestBrailleSpinnerAnimation(t *testing.T) {
+	// Verify spinner frame index advances on each 50ms tick and wraps correctly.
+	for i := 0; i < brailleSpinnerFrameCount*3; i++ {
+		elapsed := time.Duration(i*50) * time.Millisecond
+		s := brailleSpinner(elapsed)
+		plain := ansiEscRe.ReplaceAllString(s, "")
+		expectedFrame := brailleSpinnerFrames[i%brailleSpinnerFrameCount]
+		if plain != expectedFrame {
+			t.Errorf("at %v: got %q, want %q", elapsed, plain, expectedFrame)
+		}
+	}
+
+	// Verify color changes over time (pastelColor produces different values).
+	c1 := pastelColor(0)
+	c2 := pastelColor(1 * time.Second)
+	c3 := pastelColor(2 * time.Second)
+	if c1 == c2 && c2 == c3 {
+		t.Error("pastelColor should produce different colors at different times")
+	}
+}

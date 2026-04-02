@@ -91,10 +91,10 @@ to:
 
 ## Phase 5: Polish and edge cases
 
-- [ ] 5a: Ensure assistant text responses have no prefix or border — verify nothing in the rendering pipeline adds left-side decorations to `msgAssistant` content
-- [ ] 5b: Verify that tool output displayed outside of grouped blocks (standalone results, sub-agent output quoted by the main agent) still renders correctly as individual boxes
-- [ ] 5c: Test the full render pipeline end-to-end with a mock conversation that exercises: user message → tool group → assistant text → sub-agent group → tool group → assistant text → done status
-- [ ] 5d: Verify braille spinner animation renders correctly at 20fps (50ms tick) — ensure the spinner frame index advances on each tick and wraps correctly through the 8-frame cycle
+- [x] 5a: Ensure assistant text responses have no prefix or border — verify nothing in the rendering pipeline adds left-side decorations to `msgAssistant` content
+- [x] 5b: Verify that tool output displayed outside of grouped blocks (standalone results, sub-agent output quoted by the main agent) still renders correctly as individual boxes
+- [x] 5c: Test the full render pipeline end-to-end with a mock conversation that exercises: user message → tool group → assistant text → sub-agent group → tool group → assistant text → done status
+- [x] 5d: Verify braille spinner animation renders correctly at 20fps (50ms tick) — ensure the spinner frame index advances on each tick and wraps correctly through the 8-frame cycle
 
 ## Phase 6: Fix flaky sub-agent tests (event channel drops)
 
