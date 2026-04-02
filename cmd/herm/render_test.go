@@ -658,6 +658,42 @@ func TestCollapseToolResult(t *testing.T) {
 	}
 }
 
+func TestTrailingNewlineNoEmptyLines(t *testing.T) {
+	strip := func(s string) string {
+		return ansiEscRe.ReplaceAllString(s, "")
+	}
+
+	t.Run("collapseToolResult trims trailing newline", func(t *testing.T) {
+		result := collapseToolResult("line1\nline2\n")
+		if strings.HasSuffix(result, "\n") {
+			t.Errorf("collapseToolResult should trim trailing newline, got %q", result)
+		}
+	})
+
+	t.Run("renderToolBox no empty content line from trailing newline", func(t *testing.T) {
+		box := renderToolBox("~ read file", "content here\n", 80, false, "")
+		lines := strings.Split(strip(box), "\n")
+		last := lines[len(lines)-1]
+		if strings.TrimSpace(last) == "" {
+			t.Errorf("renderToolBox should not have trailing blank line, got lines: %v", lines)
+		}
+	})
+
+	t.Run("renderToolGroup no empty content line from trailing newline", func(t *testing.T) {
+		entries := []toolGroupEntry{
+			{summary: "~ read a.go", result: "file content\n", toolName: "read_file"},
+			{summary: "~ read b.go", result: "more content\n", toolName: "read_file"},
+		}
+		group := renderToolGroup(entries, 80, false, "")
+		for _, line := range strings.Split(strip(group), "\n") {
+			if strings.TrimSpace(line) == "" {
+				t.Error("renderToolGroup should not produce empty content lines from trailing newlines")
+				break
+			}
+		}
+	})
+}
+
 func TestRenderToolBox(t *testing.T) {
 	// Helper to strip ANSI sequences for easier assertion.
 	strip := func(s string) string {
