@@ -2381,3 +2381,164 @@ func TestAgentStatusCheckSuppression(t *testing.T) {
 		}
 	})
 }
+
+func TestDisplayPolishIntegration(t *testing.T) {
+	// End-to-end test covering all display polish fixes:
+	// 1. Agent status checks hidden
+	// 2. Sleep waits hidden
+	// 3. Status line after sub-agent lines
+	// 4. No empty lines from trailing newlines
+	// 5. Sub-agent emoji spacing + live token counts
+
+	strip := func(s string) string {
+		return ansiEscRe.ReplaceAllString(s, "")
+	}
+
+	mainAgentID := "main-agent"
+	subAgentID := "sub-agent-1"
+	now := time.Now().Add(-3 * time.Second)
+
+	app := &App{
+		headless:           true,
+		width:              80,
+		agentRunning:       true,
+		agentStartTime:     now,
+		agentDisplayInTok:  2000,
+		agentDisplayOutTok: 800,
+		mainAgentToolCount: 4,
+	}
+	app.agent = &Agent{id: mainAgentID}
+
+	// Start sub-agent.
+	app.handleAgentEvent(AgentEvent{
+		Type: EventSubAgentStart, AgentID: subAgentID, Task: "Research auth", Mode: "explore",
+	})
+	// Sub-agent tool counts.
+	app.handleAgentEvent(AgentEvent{
+		Type: EventSubAgentStatus, AgentID: subAgentID, Text: "tool: read_file",
+	})
+	app.handleAgentEvent(AgentEvent{
+		Type: EventSubAgentStatus, AgentID: subAgentID, Text: "tool: grep",
+	})
+	// Sub-agent live usage.
+	app.handleAgentEvent(AgentEvent{
+		Type: EventUsage, AgentID: subAgentID,
+		Usage: &types.Usage{InputTokens: 500, OutputTokens: 150},
+	})
+
+	// Agent status check — should be suppressed.
+	app.handleAgentEvent(AgentEvent{
+		Type:      EventToolCallStart,
+		ToolName:  "agent",
+		ToolID:    "status-check-1",
+		AgentID:   mainAgentID,
+		ToolInput: json.RawMessage(`{"task":"status","agent_id":"sub-agent-1"}`),
+	})
+	app.handleAgentEvent(AgentEvent{
+		Type:       EventToolResult,
+		ToolID:     "status-check-1",
+		ToolName:   "agent",
+		AgentID:    mainAgentID,
+		ToolResult: `{"status":"running"}`,
+	})
+
+	// Sleep wait — should be suppressed.
+	app.handleAgentEvent(AgentEvent{
+		Type:      EventToolCallStart,
+		ToolName:  "bash",
+		ToolID:    "sleep-1",
+		AgentID:   mainAgentID,
+		ToolInput: json.RawMessage(`{"command":"sleep 15 && echo done"}`),
+	})
+	app.handleAgentEvent(AgentEvent{
+		Type:       EventToolResult,
+		ToolID:     "sleep-1",
+		ToolName:   "bash",
+		AgentID:    mainAgentID,
+		ToolResult: "done\n",
+	})
+
+	// Visible tool call with trailing newline in result.
+	app.handleAgentEvent(AgentEvent{
+		Type:      EventToolCallStart,
+		ToolName:  "bash",
+		ToolID:    "visible-1",
+		AgentID:   mainAgentID,
+		ToolInput: json.RawMessage(`{"command":"ls -la"}`),
+	})
+	app.handleAgentEvent(AgentEvent{
+		Type:       EventToolResult,
+		ToolID:     "visible-1",
+		ToolName:   "bash",
+		AgentID:    mainAgentID,
+		ToolResult: "file1.txt\nfile2.txt\n",
+	})
+
+	// Verify suppression: only the visible tool call should be in messages.
+	var toolCallCount, toolResultCount int
+	for _, m := range app.messages {
+		if m.kind == msgToolCall {
+			toolCallCount++
+		}
+		if m.kind == msgToolResult {
+			toolResultCount++
+		}
+	}
+	if toolCallCount != 1 {
+		t.Errorf("expected 1 visible tool call, got %d", toolCallCount)
+	}
+	if toolResultCount != 1 {
+		t.Errorf("expected 1 visible tool result, got %d", toolResultCount)
+	}
+
+	// Stats should count all tool results (including suppressed).
+	if app.sessionToolResults != 3 {
+		t.Errorf("sessionToolResults = %d, want 3 (including suppressed)", app.sessionToolResults)
+	}
+
+	// Build the display rows.
+	rows := app.buildBlockRows()
+	allStripped := strip(strings.Join(rows, "\n"))
+
+	// Sub-agent line should include live tokens.
+	if !strings.Contains(allStripped, "↑") || !strings.Contains(allStripped, "↓") {
+		t.Error("expected live token counts in sub-agent display")
+	}
+
+	// Sub-agent line should have space after 🛠️.
+	if !strings.Contains(allStripped, "🛠️ ") {
+		t.Error("expected space after 🛠️ in sub-agent line")
+	}
+
+	// Status line should be after sub-agent lines.
+	subAgentIdx := -1
+	statusIdx := -1
+	for i, r := range rows {
+		s := strip(r)
+		if strings.Contains(s, "Research auth") {
+			subAgentIdx = i
+		}
+		if strings.ContainsAny(s, "⣾⣽⣻⢿⡿⣟⣯⣷") && strings.Contains(s, "🛠️") {
+			statusIdx = i
+		}
+	}
+	if subAgentIdx == -1 {
+		t.Fatal("sub-agent line not found")
+	}
+	if statusIdx == -1 {
+		t.Fatal("status line not found")
+	}
+	if statusIdx <= subAgentIdx {
+		t.Errorf("status line (row %d) should appear after sub-agent line (row %d)", statusIdx, subAgentIdx)
+	}
+
+	// No consecutive blank rows in output (collapsed).
+	prevBlank := false
+	for i, r := range rows {
+		blank := isBlankRow(r)
+		if blank && prevBlank {
+			t.Errorf("consecutive blank rows at index %d", i)
+		}
+		prevBlank = blank
+	}
+}

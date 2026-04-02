@@ -91,4 +91,4 @@ Two issues in `formatSubAgentLine()` (render.go:594-632):
 
 ## Phase 6: Integration tests
 
-- [ ] 6a: Add an end-to-end render test with a mock conversation that includes: agent status checks (should be hidden), sleep waits (should be hidden), active sub-agents with status line (status line at bottom), tool results with trailing newlines (no empty lines in blocks), and sub-agent lines with correct spacing and live token counts
+- [x] 6a: Add an end-to-end render test with a mock conversation that includes: agent status checks (should be hidden), sleep waits (should be hidden), active sub-agents with status line (status line at bottom), tool results with trailing newlines (no empty lines in blocks), and sub-agent lines with correct spacing and live token counts
