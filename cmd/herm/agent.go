@@ -350,6 +350,64 @@ func (a *Agent) findBackgroundWaiter() BackgroundWaiter {
 	return nil
 }
 
+// gracefulExhaustionTimeout is the maximum time to wait for background
+// sub-agents during graceful exhaustion before proceeding with partial results.
+const gracefulExhaustionTimeout = 2 * time.Minute
+
+// gracefulExhaustion is called when the tool loop exhausts its iteration
+// budget while the LLM is still requesting tool calls. It waits for any
+// running background sub-agents, collects their results, and makes one final
+// tools-disabled LLM call so the model can synthesize a response from what
+// it has. The text response is emitted as EventTextDelta by drainStream.
+// Returns the node ID from the final call, or lastNodeID on error.
+func (a *Agent) gracefulExhaustion(ctx context.Context, lastNodeID string) string {
+	// Wait for any running background sub-agents to finish.
+	if bw := a.findBackgroundWaiter(); bw != nil {
+		bw.WaitForBackgroundAgents(gracefulExhaustionTimeout)
+	}
+
+	// Drain background results that arrived since the last LLM call.
+	// These haven't been shown to the model yet.
+	bgResults := a.drainBackgroundResults()
+
+	// Build the final synthesis message.
+	var msg strings.Builder
+	msg.WriteString("[SYSTEM: Tool iteration limit reached. Synthesize a final response from the conversation so far. Do NOT request any tools — this is your last turn.]")
+	if len(bgResults) > 0 {
+		msg.WriteString("\n\n[Background agent results:]\n")
+		for i, r := range bgResults {
+			fmt.Fprintf(&msg, "\n--- Background agent %d ---\n%s\n", i+1, r)
+		}
+	}
+
+	// Make one final LLM call without tools so the model can only produce text.
+	finalOpts := []langdag.PromptOption{
+		langdag.WithSystemPrompt(a.systemPromptWithStats()),
+		langdag.WithMaxTokens(defaultMaxOutputTokens),
+		langdag.WithMaxOutputGroupTokens(defaultMaxOutputGroupTokens),
+		// Deliberately no WithTools — forces a text-only response.
+	}
+	if a.model != "" {
+		finalOpts = append(finalOpts, langdag.WithModel(a.model))
+	}
+	if a.thinking != nil {
+		finalOpts = append(finalOpts, langdag.WithThink(*a.thinking))
+	}
+
+	a.emit(AgentEvent{Type: EventLLMStart})
+	_, finalNodeID, _, err := a.retryableStream(ctx, defaultRetryConfig, func() (*langdag.PromptResult, error) {
+		return a.client.PromptFrom(ctx, lastNodeID, msg.String(), finalOpts...)
+	})
+	if err != nil {
+		a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("final synthesis: %w", err)})
+		return lastNodeID
+	}
+	if finalNodeID != "" {
+		return finalNodeID
+	}
+	return lastNodeID
+}
+
 // Cancel stops the running agent loop.
 func (a *Agent) Cancel() {
 	a.mu.Lock()
@@ -1098,13 +1156,16 @@ func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID st
 		iteration++
 	}
 
-	// Emit an error when the loop exhausted maxToolIterations while the LLM
-	// was still requesting tool calls.
+	// When the loop exhausts maxToolIterations while the LLM still wants
+	// tool calls, perform a graceful wind-down: wait for any background
+	// sub-agents, then make one final tools-disabled LLM call so the model
+	// can synthesize a response from accumulated context.
 	if iteration >= maxIter && len(toolCalls) > 0 {
 		a.emit(AgentEvent{
 			Type:  EventError,
-			Error: fmt.Errorf("reached maximum tool iterations (%d) — stopping to prevent runaway loop", maxIter),
+			Error: fmt.Errorf("reached maximum tool iterations (%d) — synthesizing final response", maxIter),
 		})
+		nodeID = a.gracefulExhaustion(ctx, nodeID)
 	}
 
 	a.emit(AgentEvent{Type: EventDone, NodeID: nodeID})
