@@ -2330,6 +2330,84 @@ func TestStatusLineAfterSubAgentLines(t *testing.T) {
 	}
 }
 
+func TestSubAgentStableOrdering(t *testing.T) {
+	strip := func(s string) string {
+		return ansiEscRe.ReplaceAllString(s, "")
+	}
+
+	t.Run("completed agents appear before running agents", func(t *testing.T) {
+		now := time.Now()
+		app := &App{headless: true, width: 80}
+		app.subAgents = map[string]*subAgentDisplay{
+			"a1": {task: "Running first", mode: "explore", startTime: now.Add(-3 * time.Second)},
+			"a2": {task: "Completed early", mode: "explore", startTime: now.Add(-5 * time.Second), done: true, completedAt: now.Add(-1 * time.Second)},
+			"a3": {task: "Running second", mode: "explore", startTime: now.Add(-1 * time.Second)},
+		}
+		lines := app.subAgentDisplayLines()
+		// Should have: 1 header + 3 agent lines.
+		if len(lines) != 4 {
+			t.Fatalf("got %d lines, want 4", len(lines))
+		}
+		// First agent line (index 1) should be the completed one.
+		first := strip(lines[1])
+		if !strings.Contains(first, "Completed early") {
+			t.Errorf("first agent line = %q, want completed agent first", first)
+		}
+	})
+
+	t.Run("running agents sorted by start time", func(t *testing.T) {
+		now := time.Now()
+		app := &App{headless: true, width: 80}
+		app.subAgents = map[string]*subAgentDisplay{
+			"a1": {task: "Started third", mode: "explore", startTime: now.Add(-1 * time.Second)},
+			"a2": {task: "Started first", mode: "explore", startTime: now.Add(-5 * time.Second)},
+			"a3": {task: "Started second", mode: "explore", startTime: now.Add(-3 * time.Second)},
+		}
+		lines := app.subAgentDisplayLines()
+		if len(lines) != 4 {
+			t.Fatalf("got %d lines, want 4", len(lines))
+		}
+		l1 := strip(lines[1])
+		l2 := strip(lines[2])
+		l3 := strip(lines[3])
+		if !strings.Contains(l1, "Started first") {
+			t.Errorf("line 1 = %q, want 'Started first'", l1)
+		}
+		if !strings.Contains(l2, "Started second") {
+			t.Errorf("line 2 = %q, want 'Started second'", l2)
+		}
+		if !strings.Contains(l3, "Started third") {
+			t.Errorf("line 3 = %q, want 'Started third'", l3)
+		}
+	})
+
+	t.Run("completed agents sorted by completion time", func(t *testing.T) {
+		now := time.Now()
+		app := &App{headless: true, width: 80}
+		app.subAgents = map[string]*subAgentDisplay{
+			"a1": {task: "Still running", mode: "explore", startTime: now.Add(-5 * time.Second)},
+			"a2": {task: "Completed second", mode: "explore", startTime: now.Add(-4 * time.Second), done: true, completedAt: now.Add(-1 * time.Second)},
+			"a3": {task: "Completed first", mode: "explore", startTime: now.Add(-3 * time.Second), done: true, completedAt: now.Add(-2 * time.Second)},
+		}
+		lines := app.subAgentDisplayLines()
+		if len(lines) != 4 {
+			t.Fatalf("got %d lines, want 4", len(lines))
+		}
+		l1 := strip(lines[1])
+		l2 := strip(lines[2])
+		l3 := strip(lines[3])
+		if !strings.Contains(l1, "Completed first") {
+			t.Errorf("line 1 = %q, want 'Completed first'", l1)
+		}
+		if !strings.Contains(l2, "Completed second") {
+			t.Errorf("line 2 = %q, want 'Completed second'", l2)
+		}
+		if !strings.Contains(l3, "Still running") {
+			t.Errorf("line 3 = %q, want 'Still running'", l3)
+		}
+	})
+}
+
 func TestBrailleSpinnerAnimation(t *testing.T) {
 	// Verify spinner frame index advances on each 50ms tick and wraps correctly.
 	for i := 0; i < brailleSpinnerFrameCount*3; i++ {
