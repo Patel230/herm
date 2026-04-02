@@ -160,7 +160,7 @@ The API server exposes langdag over HTTP/SSE. Streaming error paths and edge cas
 
 **Files:** `external-deps-workspace/langdag/sdks/python/langdag/client.py`, `async_client.py`, `exceptions.py`
 
-- [ ] 10a: **SSE stream without done event** — Test both sync and async: server sends start + deltas, then closes. Verify: `StreamResult.node_id` is None or raises `StreamError`, accumulated content is still accessible. Test that consuming the stream iterator completes (does not hang).
+- [x] 10a: **SSE stream without done event** — Tested both sync and async: server sends start + deltas then closes. Both clients complete iteration without hanging. Content from deltas is fully accessible via manual accumulation. No node_id available (all events return None). Parser-level tests verify the same. No bugs found.
 - [ ] 10b: **Provider error mid-stream** — Test: server sends start, 2 deltas, then `event: error\ndata: provider crashed`. Verify: `StreamError` is raised with the error message when iterating, prior deltas are not lost if caller caught partial content.
 - [ ] 10c: **Connection timeout during stream** — Test using httpx mock: configure a timeout that fires after first delta. Verify: raises `ConnectionError` (or `StreamError`), not an unhandled httpx exception. Test both sync and async clients.
 - [ ] 10d: **Invalid SSE event sequence** — Test: server sends delta before start, done without any deltas, multiple done events. Verify: SDK handles gracefully (no crash, reasonable behavior).
