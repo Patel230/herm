@@ -95,3 +95,17 @@ to:
 - [ ] 5b: Verify that tool output displayed outside of grouped blocks (standalone results, sub-agent output quoted by the main agent) still renders correctly as individual boxes
 - [ ] 5c: Test the full render pipeline end-to-end with a mock conversation that exercises: user message → tool group → assistant text → sub-agent group → tool group → assistant text → done status
 - [ ] 5d: Verify braille spinner animation renders correctly at 20fps (50ms tick) — ensure the spinner frame index advances on each tick and wraps correctly through the 8-frame cycle
+
+## Phase 6: Fix flaky sub-agent tests (event channel drops)
+
+Three sub-agent tests are flaky — they pass in isolation but sometimes fail under the full suite. The root cause is `SubAgentTool.forward()` (`subagent.go:141-155`) which uses a non-blocking `select/default` send on the parent event channel. Under contention (many concurrent sub-agents or a full test suite), the channel buffer fills and **critical events** (`EventDone`, `EventError`) are silently dropped, leaving test assertions checking stale state.
+
+Affected tests:
+- `TestSubAgentMaxTurnsPartialOutputPreserved` — text collection stalls when event drain delays
+- `TestSubAgentBackgroundFatalErrorSurfacing` — `EventError` dropped, error missing from result
+- `TestSubAgentBackgroundCompletionInjection` / `TestE2ESubAgentErrorChain` — `EventDone` dropped, `bgAgentState.done` never set
+
+- [ ] 6a: Make `forward()` blocking for critical event types (`EventSubAgentStatus` with `Text:"done"`, `EventUsage`) — these carry state that callers depend on (completion status, token counts). Keep non-blocking for high-frequency display events (`EventSubAgentDelta`, `EventSubAgentStatus` with tool/text updates) where dropping is acceptable. Add a short timeout (e.g. 5s) to the blocking send to prevent indefinite hangs if the parent is stuck
+- [ ] 6b: Increase the parent event channel buffer in tests that spawn concurrent sub-agents — the current `make(chan AgentEvent, 64)` is too small when multiple agents each emit ~20 events. Use a buffer proportional to the number of agents (e.g. `agents * 64`)
+- [ ] 6c: Add a `forwardBlocking()` helper alongside the existing `forward()` for the critical-event path, with a context-aware timeout and a clear error log when the send times out (replacing the silent `debugLog` drop)
+- [ ] 6d: Verify all three previously-flaky tests pass reliably under `go test -count=20 -race` with the fixes applied
