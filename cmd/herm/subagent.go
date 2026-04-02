@@ -20,6 +20,11 @@ import (
 // A "turn" is one LLM response cycle, which may contain multiple tool calls.
 const defaultSubAgentMaxTurns = 20
 
+// subAgentIterationBuffer is extra iterations added to the Agent's maxToolIterations
+// beyond maxTurns. This ensures the sub-agent's drain-loop turn counting fires first,
+// with the Agent's loop cap as a safety backstop.
+const subAgentIterationBuffer = 2
+
 // defaultMaxAgentDepth is the default maximum nesting depth for sub-agents.
 // Depth 1 means the main agent can spawn sub-agents, but sub-agents cannot
 // spawn their own sub-agents — matching Claude Code's behavior.
@@ -313,7 +318,7 @@ func (t *SubAgentTool) Execute(ctx context.Context, input json.RawMessage) (stri
 	systemPrompt := buildSubAgentSystemPrompt(subTools, t.serverTools, t.workDir, t.containerImage, &snap.snapshot)
 
 	agentOpts := []AgentOption{
-		WithMaxToolIterations(t.maxTurns),
+		WithMaxToolIterations(t.maxTurns + subAgentIterationBuffer),
 	}
 	if t.streamTimeout > 0 {
 		agentOpts = append(agentOpts, WithStreamChunkTimeout(t.streamTimeout))
@@ -521,7 +526,7 @@ func (t *SubAgentTool) executeBackground(_ context.Context, in subAgentInput) (s
 	systemPrompt := buildSubAgentSystemPrompt(subTools, t.serverTools, t.workDir, t.containerImage, &snap.snapshot)
 
 	agentOpts := []AgentOption{
-		WithMaxToolIterations(t.maxTurns),
+		WithMaxToolIterations(t.maxTurns + subAgentIterationBuffer),
 	}
 	if t.streamTimeout > 0 {
 		agentOpts = append(agentOpts, WithStreamChunkTimeout(t.streamTimeout))

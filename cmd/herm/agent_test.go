@@ -1251,14 +1251,15 @@ func TestSubAgentReceivesMaxToolIterations(t *testing.T) {
 	if sat.maxTurns != 15 {
 		t.Errorf("maxTurns = %d, want 15", sat.maxTurns)
 	}
-	// When creating agents, WithMaxToolIterations(t.maxTurns) is passed.
+	// When creating agents, WithMaxToolIterations(maxTurns + buffer) is passed.
 	// Verify by creating an agent with the same pattern used in subagent.go.
 	agentOpts := []AgentOption{
-		WithMaxToolIterations(sat.maxTurns),
+		WithMaxToolIterations(sat.maxTurns + subAgentIterationBuffer),
 	}
 	agent := NewAgent(client, nil, nil, "", "", 0, agentOpts...)
-	if agent.maxToolIterations != 15 {
-		t.Errorf("sub-agent maxToolIterations = %d, want 15", agent.maxToolIterations)
+	want := 15 + subAgentIterationBuffer
+	if agent.maxToolIterations != want {
+		t.Errorf("sub-agent maxToolIterations = %d, want %d", agent.maxToolIterations, want)
 	}
 }
 
