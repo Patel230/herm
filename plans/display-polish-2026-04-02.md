@@ -45,7 +45,7 @@ The main agent often calls `bash` with commands like `sleep 15 && echo "done wai
 - Do NOT suppress bash commands that contain sleep as part of a larger pipeline
 - Use a simple regex/heuristic: `^\s*sleep\s+\d+\s*(&&\s*echo\s+.*)?$`
 
-- [ ] 2a: Add an `isSleepWaitCommand(input json.RawMessage) bool` helper in `content.go` that parses the bash command and checks if it's a pure sleep/wait
+- [x] 2a: Add an `isSleepWaitCommand(input json.RawMessage) bool` helper in `content.go` that parses the bash command and checks if it's a pure sleep/wait
 - [ ] 2b: Extend the suppression check in `EventToolCallStart` to also suppress bash sleep-wait commands
 - [ ] 2c: Add tests for sleep detection: pure sleep suppressed, sleep-in-pipeline not suppressed, non-sleep bash visible
 

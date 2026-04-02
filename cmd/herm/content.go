@@ -207,6 +207,26 @@ func isAgentStatusCheck(toolName string, input json.RawMessage) bool {
 	return false
 }
 
+// sleepWaitRe matches pure sleep commands optionally followed by an echo.
+// Examples: "sleep 15", "sleep 30 && echo done", "sleep 5 && echo \"done waiting\""
+var sleepWaitRe = regexp.MustCompile(`^\s*sleep\s+\d+\s*(&&\s*echo\s+.*)?\s*$`)
+
+// isSleepWaitCommand returns true if the tool call is a "bash" command
+// containing only a sleep (optionally followed by echo). These are internal
+// polling waits whose purpose is already conveyed by the sub-agent display.
+func isSleepWaitCommand(toolName string, input json.RawMessage) bool {
+	if toolName != "bash" {
+		return false
+	}
+	var in struct {
+		Command string `json:"command"`
+	}
+	if json.Unmarshal(input, &in) != nil || in.Command == "" {
+		return false
+	}
+	return sleepWaitRe.MatchString(in.Command)
+}
+
 // ─── Tool result helpers ───
 
 func toolCallSummary(toolName string, input json.RawMessage) string {
