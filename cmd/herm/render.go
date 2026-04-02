@@ -398,6 +398,14 @@ func (a *App) buildBlockRows() []string {
 		}
 		rows = append(rows, "")
 	}
+	// Show live sub-agent activity before the status line so the status line
+	// is always the last element before the input area.
+	if subLines := a.subAgentDisplayLines(); len(subLines) > 0 {
+		for _, line := range subLines {
+			rows = append(rows, wrapString(line, 0, a.width)...)
+		}
+		rows = append(rows, "")
+	}
 	// Show animated status line while agent is running, or dim elapsed when done
 	if a.agentRunning && a.awaitingApproval {
 		// Paused: show dim elapsed while waiting for user approval
@@ -426,13 +434,6 @@ func (a *App) buildBlockRows() []string {
 			formatTokenCount(a.mainAgentInputTokens),
 			formatTokenCount(a.mainAgentOutputTokens))
 		rows = append(rows, wrapString(elapsed, 0, a.width)...)
-		rows = append(rows, "")
-	}
-	// Show live sub-agent activity (capped to 3 lines, dim/italic)
-	if subLines := a.subAgentDisplayLines(); len(subLines) > 0 {
-		for _, line := range subLines {
-			rows = append(rows, wrapString(line, 0, a.width)...)
-		}
 		rows = append(rows, "")
 	}
 	return collapseBlankRows(rows)
