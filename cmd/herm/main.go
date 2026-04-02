@@ -151,7 +151,8 @@ type App struct {
 	sessionToolBytes    int            // cumulative tool result bytes this session
 	sessionToolStats    map[string][2]int // tool name → [count, bytes]
 	lastModelID    string                       // last model used, for detecting changes
-	subAgents      map[string]*subAgentDisplay // per-agent display state keyed by AgentID
+	subAgents        map[string]*subAgentDisplay // per-agent display state keyed by AgentID
+	suppressedToolIDs map[string]bool              // tool IDs whose UI messages should be hidden
 	containerImage string                       // runtime container image name (not persisted)
 	updateAvailable string   // version tag if update is available
 
