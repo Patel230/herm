@@ -2090,6 +2090,71 @@ func TestBrailleSpinnerAnimation(t *testing.T) {
 	}
 }
 
+func TestIsSleepWaitCommand(t *testing.T) {
+	tests := []struct {
+		name     string
+		toolName string
+		input    string
+		want     bool
+	}{
+		{"pure sleep", "bash", `{"command":"sleep 15"}`, true},
+		{"sleep with echo", "bash", `{"command":"sleep 30 && echo done"}`, true},
+		{"sleep with quoted echo", "bash", `{"command":"sleep 5 && echo \"done waiting\""}`, true},
+		{"sleep in pipeline", "bash", `{"command":"sleep 5 && ls -la && echo done"}`, false},
+		{"non-sleep bash", "bash", `{"command":"ls -la"}`, false},
+		{"non-bash tool", "agent", `{"command":"sleep 10"}`, false},
+		{"empty command", "bash", `{"command":""}`, false},
+		{"sleep with leading space", "bash", `{"command":"  sleep 10"}`, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isSleepWaitCommand(tt.toolName, json.RawMessage(tt.input))
+			if got != tt.want {
+				t.Errorf("isSleepWaitCommand(%q, %s) = %v, want %v", tt.toolName, tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSleepWaitSuppression(t *testing.T) {
+	t.Run("pure sleep is hidden from UI", func(t *testing.T) {
+		app := &App{headless: true, width: 80}
+		app.handleAgentEvent(AgentEvent{
+			Type:      EventToolCallStart,
+			ToolName:  "bash",
+			ToolID:    "tool-sleep-1",
+			ToolInput: json.RawMessage(`{"command":"sleep 15 && echo done"}`),
+		})
+		for _, m := range app.messages {
+			if m.kind == msgToolCall {
+				t.Error("sleep command should not produce a msgToolCall")
+			}
+		}
+		if !app.suppressedToolIDs["tool-sleep-1"] {
+			t.Error("sleep tool ID should be in suppressedToolIDs")
+		}
+	})
+
+	t.Run("non-sleep bash is NOT suppressed", func(t *testing.T) {
+		app := &App{headless: true, width: 80}
+		app.handleAgentEvent(AgentEvent{
+			Type:      EventToolCallStart,
+			ToolName:  "bash",
+			ToolID:    "tool-bash-1",
+			ToolInput: json.RawMessage(`{"command":"ls -la"}`),
+		})
+		var found bool
+		for _, m := range app.messages {
+			if m.kind == msgToolCall {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("non-sleep bash should produce a msgToolCall")
+		}
+	})
+}
+
 func TestAgentStatusCheckSuppression(t *testing.T) {
 	t.Run("agent status check is hidden from UI", func(t *testing.T) {
 		app := &App{headless: true, width: 80}

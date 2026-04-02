@@ -47,7 +47,7 @@ The main agent often calls `bash` with commands like `sleep 15 && echo "done wai
 
 - [x] 2a: Add an `isSleepWaitCommand(input json.RawMessage) bool` helper in `content.go` that parses the bash command and checks if it's a pure sleep/wait
 - [x] 2b: Extend the suppression check in `EventToolCallStart` to also suppress bash sleep-wait commands
-- [ ] 2c: Add tests for sleep detection: pure sleep suppressed, sleep-in-pipeline not suppressed, non-sleep bash visible
+- [x] 2c: Add tests for sleep detection: pure sleep suppressed, sleep-in-pipeline not suppressed, non-sleep bash visible
 
 ## Phase 3: Move status line below sub-agent display
 
