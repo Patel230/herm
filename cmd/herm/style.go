@@ -189,8 +189,9 @@ func renderMessage(msg chatMessage) string {
 // The box has top/bottom borders but no side borders. The entire output is
 // styled dim (or red for errors). Title uses dim+italic.
 func renderToolBox(title, content string, maxWidth int, isError bool, durationStr string) string {
-	// Replace tabs with single spaces for compact, predictable display.
-	content = strings.ReplaceAll(content, "\t", " ")
+	// Replace tabs with single spaces for compact, predictable display,
+	// and trim trailing newlines to avoid blank lines inside the box.
+	content = strings.TrimRight(strings.ReplaceAll(content, "\t", " "), "\n")
 	// Compute inner width from title and content lines.
 	titleVW := visibleWidth(title)
 	innerWidth := titleVW + 2 // "┌ " + title + " " + pad + "┐" → need at least title + 2 spaces
