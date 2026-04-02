@@ -250,66 +250,109 @@ func wrapString(s string, startCol int, w int) []string {
 	return rows
 }
 
+// toolGroupEntry represents a single tool call (and optional result) within a grouped block.
+type toolGroupEntry struct {
+	summary  string        // tool call summary text (e.g. "~ $ ls", "~ edit foo.go")
+	toolName string        // original tool name for output filtering rules
+	result   string        // collapsed tool result content (empty if no result)
+	isError  bool          // whether the result is an error
+	duration time.Duration // tool execution time
+}
+
+// toolGroup represents a sequence of consecutive tool call/result pairs.
+type toolGroup struct {
+	entries    []toolGroupEntry
+	consumed   int  // total messages consumed from the message list
+	inProgress bool // last entry has no result (tool still running)
+}
+
+// collectToolGroup scans messages starting at startIdx and collects consecutive
+// tool call/result pairs into a group. A group breaks when a non-tool message
+// is encountered or a tool call is found without a result (in-progress).
+func collectToolGroup(messages []chatMessage, startIdx int) toolGroup {
+	var g toolGroup
+	i := startIdx
+	for i < len(messages) && messages[i].kind == msgToolCall {
+		entry := toolGroupEntry{
+			summary:  strings.ReplaceAll(messages[i].content, "\r", ""),
+			toolName: messages[i].toolName,
+		}
+		g.consumed++
+		i++
+		// Check for paired result.
+		if i < len(messages) && messages[i].kind == msgToolResult {
+			entry.result = strings.ReplaceAll(messages[i].content, "\r", "")
+			entry.isError = messages[i].isError
+			entry.duration = messages[i].duration
+			g.consumed++
+			i++
+		} else {
+			// No result — in-progress (last entry of the group).
+			g.inProgress = true
+			g.entries = append(g.entries, entry)
+			break
+		}
+		g.entries = append(g.entries, entry)
+	}
+	return g
+}
+
 func (a *App) buildBlockRows() []string {
 	var rows []string
 	for _, line := range buildLogo(a.width) {
 		rows = append(rows, wrapString(line, 0, a.width)...)
 	}
 	inCodeBlock := false
-	skipNext := false
+	skipUntil := 0
 	for i, msg := range a.messages {
-		if skipNext {
-			skipNext = false
-			// Still emit trailing blank line logic below.
-			goto blankLine
+		if i < skipUntil {
+			continue
 		}
 
-		// Tool call + result pair → render as a single box.
+		// Consecutive tool calls → collect into a group and render.
 		if msg.kind == msgToolCall {
-			title := strings.ReplaceAll(msg.content, "\r", "")
-			nextIdx := i + 1
-			if nextIdx < len(a.messages) && a.messages[nextIdx].kind == msgToolResult {
-				// Paired: render full box.
-				result := a.messages[nextIdx]
-				content := strings.ReplaceAll(result.content, "\r", "")
-				box := renderToolBox(title, content, a.width, result.isError, formatDuration(result.duration))
-				if msg.leadBlank {
-					rows = append(rows, "")
-				}
-				for _, logLine := range strings.Split(box, "\n") {
-					rows = append(rows, wrapString(logLine, 0, a.width)...)
-				}
-				skipNext = true
-				goto blankLine
-			}
-			// Unpaired (in-progress): show open box, or full box with live timer after 500ms.
+			group := collectToolGroup(a.messages, i)
+			skipUntil = i + group.consumed
 			if msg.leadBlank {
 				rows = append(rows, "")
 			}
-			var liveDur string
-			if !a.toolStartTime.IsZero() {
-				liveDur = formatDuration(time.Since(a.toolStartTime))
+			// Render each entry as an individual box (renderToolGroup will replace this).
+			for j, entry := range group.entries {
+				isLast := j == len(group.entries)-1
+				if isLast && group.inProgress {
+					var liveDur string
+					if !a.toolStartTime.IsZero() {
+						liveDur = formatDuration(time.Since(a.toolStartTime))
+					}
+					box := renderToolBox(entry.summary, "", a.width, false, liveDur)
+					if liveDur == "" {
+						boxLines := strings.Split(box, "\n")
+						if len(boxLines) > 1 {
+							boxLines = boxLines[:len(boxLines)-1]
+						}
+						for _, logLine := range boxLines {
+							rows = append(rows, wrapString(logLine, 0, a.width)...)
+						}
+					} else {
+						for _, logLine := range strings.Split(box, "\n") {
+							rows = append(rows, wrapString(logLine, 0, a.width)...)
+						}
+					}
+				} else {
+					box := renderToolBox(entry.summary, entry.result, a.width, entry.isError, formatDuration(entry.duration))
+					for _, logLine := range strings.Split(box, "\n") {
+						rows = append(rows, wrapString(logLine, 0, a.width)...)
+					}
+				}
 			}
-			box := renderToolBox(title, "", a.width, false, liveDur)
-			if liveDur == "" {
-				// Under 500ms: strip bottom border (open box).
-				boxLines := strings.Split(box, "\n")
-				if len(boxLines) > 1 {
-					boxLines = boxLines[:len(boxLines)-1] // remove └...┘
-				}
-				for _, logLine := range boxLines {
-					rows = append(rows, wrapString(logLine, 0, a.width)...)
-				}
-			} else {
-				// Over 500ms: show full box with live duration.
-				for _, logLine := range strings.Split(box, "\n") {
-					rows = append(rows, wrapString(logLine, 0, a.width)...)
-				}
+			// Blank line after group unless next message has leadBlank.
+			if skipUntil >= len(a.messages) || !a.messages[skipUntil].leadBlank {
+				rows = append(rows, "")
 			}
-			goto blankLine
+			continue
 		}
 
-		// Tool result without preceding tool call — render as a standalone box.
+		// Standalone tool result (no preceding tool call) — render as box.
 		if msg.kind == msgToolResult {
 			content := strings.ReplaceAll(msg.content, "\r", "")
 			box := renderToolBox("~ result", content, a.width, msg.isError, formatDuration(msg.duration))
@@ -319,7 +362,11 @@ func (a *App) buildBlockRows() []string {
 			for _, logLine := range strings.Split(box, "\n") {
 				rows = append(rows, wrapString(logLine, 0, a.width)...)
 			}
-			goto blankLine
+			nextIdx := i + 1
+			if nextIdx >= len(a.messages) || !a.messages[nextIdx].leadBlank {
+				rows = append(rows, "")
+			}
+			continue
 		}
 
 		{
@@ -343,16 +390,11 @@ func (a *App) buildBlockRows() []string {
 			}
 		}
 
-	blankLine:
 		// Add blank line after block, unless:
 		// - next message already has leadBlank, or
 		// - this is an assistant message followed by another assistant message
 		//   (consecutive assistant chunks already contain their own newlines)
-		// When we consumed a pair (skipNext was just set), look past the result.
 		peekIdx := i + 1
-		if skipNext {
-			peekIdx = i + 2
-		}
 		peekHasBlank := peekIdx < len(a.messages) && a.messages[peekIdx].leadBlank
 		peekIsAssistant := peekIdx < len(a.messages) && a.messages[peekIdx].kind == msgAssistant
 		if !peekHasBlank && !(msg.kind == msgAssistant && peekIsAssistant) {

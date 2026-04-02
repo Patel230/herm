@@ -377,7 +377,7 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 		if a.traceCollector != nil {
 			a.traceCollector.StartToolCall(event.AgentID, event.ToolID, event.ToolName, event.ToolInput)
 		}
-		a.messages = append(a.messages, chatMessage{kind: msgToolCall, content: toolCallSummary(event.ToolName, event.ToolInput), leadBlank: true})
+		a.messages = append(a.messages, chatMessage{kind: msgToolCall, content: toolCallSummary(event.ToolName, event.ToolInput), leadBlank: true, toolName: event.ToolName})
 		a.toolStartTime = time.Now()
 		if a.toolTimer != nil {
 			a.toolTimer.Stop()
@@ -418,7 +418,7 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 			a.traceCollector.EndToolCall(event.ToolID, event.ToolResult, event.IsError, event.Duration)
 			a.traceCollector.FlushToFile(a.traceFilePath)
 		}
-		a.messages = append(a.messages, chatMessage{kind: msgToolResult, content: result, isError: event.IsError, duration: event.Duration})
+		a.messages = append(a.messages, chatMessage{kind: msgToolResult, content: result, isError: event.IsError, duration: event.Duration, toolName: event.ToolName})
 		a.render()
 
 	case EventUsage:
