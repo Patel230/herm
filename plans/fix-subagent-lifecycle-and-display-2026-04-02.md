@@ -59,10 +59,10 @@ The fix: keep draining sub-agent events even after the main agent's turn ends, a
 
 Also, the `agentTicker` is stopped on `EventDone`, which means the 50ms render cadence stops. Sub-agent spinner animations and elapsed time counters would freeze. The ticker should keep running as long as there are active sub-agents.
 
-- [ ] 3a: Add a helper `hasActiveSubAgents() bool` on `App` that checks if any entry in `a.subAgents` has `done == false`
-- [ ] 3b: Modify `drainAgentEvents()` to also drain when `hasActiveSubAgents()` returns true, even if `agentRunning` is false
-- [ ] 3c: In the main event loop's `else` branch (`main.go:401-414`), add `agent.Events()` to the select when `hasActiveSubAgents()` is true. Apply the same fix to the headless loop (`main.go:474-487`)
-- [ ] 3d: In the `EventDone` handler, don't stop the `agentTicker` if `hasActiveSubAgents()` returns true. Stop it later — when the last sub-agent completes (in the `EventSubAgentStatus` "done" handler, check if no active sub-agents remain and stop the ticker then)
+- [x] 3a: Add a helper `hasActiveSubAgents() bool` on `App` that checks if any entry in `a.subAgents` has `done == false`
+- [x] 3b: Modify `drainAgentEvents()` to also drain when `hasActiveSubAgents()` returns true, even if `agentRunning` is false
+- [x] 3c: In the main event loop's `else` branch, add `agent.Events()` to the select when `hasActiveSubAgents()` is true. Applied same fix to headless loop
+- [x] 3d: In `EventDone`, don't stop `agentTicker` if `hasActiveSubAgents()`. Stop it when the last sub-agent completes in `EventSubAgentStatus` handler
 - [ ] 3e: Add tests: verify that sub-agent status events are processed after the main agent emits `EventDone`; verify spinner/elapsed time continues updating for active sub-agents
 
 ## Phase 4: Integration test — full background lifecycle

@@ -398,6 +398,29 @@ func (a *App) Run() error {
 				a.handleResult(result)
 				a.drainAgentEvents()
 			}
+		} else if a.agent != nil && a.hasActiveSubAgents() {
+			// Main agent stopped but sub-agents are still running —
+			// keep draining their events so the display stays live.
+			select {
+			case ch, ok := <-a.stdinCh:
+				if !ok {
+					goto done
+				}
+				a.drainResults()
+				a.drainAgentEvents()
+				if a.handleByte(ch, a.stdinCh, a.readByte) {
+					goto done
+				}
+			case event, ok := <-a.agent.Events():
+				if ok {
+					a.handleAgentEvent(event)
+				}
+				a.drainResults()
+				a.drainAgentEvents()
+			case result := <-a.resultCh:
+				a.handleResult(result)
+				a.drainAgentEvents()
+			}
 		} else {
 			select {
 			case ch, ok := <-a.stdinCh:
@@ -471,8 +494,9 @@ ready:
 		return fmt.Errorf("agent failed to start")
 	}
 
-	// Process agent events and async results until the agent is done.
-	for a.agentRunning {
+	// Process agent events and async results until the agent is done
+	// and all sub-agents have finished.
+	for a.agentRunning || a.hasActiveSubAgents() {
 		select {
 		case event, ok := <-a.agent.Events():
 			if !ok {

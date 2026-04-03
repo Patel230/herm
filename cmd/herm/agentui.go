@@ -289,8 +289,18 @@ func (a *App) startAgent(userMessage string) {
 	go agent.Run(context.Background(), userMessage, parentNodeID)
 }
 
+// hasActiveSubAgents returns true if any sub-agent in the display map is still running.
+func (a *App) hasActiveSubAgents() bool {
+	for _, sa := range a.subAgents {
+		if !sa.done {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *App) drainAgentEvents() {
-	if a.agent == nil || !a.agentRunning {
+	if a.agent == nil || (!a.agentRunning && !a.hasActiveSubAgents()) {
 		return
 	}
 	// Cap drain iterations to avoid starving stdin processing.
@@ -505,7 +515,9 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 		a.agentRunning = false
 		a.cancelSent = false
 		a.traceUsageSeen = false
-		if a.agentTicker != nil {
+		// Keep the ticker running if sub-agents are still active so their
+		// spinners and elapsed times keep updating.
+		if a.agentTicker != nil && !a.hasActiveSubAgents() {
 			a.agentTicker.Stop()
 			a.agentTicker = nil
 		}
@@ -575,6 +587,12 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 					kind:    msgInfo,
 					content: failMsg,
 				})
+			}
+			// If the main agent already stopped and this was the last active
+			// sub-agent, stop the ticker that was kept alive for animations.
+			if !a.agentRunning && !a.hasActiveSubAgents() && a.agentTicker != nil {
+				a.agentTicker.Stop()
+				a.agentTicker = nil
 			}
 		} else {
 			sa.status = event.Text
