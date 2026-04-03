@@ -227,6 +227,22 @@ func (t *SubAgentTool) bgAgentStatus(agentID string) (string, error) {
 	return fmt.Sprintf("[agent_id: %s] [status: running] Task: %s (elapsed: %s)", agentID, state.task, elapsed), nil
 }
 
+// HasPendingBackgroundAgents returns true if any background sub-agent has not
+// yet completed. Thread-safe; non-blocking.
+func (t *SubAgentTool) HasPendingBackgroundAgents() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, st := range t.bgAgents {
+		st.mu.Lock()
+		done := st.done
+		st.mu.Unlock()
+		if !done {
+			return true
+		}
+	}
+	return false
+}
+
 // bgWaitPollInterval is the polling interval for WaitForBackgroundAgents.
 const bgWaitPollInterval = 250 * time.Millisecond
 

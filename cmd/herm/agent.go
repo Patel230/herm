@@ -122,10 +122,11 @@ type Tool interface {
 }
 
 // BackgroundWaiter is an optional interface implemented by tools that manage
-// background sub-agents. Used by runLoop during graceful exhaustion to wait
-// for running background agents before the final synthesis call.
+// background sub-agents. Used by runLoop during graceful exhaustion and
+// background completion to wait for running background agents.
 type BackgroundWaiter interface {
 	WaitForBackgroundAgents(timeout time.Duration) []string
+	HasPendingBackgroundAgents() bool
 }
 
 // AgentEventType identifies the kind of agent event.

@@ -4183,18 +4183,26 @@ type testBgWaiterTool struct {
 	testTool
 	mu       sync.Mutex
 	called   bool
+	pending  bool   // if true, HasPendingBackgroundAgents returns true
 	injectFn func() // called during WaitForBackgroundAgents to simulate bg agent completion
 }
 
 func (t *testBgWaiterTool) WaitForBackgroundAgents(_ time.Duration) []string {
 	t.mu.Lock()
 	t.called = true
+	t.pending = false // after waiting, agents are done
 	fn := t.injectFn
 	t.mu.Unlock()
 	if fn != nil {
 		fn()
 	}
 	return nil
+}
+
+func (t *testBgWaiterTool) HasPendingBackgroundAgents() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.pending
 }
 
 func (t *testBgWaiterTool) wasCalled() bool {
