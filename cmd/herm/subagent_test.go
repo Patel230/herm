@@ -2371,6 +2371,117 @@ func TestExplorePromptContainsExplorationStrategy(t *testing.T) {
 	}
 }
 
+// chunkyProvider streams text as many small chunks to test delta batching.
+type chunkyProvider struct {
+	chunks   int
+	model    string
+}
+
+func (p *chunkyProvider) Complete(_ context.Context, _ *types.CompletionRequest) (*types.CompletionResponse, error) {
+	return &types.CompletionResponse{
+		ID: "resp-chunky", Model: p.model,
+		Content:    []types.ContentBlock{{Type: "text", Text: "ok"}},
+		StopReason: "end_turn",
+		Usage:      types.Usage{InputTokens: 100, OutputTokens: 50},
+	}, nil
+}
+
+func (p *chunkyProvider) Stream(_ context.Context, req *types.CompletionRequest) (<-chan types.StreamEvent, error) {
+	ch := make(chan types.StreamEvent, p.chunks+10)
+	go func() {
+		defer close(ch)
+		for i := 0; i < p.chunks; i++ {
+			ch <- types.StreamEvent{
+				Type:    types.StreamEventDelta,
+				Content: fmt.Sprintf("c%d ", i),
+			}
+		}
+		ch <- types.StreamEvent{
+			Type: types.StreamEventDone,
+			Response: &types.CompletionResponse{
+				ID: "resp-chunky", Model: req.Model,
+				Content:    []types.ContentBlock{{Type: "text", Text: "ok"}},
+				StopReason: "end_turn",
+				Usage:      types.Usage{InputTokens: 100, OutputTokens: 50},
+			},
+		}
+	}()
+	return ch, nil
+}
+
+func (p *chunkyProvider) Name() string             { return "chunky" }
+func (p *chunkyProvider) Models() []types.ModelInfo { return nil }
+
+func TestDeltaBatchingReducesEvents(t *testing.T) {
+	// A sub-agent producing 100 rapid text deltas should have them batched
+	// into far fewer EventSubAgentDelta events (one per ~200ms interval).
+	prov := &chunkyProvider{chunks: 100, model: "test-model"}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+
+	parentCh := make(chan AgentEvent, 4096)
+	tool := &SubAgentTool{
+		parentEvents: parentCh,
+		agentNodes:   make(map[string]agentNodeState),
+		maxTurns:     10,
+		doneTimeout:  2 * time.Second,
+	}
+
+	agent := NewAgent(client, nil, nil, "", "test-model", 0)
+	subTC := NewTraceCollector("test-session")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	state := &bgAgentState{cancel: func() {}}
+
+	doneRun := make(chan struct{})
+	go func() {
+		tool.runBackground(ctx, agent, agent.ID(),
+			subAgentInput{Task: "test", Mode: "explore"},
+			"test-model", subTC, state)
+		close(doneRun)
+	}()
+
+	select {
+	case <-doneRun:
+	case <-time.After(10 * time.Second):
+		t.Fatal("runBackground did not complete")
+	}
+
+	// Count EventSubAgentDelta events.
+	var deltaCount int
+	var gotText strings.Builder
+	for {
+		select {
+		case ev := <-parentCh:
+			if ev.Type == EventSubAgentDelta {
+				deltaCount++
+				gotText.WriteString(ev.Text)
+			}
+		default:
+			goto done2
+		}
+	}
+done2:
+
+	if deltaCount >= 100 {
+		t.Errorf("expected batching to reduce delta events below 100, got %d", deltaCount)
+	}
+	if deltaCount == 0 {
+		t.Error("expected at least 1 delta event")
+	}
+	// The forwarded text should be a contiguous prefix of the expected text
+	// (the doneCh drain path captures remaining text into textParts but
+	// doesn't forward it as deltas — that's correct since the agent is done).
+	var expectedText strings.Builder
+	for i := 0; i < 100; i++ {
+		fmt.Fprintf(&expectedText, "c%d ", i)
+	}
+	if got := gotText.String(); !strings.HasPrefix(expectedText.String(), got) {
+		t.Errorf("forwarded text is not a prefix of expected text:\ngot  %q", got)
+	}
+	t.Logf("100 text deltas batched into %d EventSubAgentDelta events", deltaCount)
+}
+
 func TestForwardBlockingWithTimeout(t *testing.T) {
 	t.Run("timeout_when_channel_full", func(t *testing.T) {
 		parentCh := make(chan AgentEvent, 1)

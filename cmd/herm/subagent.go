@@ -161,6 +161,11 @@ const forwardBlockingTimeout = 5 * time.Second
 // near capacity for several seconds — 30s gives ample drain time.
 const forwardBlockingDoneTimeout = 30 * time.Second
 
+// deltaForwardInterval is the minimum time between EventSubAgentDelta forwards
+// in runBackground. Text deltas are accumulated and sent as one combined event,
+// reducing channel pressure from ~3000 events per stream to ~150.
+const deltaForwardInterval = 200 * time.Millisecond
+
 // forward sends a sub-agent event to the parent's event channel if set.
 // Non-blocking: drops the event if the channel is full. Use for high-frequency
 // display events (EventSubAgentDelta, EventSubAgentStatus with tool/text updates)
@@ -702,6 +707,19 @@ func (t *SubAgentTool) runBackground(ctx context.Context, agent *Agent, agentID 
 	responseCounted := false
 	usageSeen := false
 
+	// Delta batching: accumulate text deltas and forward them at most once
+	// per deltaForwardInterval to reduce channel pressure.
+	var deltaBuf strings.Builder
+	lastDeltaForward := time.Now()
+	flushDelta := func() {
+		if deltaBuf.Len() == 0 {
+			return
+		}
+		t.forward(AgentEvent{Type: EventSubAgentDelta, AgentID: agentID, Text: deltaBuf.String()})
+		deltaBuf.Reset()
+		lastDeltaForward = time.Now()
+	}
+
 	doneCh := agent.DoneCh()
 	eventCh := agent.Events()
 
@@ -710,6 +728,7 @@ drainLoop:
 		select {
 		case event, ok := <-eventCh:
 			if !ok {
+				flushDelta()
 				break drainLoop
 			}
 			switch event.Type {
@@ -720,7 +739,10 @@ drainLoop:
 				}
 				textParts = append(textParts, event.Text)
 				subTC.AddTextDelta(agentID, event.Text)
-				t.forward(AgentEvent{Type: EventSubAgentDelta, AgentID: agentID, Text: event.Text})
+				deltaBuf.WriteString(event.Text)
+				if time.Since(lastDeltaForward) >= deltaForwardInterval {
+					flushDelta()
+				}
 			case EventToolCallStart:
 				if !responseCounted {
 					turns++
@@ -750,6 +772,7 @@ drainLoop:
 				usageSeen = true
 				t.forwardBlocking(event)
 			case EventDone:
+				flushDelta()
 				subTC.Finalize()
 				subTrace := subTC.BuildSubAgentEvent(agentID, in.Task, model, turns, t.maxTurns)
 				t.forwardBlockingWithTimeout(AgentEvent{
@@ -838,6 +861,7 @@ drainLoop:
 	}
 
 	// Fallback: channel closed or doneCh fired without EventDone.
+	flushDelta()
 	subTC.Finalize()
 	subTrace := subTC.BuildSubAgentEvent(agentID, in.Task, model, turns, t.maxTurns)
 	t.forwardBlockingWithTimeout(AgentEvent{

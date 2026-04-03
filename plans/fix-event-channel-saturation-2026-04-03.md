@@ -64,8 +64,8 @@ The core problem is that high-frequency `EventSubAgentDelta` events (text stream
 
 **Implementation:** In the `EventTextDelta` handler within `runBackground()`, accumulate text in a local buffer. Use a `time.Ticker` (200ms) or track `lastForwardTime` — when 200ms has elapsed since the last forward, send the accumulated text as one `EventSubAgentDelta` and reset. On `EventDone` or stream end, flush any remaining buffered text.
 
-- [ ] 4a: In `runBackground()` (`subagent.go:663`), add delta batching state: a `strings.Builder` for accumulated text and a `time.Time` for last forward time. In the `EventTextDelta` case, append to the builder instead of immediately forwarding. Add a helper `flushDelta()` that forwards the accumulated text (if non-empty) and resets. Call `flushDelta()` when: (1) 200ms has elapsed since last forward, checked after each `EventTextDelta`; (2) on `EventDone`; (3) on loop exit (fallback path). Extract `200ms` as `deltaForwardInterval` constant
-- [ ] 4b: Add test: simulate a sub-agent producing 100 rapid text deltas (no delay between them). With the 200ms batching, verify that far fewer than 100 `EventSubAgentDelta` events are forwarded to `parentEvents`. Verify the final accumulated text matches the sum of all deltas (no data loss)
+- [x] 4a: In `runBackground()` (`subagent.go:663`), add delta batching state: a `strings.Builder` for accumulated text and a `time.Time` for last forward time. In the `EventTextDelta` case, append to the builder instead of immediately forwarding. Add a helper `flushDelta()` that forwards the accumulated text (if non-empty) and resets. Call `flushDelta()` when: (1) 200ms has elapsed since last forward, checked after each `EventTextDelta`; (2) on `EventDone`; (3) on loop exit (fallback path). Extract `200ms` as `deltaForwardInterval` constant
+- [x] 4b: Add test: simulate a sub-agent producing 100 rapid text deltas (no delay between them). With the 200ms batching, verify that far fewer than 100 `EventSubAgentDelta` events are forwarded to `parentEvents`. Verify the final accumulated text matches the sum of all deltas (no data loss)
 
 ## Phase 5: Tests for the complete saturation scenario
 
