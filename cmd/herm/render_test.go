@@ -1865,7 +1865,7 @@ func TestStatusLineFormats(t *testing.T) {
 			t.Errorf("running status should have braille spinner, got: %s", found)
 		}
 		// Should contain pipe-separated tool count.
-		if !strings.Contains(found, "| 12 🛠️ |") {
+		if !strings.Contains(found, "| 12 🛠️  |") {
 			t.Errorf("running status should have pipe-separated tool count, got: %s", found)
 		}
 		// Should contain token arrows.
@@ -1896,7 +1896,7 @@ func TestStatusLineFormats(t *testing.T) {
 		if found == "" {
 			t.Fatalf("expected paused status line, got rows: %v", rows)
 		}
-		if !strings.Contains(found, "| 7 🛠️ |") {
+		if !strings.Contains(found, "| 7 🛠️  |") {
 			t.Errorf("paused status should have pipe-separated tool count, got: %s", found)
 		}
 		if !strings.Contains(found, "↑") || !strings.Contains(found, "↓") {

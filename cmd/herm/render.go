@@ -435,7 +435,7 @@ func (a *App) buildBlockRows() []string {
 		// Paused: show dim elapsed while waiting for user approval
 		elapsed := a.agentElapsedTime()
 		text := funnyTexts[a.agentTextIndex]
-		label := fmt.Sprintf("\033[2;3m⏸ %s | %d 🛠️ | %.2fs | ↑%s ↓%s\033[0m",
+		label := fmt.Sprintf("\033[2;3m⏸ %s | %d 🛠️  | %.2fs | ↑%s ↓%s\033[0m",
 			text, a.mainAgentToolCount, elapsed.Seconds(),
 			formatTokenCount(int(math.Round(a.agentDisplayInTok))),
 			formatTokenCount(int(math.Round(a.agentDisplayOutTok))))
@@ -446,14 +446,14 @@ func (a *App) buildBlockRows() []string {
 		text := funnyTexts[a.agentTextIndex]
 		spinner := brailleSpinner(elapsed)
 		color := pastelColor(elapsed)
-		label := fmt.Sprintf("%s %s\033[3m%s | %d 🛠️ | %.2fs | ↑%s ↓%s\033[0m",
+		label := fmt.Sprintf("%s %s\033[3m%s | %d 🛠️  | %.2fs | ↑%s ↓%s\033[0m",
 			spinner, color, text, a.mainAgentToolCount, elapsed.Seconds(),
 			formatTokenCount(int(math.Round(a.agentDisplayInTok))),
 			formatTokenCount(int(math.Round(a.agentDisplayOutTok))))
 		rows = append(rows, wrapString(label, 0, a.width)...)
 		rows = append(rows, "")
 	} else if a.agentElapsed > 0 {
-		elapsed := fmt.Sprintf("\033[32m✓\033[2m %d 🛠️ | %.2fs | ↑%s ↓%s\033[0m",
+		elapsed := fmt.Sprintf("\033[32m✓\033[2m %d 🛠️  | %.2fs | ↑%s ↓%s\033[0m",
 			a.mainAgentToolCount, a.agentElapsed.Seconds(),
 			formatTokenCount(a.mainAgentInputTokens),
 			formatTokenCount(a.mainAgentOutputTokens))
