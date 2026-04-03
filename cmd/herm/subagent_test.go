@@ -2318,3 +2318,24 @@ func TestSubAgentNewAgentWithoutModeStillFails(t *testing.T) {
 		t.Errorf("error = %q, want mode validation error", err.Error())
 	}
 }
+
+func TestBackgroundToolResultContainsSuppressionGuidance(t *testing.T) {
+	client := newTestClient("suppression test output")
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest")
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"test task","mode":"explore","background":true}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	if !strings.Contains(result, "Do not narrate progress") {
+		t.Errorf("background tool result should contain suppression guidance, got: %q", result)
+	}
+	if !strings.Contains(result, "Move on to your next action or stop") {
+		t.Errorf("background tool result should tell agent to move on, got: %q", result)
+	}
+
+	agentID := extractAgentID(t, result)
+	waitForBgAgent(t, tool, agentID, 10*time.Second)
+}

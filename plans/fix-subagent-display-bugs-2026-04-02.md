@@ -86,8 +86,8 @@ Also update the tool definition: remove `"mode"` from the `required` array (sinc
 
 2. **Commit suppression during background wait:** When `backgroundCompletion()` is active (the main agent emitted end_turn, we're now waiting for background agents), the main agent is idle — it's not producing text. The chattiness actually comes from the LLM's response *before* end_turn (the same turn that spawned the agents). The fix is prompt-level: tell the model to be concise after spawning background agents.
 
-- [ ] 6a: Update the tool result string in `executeBackground()` (`subagent.go:~653`). Current: `"[agent_id: %s] Sub-agent started in background. Task: %s. You will be notified when it completes."`. Add: `"Do not narrate progress — the user sees live sub-agent status in the UI. Move on to your next action or stop."`
-- [ ] 6b: Add test: verify the updated tool result string contains the suppression guidance
+- [x] 6a: Update the tool result string in `executeBackground()` (`subagent.go:~653`). Current: `"[agent_id: %s] Sub-agent started in background. Task: %s. You will be notified when it completes."`. Add: `"Do not narrate progress — the user sees live sub-agent status in the UI. Move on to your next action or stop."`
+- [x] 6b: Add test: verify the updated tool result string contains the suppression guidance
 
 ## Phase 7: Improve explore sub-agent efficiency
 

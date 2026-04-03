@@ -649,7 +649,7 @@ func (t *SubAgentTool) executeBackground(_ context.Context, in subAgentInput) (s
 
 	go t.runBackground(bgCtx, agent, agentID, in, model, subTC, state)
 
-	return fmt.Sprintf("[agent_id: %s] Sub-agent started in background. Task: %s. You will be notified when it completes.", agentID, in.Task), nil
+	return fmt.Sprintf("[agent_id: %s] Sub-agent started in background. Task: %s. You will be notified when it completes. Do not narrate progress — the user sees live sub-agent status in the UI. Move on to your next action or stop.", agentID, in.Task), nil
 }
 
 // runBackground runs a background sub-agent to completion, draining events
