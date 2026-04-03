@@ -36,7 +36,7 @@ After the main for-loop exits and before `EventDone` is emitted, check if there 
 - Cap the number of "wait-and-resume" cycles to avoid infinite loops if the model keeps spawning background agents and stopping
 
 - [x] 1a: Add a `HasPendingBackgroundAgents() bool` method to `SubAgentTool` that checks if any `bgAgentState` has `done == false`. Add it to the `BackgroundWaiter` interface
-- [ ] 1b: In `runLoop()`, after the main for-loop exits (but before the existing graceful exhaustion check), add a "background completion" block: if the loop exited naturally (not due to iteration exhaustion) and `HasPendingBackgroundAgents()` returns true, wait for them using `WaitForBackgroundAgents` with the same timeout. Then inject the results and re-call the LLM **with tools enabled** so it can continue working. Guard against infinite re-entry with a counter (e.g., max 3 background-wait cycles)
+- [x] 1b: In `runLoop()`, after the main for-loop exits (but before the existing graceful exhaustion check), add a "background completion" block: if the loop exited naturally (not due to iteration exhaustion) and `HasPendingBackgroundAgents()` returns true, wait for them using `WaitForBackgroundAgents` with the same timeout. Then inject the results and re-call the LLM **with tools enabled** so it can continue working. Guard against infinite re-entry with a counter (e.g., max 3 background-wait cycles)
 - [ ] 1c: Add tests: (1) run loop waits for pending background agents on `end_turn`, re-calls LLM with their results; (2) run loop skips the wait when no background agents exist; (3) background-wait cycle is capped to prevent infinite loops
 
 ## Phase 2: Keep completed sub-agents visible in the display

@@ -351,6 +351,158 @@ func (a *Agent) findBackgroundWaiter() BackgroundWaiter {
 	return nil
 }
 
+// backgroundCompletionTimeout is the maximum time to wait for background
+// sub-agents in a single background-completion cycle.
+const backgroundCompletionTimeout = 2 * time.Minute
+
+// maxBackgroundCompletionCycles caps how many wait-and-resume cycles the
+// background completion path can perform, preventing infinite loops if the
+// model keeps spawning background agents and then stopping.
+const maxBackgroundCompletionCycles = 3
+
+// backgroundCompletion is called when the LLM chose to stop (end_turn) but
+// background sub-agents are still running. It waits for them, injects their
+// results, and re-calls the LLM with tools enabled so it can continue working.
+// remainingIter is the number of tool-loop iterations still available.
+// Returns the final node ID.
+func (a *Agent) backgroundCompletion(ctx context.Context, lastNodeID string, remainingIter int) string {
+	bw := a.findBackgroundWaiter()
+	if bw == nil {
+		return lastNodeID
+	}
+
+	nodeID := lastNodeID
+	for cycle := 0; cycle < maxBackgroundCompletionCycles && remainingIter > 0; cycle++ {
+		if !bw.HasPendingBackgroundAgents() {
+			break
+		}
+
+		debugLog("background completion cycle %d: waiting for pending agents", cycle+1)
+		bw.WaitForBackgroundAgents(backgroundCompletionTimeout)
+
+		bgResults := a.drainBackgroundResults()
+		if len(bgResults) == 0 {
+			break
+		}
+
+		// Build a message informing the model that background agents finished.
+		var msg strings.Builder
+		msg.WriteString("[SYSTEM: Background agents have completed. Incorporate their results and continue.]")
+		msg.WriteString("\n\n[Background agent results:]\n")
+		for i, r := range bgResults {
+			fmt.Fprintf(&msg, "\n--- Background agent %d ---\n%s\n", i+1, r)
+		}
+
+		// Re-call LLM with tools enabled so the model can continue working.
+		opts := a.buildPromptOpts()
+		a.emit(AgentEvent{Type: EventLLMStart})
+		toolCalls, newNodeID, stopReason, err := a.retryableStream(ctx, defaultRetryConfig, func() (*langdag.PromptResult, error) {
+			return a.client.PromptFrom(ctx, nodeID, msg.String(), opts...)
+		})
+		if err != nil {
+			a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("background completion: %w", err)})
+			return nodeID
+		}
+		if newNodeID == "" {
+			return nodeID
+		}
+		a.emitUsage(ctx, newNodeID, stopReason)
+		nodeID = newNodeID
+
+		// If the model requested tools, run a mini tool loop with the remaining budget.
+		for remainingIter > 0 && len(toolCalls) > 0 {
+			if err := ctx.Err(); err != nil {
+				a.emit(AgentEvent{Type: EventError, Error: err})
+				return nodeID
+			}
+
+			var toolResults []types.ContentBlock
+			for _, tc := range toolCalls {
+				a.emit(AgentEvent{
+					Type:      EventToolCallStart,
+					ToolName:  tc.Name,
+					ToolID:    tc.ID,
+					ToolInput: tc.Input,
+				})
+
+				tool, ok := a.tools[tc.Name]
+				if !ok {
+					errResult := fmt.Sprintf("unknown tool: %s", tc.Name)
+					a.emit(AgentEvent{
+						Type:       EventToolResult,
+						ToolName:   tc.Name,
+						ToolID:     tc.ID,
+						ToolResult: errResult,
+						IsError:    true,
+					})
+					toolResults = append(toolResults, types.ContentBlock{
+						Type:      "tool_result",
+						ToolUseID: tc.ID,
+						Content:   errResult,
+						IsError:   true,
+					})
+					continue
+				}
+
+				toolStart := time.Now()
+				output, execErr := tool.Execute(ctx, tc.Input)
+				toolDur := time.Since(toolStart)
+				isErr := execErr != nil
+				if execErr != nil {
+					output = execErr.Error()
+				}
+
+				a.emit(AgentEvent{
+					Type:       EventToolCallDone,
+					ToolName:   tc.Name,
+					ToolID:     tc.ID,
+					ToolResult: output,
+					Duration:   toolDur,
+				})
+				a.emit(AgentEvent{
+					Type:       EventToolResult,
+					ToolName:   tc.Name,
+					ToolID:     tc.ID,
+					ToolResult: output,
+					IsError:    isErr,
+					Duration:   toolDur,
+				})
+
+				toolResults = append(toolResults, types.ContentBlock{
+					Type:       "tool_result",
+					ToolUseID:  tc.ID,
+					Content:    output,
+					IsError:    isErr,
+					DurationMs: int(toolDur.Milliseconds()),
+				})
+			}
+
+			toolResultJSON, marshalErr := json.Marshal(toolResults)
+			if marshalErr != nil {
+				a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("marshal tool results: %w", marshalErr)})
+				return nodeID
+			}
+			opts = a.buildPromptOpts()
+			a.emit(AgentEvent{Type: EventLLMStart})
+			toolCalls, newNodeID, stopReason, err = a.retryableStream(ctx, defaultRetryConfig, func() (*langdag.PromptResult, error) {
+				return a.client.PromptFrom(ctx, nodeID, string(toolResultJSON), opts...)
+			})
+			if err != nil {
+				a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("background completion (tool results): %w", err)})
+				return nodeID
+			}
+			if newNodeID == "" {
+				return nodeID
+			}
+			a.emitUsage(ctx, newNodeID, stopReason)
+			nodeID = newNodeID
+			remainingIter--
+		}
+	}
+
+	return nodeID
+}
+
 // gracefulExhaustionTimeout is the maximum time to wait for background
 // sub-agents during graceful exhaustion before proceeding with partial results.
 const gracefulExhaustionTimeout = 2 * time.Minute
@@ -1155,6 +1307,15 @@ func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID st
 		a.clearOldToolResults(ctx, nodeID, inputTokens)
 		nodeID = a.maybeCompact(ctx, nodeID, inputTokens)
 		iteration++
+	}
+
+	// When the LLM chose to stop (len(toolCalls) == 0) but background
+	// sub-agents are still running, wait for them and re-call the LLM with
+	// their results so it can incorporate them. Tools remain enabled so the
+	// model can continue working. Capped to prevent infinite loops if the
+	// model keeps spawning background agents and stopping.
+	if len(toolCalls) == 0 && iteration < maxIter {
+		nodeID = a.backgroundCompletion(ctx, nodeID, maxIter-iteration)
 	}
 
 	// When the loop exhausts maxToolIterations while the LLM still wants
