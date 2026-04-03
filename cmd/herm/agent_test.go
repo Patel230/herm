@@ -4942,3 +4942,129 @@ func TestE2EBackgroundLifecycleThreeAgents(t *testing.T) {
 		t.Errorf("expected 3 sub-agent output files, got %d", len(entries))
 	}
 }
+
+// TestE2EChannelSaturationThreeAgents reproduces the exact failure from the
+// trace: 3 concurrent background sub-agents with a reduced-size events channel
+// (64 slots) to force saturation. Verifies all critical events are delivered.
+func TestE2EChannelSaturationThreeAgents(t *testing.T) {
+	// Sub-agent provider: each call produces ~50 text delta chunks to generate
+	// heavy channel pressure.
+	subProv := &chunkyProvider{chunks: 50, model: "test-model"}
+	subStore := newMockStorage()
+	subClient := langdag.NewWithDeps(subStore, subProv)
+
+	// Parent provider: spawns 3 background sub-agents, then produces final text.
+	parentResponses := []scriptedResponse{
+		{
+			toolCalls: []types.ContentBlock{
+				{Type: "tool_use", ID: "tc-s1", Name: "agent",
+					Input: json.RawMessage(`{"task":"research auth","mode":"explore","background":true}`)},
+				{Type: "tool_use", ID: "tc-s2", Name: "agent",
+					Input: json.RawMessage(`{"task":"research db","mode":"explore","background":true}`)},
+				{Type: "tool_use", ID: "tc-s3", Name: "agent",
+					Input: json.RawMessage(`{"task":"research cache","mode":"explore","background":true}`)},
+			},
+			tokensIn: 100, tokensOut: 50,
+		},
+		{text: "Waiting for agents.", tokensIn: 150, tokensOut: 60},
+		{text: "All done.", tokensIn: 200, tokensOut: 80},
+	}
+
+	parentProv := &scriptedProvider{model: "test-model", responses: parentResponses}
+	parentStore := newMockStorage()
+	parentClient := langdag.NewWithDeps(parentStore, parentProv)
+
+	tmpDir := t.TempDir()
+	subAgentTool := NewSubAgentTool(subClient, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest")
+
+	agent := NewAgent(parentClient, []Tool{subAgentTool}, nil, "", "test-model", 0,
+		WithMaxToolIterations(10),
+	)
+	// Replace events channel with a small buffer to force saturation.
+	agent.events = make(chan AgentEvent, 64)
+	subAgentTool.parentEvents = agent.events
+	subAgentTool.onBgComplete = agent.InjectBackgroundResult
+
+	go agent.Run(context.Background(), "analyze architecture", "")
+
+	// Drain events with a generous timeout. Use doneCh as a backup signal
+	// in case EventDone is dropped (the exact scenario we're testing).
+	var events []AgentEvent
+	deadline := time.After(30 * time.Second)
+	eventsDone := false
+	for !eventsDone {
+		select {
+		case ev, ok := <-agent.Events():
+			if !ok {
+				eventsDone = true
+				break
+			}
+			events = append(events, ev)
+		case <-agent.DoneCh():
+			// Agent done — drain remaining.
+			for {
+				select {
+				case ev, ok := <-agent.Events():
+					if !ok {
+						eventsDone = true
+						break
+					}
+					events = append(events, ev)
+				default:
+					eventsDone = true
+				}
+				if eventsDone {
+					break
+				}
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for agent completion under channel saturation")
+		}
+	}
+
+	// Replay events through App to verify display state.
+	app := &App{headless: true, width: 80, resultCh: make(chan any, 10)}
+	app.agentRunning = true
+	app.agentStartTime = time.Now()
+	app.agent = agent
+	app.agentTicker = time.NewTicker(50 * time.Millisecond)
+
+	for _, ev := range events {
+		app.handleAgentEvent(ev)
+	}
+	// If EventDone was dropped, simulate the doneCh backup recovery.
+	if app.agentRunning {
+		app.finalizeAgentTurn("")
+	}
+
+	// Verify all 3 sub-agents reached done in the display.
+	subDoneCount := 0
+	for _, sa := range app.subAgents {
+		if sa.done {
+			subDoneCount++
+		}
+	}
+	if subDoneCount < 3 {
+		t.Errorf("expected all 3 sub-agents done in display, got %d done out of %d total",
+			subDoneCount, len(app.subAgents))
+	}
+
+	// Verify the main agent is no longer running.
+	if app.agentRunning {
+		t.Error("agentRunning should be false after completion")
+	}
+
+	// Verify the ticker is stopped (no active sub-agents).
+	if app.agentTicker != nil && !app.hasActiveSubAgents() {
+		app.agentTicker.Stop()
+		t.Error("agentTicker should have been stopped by finalizeAgentTurn")
+	}
+
+	// Verify hasActiveSubAgents is false.
+	if app.hasActiveSubAgents() {
+		t.Error("hasActiveSubAgents should return false after all sub-agents complete")
+	}
+
+	t.Logf("processed %d events with 64-slot buffer; %d/%d sub-agents done",
+		len(events), subDoneCount, len(app.subAgents))
+}

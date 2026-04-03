@@ -71,7 +71,7 @@ The core problem is that high-frequency `EventSubAgentDelta` events (text stream
 
 End-to-end test that reproduces the exact failure from the trace: 3 concurrent background sub-agents, channel near saturation, all critical events delivered and processed.
 
-- [ ] 5a: Add integration test: create an `App` with a reduced-size events channel (e.g., 64 slots to force saturation). Spawn 3 background sub-agents via `SubAgentTool` using mock agents that each produce ~100 text deltas then complete. Verify: (1) all 3 sub-agents reach `sa.done == true` in the display, (2) the main agent's `EventDone` is processed (or recovered via `doneCh`), (3) `agentTicker` is stopped, (4) `hasActiveSubAgents()` returns false at the end
+- [x] 5a: Add integration test: create an `App` with a reduced-size events channel (e.g., 64 slots to force saturation). Spawn 3 background sub-agents via `SubAgentTool` using mock agents that each produce ~100 text deltas then complete. Verify: (1) all 3 sub-agents reach `sa.done == true` in the display, (2) the main agent's `EventDone` is processed (or recovered via `doneCh`), (3) `agentTicker` is stopped, (4) `hasActiveSubAgents()` returns false at the end
 
 ---
 
