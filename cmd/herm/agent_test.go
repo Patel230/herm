@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -4438,5 +4439,156 @@ func TestE2EGracefulExhaustionWithBackgroundSubAgent(t *testing.T) {
 	}
 	if len(entries) == 0 {
 		t.Error("expected at least one sub-agent output file in .herm/agents/")
+	}
+}
+
+// --- Phase 1c: background completion tests ---
+
+func TestBackgroundCompletionWaitsForPendingAgents(t *testing.T) {
+	// Scenario: LLM returns end_turn (no tool calls) on the initial call,
+	// but a background agent is pending. The system should wait, inject
+	// results, and re-call the LLM which then produces final text.
+	responses := []scriptedResponse{
+		// Initial call: end_turn (no tool calls)
+		{text: "Let me wait for results.", tokensIn: 100, tokensOut: 50},
+		// Background completion re-call: model incorporates bg results
+		{text: "Based on background findings, here is the answer.", tokensIn: 150, tokensOut: 60},
+	}
+
+	prov := &scriptedProvider{model: "test-model", responses: responses}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+
+	bgWaiter := &testBgWaiterTool{
+		testTool: testTool{name: "agent", result: "ok"},
+		pending:  true,
+	}
+	bgWaiter.injectFn = func() {
+		// Simulate the onBgComplete callback that happens when agents finish.
+		// We need the agent reference, so we capture it below.
+	}
+
+	agent := NewAgent(client, []Tool{bgWaiter}, nil, "", "test-model", 0,
+		WithMaxToolIterations(10),
+	)
+
+	// Wire up the inject function now that agent exists.
+	bgWaiter.injectFn = func() {
+		agent.InjectBackgroundResult("bg-agent-result: found the answer")
+	}
+
+	go agent.Run(context.Background(), "test background completion", "")
+	events := drainEvents(t, agent.Events(), 5*time.Second)
+
+	if !bgWaiter.wasCalled() {
+		t.Error("WaitForBackgroundAgents should have been called")
+	}
+
+	var gotBgText bool
+	for _, ev := range events {
+		if ev.Type == EventTextDelta && strings.Contains(ev.Text, "background findings") {
+			gotBgText = true
+		}
+	}
+	if !gotBgText {
+		t.Error("expected LLM to be re-called with background results and produce text about them")
+	}
+}
+
+func TestBackgroundCompletionSkipsWhenNoPending(t *testing.T) {
+	// Scenario: LLM returns end_turn, no background agents pending.
+	// Should complete normally with just one LLM call.
+	responses := []scriptedResponse{
+		{text: "Done, no background work.", tokensIn: 100, tokensOut: 50},
+	}
+
+	prov := &scriptedProvider{model: "test-model", responses: responses}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+
+	bgWaiter := &testBgWaiterTool{
+		testTool: testTool{name: "agent", result: "ok"},
+		pending:  false,
+	}
+
+	agent := NewAgent(client, []Tool{bgWaiter}, nil, "", "test-model", 0,
+		WithMaxToolIterations(10),
+	)
+
+	go agent.Run(context.Background(), "test no pending", "")
+	events := drainEvents(t, agent.Events(), 5*time.Second)
+
+	if bgWaiter.wasCalled() {
+		t.Error("WaitForBackgroundAgents should NOT have been called when no agents are pending")
+	}
+
+	// Should have exactly: initial text + done event (plus usage/llmstart)
+	var textCount int
+	for _, ev := range events {
+		if ev.Type == EventTextDelta {
+			textCount++
+		}
+	}
+	if textCount == 0 {
+		t.Error("expected at least one text delta from initial LLM call")
+	}
+}
+
+func TestBackgroundCompletionCycleCap(t *testing.T) {
+	// Scenario: background agents keep being pending after each cycle.
+	// The cap (maxBackgroundCompletionCycles=3) should prevent infinite loops.
+	//
+	// We need: initial call (end_turn) + 3 cycles of bg-wait + re-call.
+	// The bgWaiter always reports pending=true and injects results,
+	// and the LLM always returns end_turn (no tools).
+	responses := []scriptedResponse{
+		{text: "Waiting for background.", tokensIn: 100, tokensOut: 50},
+		{text: "Cycle 1 response.", tokensIn: 100, tokensOut: 50},
+		{text: "Cycle 2 response.", tokensIn: 100, tokensOut: 50},
+		{text: "Cycle 3 response.", tokensIn: 100, tokensOut: 50},
+		// No more responses needed — should stop at 3 cycles.
+	}
+
+	prov := &scriptedProvider{model: "test-model", responses: responses}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+
+	var waitCount int32
+	bgWaiter := &testBgWaiterTool{
+		testTool: testTool{name: "agent", result: "ok"},
+		pending:  true,
+	}
+
+	agent := NewAgent(client, []Tool{bgWaiter}, nil, "", "test-model", 0,
+		WithMaxToolIterations(10),
+	)
+
+	bgWaiter.injectFn = func() {
+		atomic.AddInt32(&waitCount, 1)
+		agent.InjectBackgroundResult(fmt.Sprintf("bg-result-%d", atomic.LoadInt32(&waitCount)))
+		// Keep reporting pending so the loop tries again.
+		bgWaiter.mu.Lock()
+		bgWaiter.pending = true
+		bgWaiter.mu.Unlock()
+	}
+
+	go agent.Run(context.Background(), "test cycle cap", "")
+	events := drainEvents(t, agent.Events(), 5*time.Second)
+
+	// Should have been called exactly maxBackgroundCompletionCycles times.
+	cycles := atomic.LoadInt32(&waitCount)
+	if cycles != int32(maxBackgroundCompletionCycles) {
+		t.Errorf("expected %d wait cycles, got %d", maxBackgroundCompletionCycles, cycles)
+	}
+
+	// Verify we got an EventDone (didn't hang).
+	var gotDone bool
+	for _, ev := range events {
+		if ev.Type == EventDone {
+			gotDone = true
+		}
+	}
+	if !gotDone {
+		t.Error("expected EventDone — run loop should not hang when cycle cap is reached")
 	}
 }
