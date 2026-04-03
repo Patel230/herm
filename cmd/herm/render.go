@@ -700,6 +700,18 @@ func shortID(id string) string {
 	return id
 }
 
+// hasPendingBackgroundAgents returns true if any non-replaced sub-agent is
+// still running. Used to suppress chatty main-agent narration while the UI
+// already shows live sub-agent status.
+func (a *App) hasPendingBackgroundAgents() bool {
+	for _, sa := range a.subAgents {
+		if !sa.done && sa.replacedBy == "" {
+			return true
+		}
+	}
+	return false
+}
+
 // getOrCreateSubAgent returns the display state for the given agent ID, creating it if needed.
 func (a *App) getOrCreateSubAgent(agentID string) *subAgentDisplay {
 	if a.subAgents == nil {

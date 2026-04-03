@@ -405,6 +405,12 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 			}
 			a.traceCollector.AddTextDelta(event.AgentID, event.Text)
 		}
+		// Suppress main-agent narration while background sub-agents are
+		// still running. The UI already shows live sub-agent status, so
+		// filler text like "Hang tight..." is redundant noise.
+		if a.hasPendingBackgroundAgents() {
+			break
+		}
 		a.streamingText += event.Text
 		if idx := strings.LastIndex(a.streamingText, "\n"); idx >= 0 {
 			a.messages = append(a.messages, chatMessage{
