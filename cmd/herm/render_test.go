@@ -2207,6 +2207,7 @@ func TestFullRenderPipelineWithSubAgents(t *testing.T) {
 		{kind: msgToolCall, content: "~ read main.go", toolName: "read_file", leadBlank: true},
 		{kind: msgToolResult, content: "content", toolName: "read_file"},
 		{kind: msgAssistant, content: "Starting analysis.", leadBlank: true},
+		{kind: msgSubAgentGroup},
 	}
 
 	rows := app.buildBlockRows()
@@ -2351,6 +2352,7 @@ func TestSubAgentLinesBeforeStreamingText(t *testing.T) {
 	}
 	app.messages = []chatMessage{
 		{kind: msgUser, content: "go"},
+		{kind: msgSubAgentGroup},
 	}
 
 	rows := app.buildBlockRows()
@@ -2396,6 +2398,7 @@ func TestStatusLineAfterSubAgentLines(t *testing.T) {
 	}
 	app.messages = []chatMessage{
 		{kind: msgUser, content: "go"},
+		{kind: msgSubAgentGroup},
 	}
 
 	rows := app.buildBlockRows()
@@ -2985,6 +2988,7 @@ func TestSubAgentDisplayIntegration(t *testing.T) {
 	}
 	app.messages = []chatMessage{
 		{kind: msgUser, content: "go"},
+		{kind: msgSubAgentGroup},
 	}
 
 	rows := app.buildBlockRows()
@@ -3034,5 +3038,155 @@ func TestSubAgentDisplayIntegration(t *testing.T) {
 	if streamingIdx <= lastSubAgentIdx {
 		t.Errorf("streaming text (row %d) should appear after all sub-agent lines (last at row %d)",
 			streamingIdx, lastSubAgentIdx)
+	}
+}
+
+func TestSubAgentGroupAnchoredBetweenMessages(t *testing.T) {
+	// 5e: Sub-agent group marker positions the display between pre-spawn and post-spawn text.
+	strip := func(s string) string {
+		return ansiEscRe.ReplaceAllString(s, "")
+	}
+
+	now := time.Now().Add(-5 * time.Second)
+	app := &App{
+		width: 80,
+	}
+	app.subAgents = map[string]*subAgentDisplay{
+		"sa1": {task: "Research auth", mode: "explore", done: true, startTime: now, completedAt: now.Add(10 * time.Second), toolCount: 5},
+	}
+	app.messages = []chatMessage{
+		{kind: msgUser, content: "Analyze the codebase", leadBlank: true},
+		{kind: msgAssistant, content: "launching agents"},
+		{kind: msgSubAgentGroup},
+		{kind: msgAssistant, content: "results are in"},
+	}
+
+	rows := app.buildBlockRows()
+
+	launchIdx := -1
+	subAgentIdx := -1
+	resultsIdx := -1
+	for i, r := range rows {
+		s := strip(r)
+		if strings.Contains(s, "launching agents") {
+			launchIdx = i
+		}
+		if strings.Contains(s, "Research auth") {
+			subAgentIdx = i
+		}
+		if strings.Contains(s, "results are in") {
+			resultsIdx = i
+		}
+	}
+	if launchIdx == -1 {
+		t.Fatal("pre-spawn text not found")
+	}
+	if subAgentIdx == -1 {
+		t.Fatal("sub-agent line not found")
+	}
+	if resultsIdx == -1 {
+		t.Fatal("post-spawn text not found")
+	}
+	if subAgentIdx <= launchIdx {
+		t.Errorf("sub-agent line (row %d) should appear after pre-spawn text (row %d)", subAgentIdx, launchIdx)
+	}
+	if resultsIdx <= subAgentIdx {
+		t.Errorf("post-spawn text (row %d) should appear after sub-agent line (row %d)", resultsIdx, subAgentIdx)
+	}
+}
+
+func TestSubAgentGroupMarkerEmptyWhenNoAgents(t *testing.T) {
+	// 5f: When no sub-agents exist, the marker renders nothing.
+	app := &App{
+		width: 80,
+	}
+	app.messages = []chatMessage{
+		{kind: msgUser, content: "hello", leadBlank: true},
+		{kind: msgSubAgentGroup},
+		{kind: msgAssistant, content: "world"},
+	}
+
+	rows := app.buildBlockRows()
+
+	// The marker should produce no visible rows (no group header, no blank group).
+	strip := func(s string) string {
+		return ansiEscRe.ReplaceAllString(s, "")
+	}
+	for _, r := range rows {
+		s := strip(r)
+		if strings.Contains(s, "agent") && (strings.Contains(s, "Running") || strings.Contains(s, "Explore") || strings.Contains(s, "Implement")) {
+			t.Errorf("unexpected sub-agent group content in output: %q", s)
+		}
+	}
+}
+
+func TestSessionRestoreInsertsSubAgentGroupMarker(t *testing.T) {
+	// 5g: rebuildChatMessages detects background agent tool calls and inserts marker.
+	app := &App{width: 80}
+
+	// Simulate a node ancestry with an assistant node containing a background agent tool_use.
+	assistantContent, _ := json.Marshal([]types.ContentBlock{
+		{Type: "text", Text: "Let me explore that."},
+		{Type: "tool_use", ID: "tc1", Name: "agent", Input: json.RawMessage(`{"task":"Explore auth module","mode":"explore","background":true}`)},
+	})
+	toolResultContent, _ := json.Marshal([]types.ContentBlock{
+		{Type: "tool_result", ToolUseID: "tc1", Content: `[agent_id: abc123] Sub-agent started in background. Task: Explore auth module.`},
+	})
+
+	nodes := []*types.Node{
+		{NodeType: types.NodeTypeUser, Content: "Analyze the codebase"},
+		{NodeType: types.NodeTypeAssistant, Content: string(assistantContent)},
+		{NodeType: types.NodeTypeUser, Content: string(toolResultContent)},
+		{NodeType: types.NodeTypeAssistant, Content: "The analysis is complete."},
+	}
+
+	msgs := app.rebuildChatMessages(nodes)
+
+	// Verify a msgSubAgentGroup marker was inserted.
+	var groupIdx int = -1
+	for i, m := range msgs {
+		if m.kind == msgSubAgentGroup {
+			groupIdx = i
+			break
+		}
+	}
+	if groupIdx == -1 {
+		t.Fatal("expected msgSubAgentGroup marker in rebuilt messages")
+	}
+
+	// Verify the marker comes after the assistant text and before the tool result.
+	var textIdx, resultIdx int = -1, -1
+	for i, m := range msgs {
+		if m.kind == msgAssistant && strings.Contains(m.content, "explore that") {
+			textIdx = i
+		}
+		if m.kind == msgToolResult {
+			resultIdx = i
+		}
+	}
+	if textIdx == -1 || resultIdx == -1 {
+		t.Fatalf("missing expected messages: textIdx=%d, resultIdx=%d", textIdx, resultIdx)
+	}
+	if groupIdx <= textIdx {
+		t.Errorf("group marker (idx %d) should come after assistant text (idx %d)", groupIdx, textIdx)
+	}
+
+	// Verify subAgentGroupInserted flag was set.
+	if !app.subAgentGroupInserted {
+		t.Error("expected subAgentGroupInserted to be true after rebuild")
+	}
+
+	// Verify a sub-agent display entry was reconstructed.
+	if len(app.subAgents) == 0 {
+		t.Fatal("expected reconstructed sub-agent entry")
+	}
+	var found bool
+	for _, sa := range app.subAgents {
+		if strings.Contains(sa.task, "Explore auth") && sa.mode == "explore" && sa.done {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("reconstructed sub-agent entry should have task, mode='explore', and done=true")
 	}
 }

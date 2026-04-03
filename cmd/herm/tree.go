@@ -220,6 +220,7 @@ func (a *App) rebuildChatMessages(nodes []*types.Node) []chatMessage {
 	// pendingToolUses holds tool_use blocks from the last assistant node,
 	// keyed by ID so we can pair them with results.
 	var pendingToolUses []types.ContentBlock
+	groupInserted := false
 
 	for _, n := range nodes {
 		switch {
@@ -228,6 +229,17 @@ func (a *App) rebuildChatMessages(nodes []*types.Node) []chatMessage {
 			toolUses := extractAssistantToolUses(n.Content)
 			if text != "" {
 				msgs = append(msgs, chatMessage{kind: msgAssistant, content: text})
+			}
+			// Check for background agent tool_use blocks and insert group marker.
+			if !groupInserted {
+				for _, tc := range toolUses {
+					if tc.Name == "agent" && isBackgroundAgentInput(tc.Input) {
+						msgs = append(msgs, chatMessage{kind: msgSubAgentGroup})
+						groupInserted = true
+						a.reconstructSubAgentFromToolUse(tc)
+						break
+					}
+				}
 			}
 			pendingToolUses = toolUses
 
@@ -250,7 +262,14 @@ func (a *App) rebuildChatMessages(nodes []*types.Node) []chatMessage {
 		case n.NodeType == types.NodeTypeToolCall:
 			name := extractToolName(n.Content)
 			input := extractToolCallInput(n.Content)
-			msgs = append(msgs, chatMessage{kind: msgToolCall, content: toolCallSummary(name, input), leadBlank: true})
+			// Detect background agent tool calls and insert group marker.
+			if !groupInserted && name == "agent" && isBackgroundAgentInput(input) {
+				msgs = append(msgs, chatMessage{kind: msgSubAgentGroup})
+				groupInserted = true
+				a.reconstructSubAgentFromInput(input)
+			} else {
+				msgs = append(msgs, chatMessage{kind: msgToolCall, content: toolCallSummary(name, input), leadBlank: true})
+			}
 
 		case n.NodeType == types.NodeTypeToolResult:
 			isErr := strings.Contains(n.Content, `"is_error":true`)
@@ -264,6 +283,9 @@ func (a *App) rebuildChatMessages(nodes []*types.Node) []chatMessage {
 		case n.NodeType == types.NodeTypeUser:
 			msgs = append(msgs, chatMessage{kind: msgUser, content: n.Content, leadBlank: true})
 		}
+	}
+	if groupInserted {
+		a.subAgentGroupInserted = true
 	}
 	return msgs
 }
@@ -567,4 +589,51 @@ func parseToolResultBlocks(content string) []types.ContentBlock {
 		}
 	}
 	return results
+}
+
+// isBackgroundAgentInput returns true if the given tool input JSON contains
+// "background": true, indicating a background sub-agent spawn.
+func isBackgroundAgentInput(input json.RawMessage) bool {
+	if len(input) == 0 {
+		return false
+	}
+	var parsed struct {
+		Background bool `json:"background"`
+	}
+	if json.Unmarshal(input, &parsed) == nil && parsed.Background {
+		return true
+	}
+	return false
+}
+
+// reconstructSubAgentFromToolUse creates a completed subAgentDisplay entry
+// from a tool_use content block during session restore.
+func (a *App) reconstructSubAgentFromToolUse(tc types.ContentBlock) {
+	a.reconstructSubAgentFromInput(tc.Input)
+}
+
+// reconstructSubAgentFromInput creates a completed subAgentDisplay entry
+// from a tool call input JSON during session restore.
+func (a *App) reconstructSubAgentFromInput(input json.RawMessage) {
+	var parsed struct {
+		Task    string `json:"task"`
+		Mode    string `json:"mode"`
+		AgentID string `json:"agent_id"`
+	}
+	if json.Unmarshal(input, &parsed) != nil {
+		return
+	}
+	mode := parsed.Mode
+	if mode == "" {
+		mode = "explore"
+	}
+	// Use agent_id from input if present, otherwise generate a placeholder.
+	agentID := parsed.AgentID
+	if agentID == "" {
+		agentID = fmt.Sprintf("restored-%d", len(a.subAgents))
+	}
+	sa := a.getOrCreateSubAgent(agentID)
+	sa.task = truncateTaskLabel(parsed.Task)
+	sa.mode = mode
+	sa.done = true
 }

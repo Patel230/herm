@@ -551,6 +551,12 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 		sa.task = truncateTaskLabel(event.Task)
 		sa.mode = event.Mode
 		sa.startTime = time.Now()
+		// Insert a positional anchor for the sub-agent display group in the
+		// message flow so that it renders between pre-spawn and post-spawn text.
+		if !a.subAgentGroupInserted {
+			a.messages = append(a.messages, chatMessage{kind: msgSubAgentGroup})
+			a.subAgentGroupInserted = true
+		}
 		a.render()
 
 	case EventSubAgentDelta:

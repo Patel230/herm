@@ -372,6 +372,17 @@ func (a *App) buildBlockRows() []string {
 			continue
 		}
 
+		// Sub-agent group anchor — render live sub-agent display inline.
+		if msg.kind == msgSubAgentGroup {
+			if subLines := a.subAgentDisplayLines(); len(subLines) > 0 {
+				for _, line := range subLines {
+					rows = append(rows, wrapString(line, 0, a.width)...)
+				}
+				rows = append(rows, "")
+			}
+			continue
+		}
+
 		{
 			rendered := renderMessage(msg)
 			for _, logLine := range strings.Split(rendered, "\n") {
@@ -403,14 +414,6 @@ func (a *App) buildBlockRows() []string {
 		if !peekHasBlank && !(msg.kind == msgAssistant && peekIsAssistant) {
 			rows = append(rows, "")
 		}
-	}
-	// Show live sub-agent activity above streaming text so that sub-agents
-	// (which started earlier) appear before the main agent's new response.
-	if subLines := a.subAgentDisplayLines(); len(subLines) > 0 {
-		for _, line := range subLines {
-			rows = append(rows, wrapString(line, 0, a.width)...)
-		}
-		rows = append(rows, "")
 	}
 	// Show streaming text above the input area
 	if a.streamingText != "" {
