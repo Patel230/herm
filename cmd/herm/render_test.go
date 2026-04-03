@@ -3563,3 +3563,93 @@ func TestIntegrationExplorePromptProgressiveDepth(t *testing.T) {
 		}
 	}
 }
+
+func TestSubAgentDeltaDebounced(t *testing.T) {
+	// 11c: Sending many EventSubAgentDelta events updates sa.status
+	// without per-event render overhead (no a.render() call).
+	app := &App{headless: true, width: 80}
+
+	// Start a sub-agent first.
+	app.handleAgentEvent(AgentEvent{
+		Type: EventSubAgentStart, AgentID: "bg1", Task: "explore code", Mode: "explore",
+	})
+
+	// Send 100 delta events in a tight loop.
+	for i := 0; i < 100; i++ {
+		app.handleAgentEvent(AgentEvent{
+			Type:    EventSubAgentDelta,
+			AgentID: "bg1",
+			Text:    fmt.Sprintf("token-%d", i),
+		})
+	}
+
+	// Status should reflect the last delta.
+	sa := app.subAgents["bg1"]
+	if sa == nil {
+		t.Fatal("sub-agent should exist")
+	}
+	if sa.status != "token-99" {
+		t.Errorf("sa.status = %q, want %q", sa.status, "token-99")
+	}
+	// Agent should still be running (not done).
+	if sa.done {
+		t.Error("sub-agent should not be marked done after deltas")
+	}
+}
+
+func TestSubAgentStatusDoneRendersImmediately(t *testing.T) {
+	// 11d: "done" status events render immediately (sa.done is true and
+	// visible in subAgentDisplayLines right after the event). Non-done
+	// status events update sa.status without requiring immediate render.
+	app := &App{headless: true, width: 80}
+
+	// Start two sub-agents.
+	app.handleAgentEvent(AgentEvent{
+		Type: EventSubAgentStart, AgentID: "bg1", Task: "task one", Mode: "explore",
+	})
+	app.handleAgentEvent(AgentEvent{
+		Type: EventSubAgentStart, AgentID: "bg2", Task: "task two", Mode: "explore",
+	})
+
+	// Send a non-done status event — should update sa.status.
+	app.handleAgentEvent(AgentEvent{
+		Type: EventSubAgentStatus, AgentID: "bg1", Text: "tool: grep",
+	})
+	sa1 := app.subAgents["bg1"]
+	if sa1.status != "tool: grep" {
+		t.Errorf("sa1.status = %q, want %q", sa1.status, "tool: grep")
+	}
+	if sa1.toolCount != 1 {
+		t.Errorf("sa1.toolCount = %d, want 1", sa1.toolCount)
+	}
+
+	// Send a "done" event — should immediately mark as done and be
+	// reflected in subAgentDisplayLines.
+	app.handleAgentEvent(AgentEvent{
+		Type:    EventSubAgentStatus,
+		AgentID: "bg2",
+		Text:    "done",
+		Usage:   &types.Usage{InputTokens: 200, OutputTokens: 100},
+	})
+	sa2 := app.subAgents["bg2"]
+	if !sa2.done {
+		t.Error("sa2 should be marked done after 'done' status event")
+	}
+
+	// Verify the done agent shows in display lines with a completion marker.
+	lines := app.subAgentDisplayLines()
+	foundDone := false
+	for _, line := range lines {
+		stripped := ansiEscRe.ReplaceAllString(line, "")
+		if strings.Contains(stripped, "task two") {
+			foundDone = true
+			// Should show checkmark (done agent).
+			if !strings.Contains(stripped, "✓") {
+				t.Errorf("done agent should show ✓, got: %q", stripped)
+			}
+		}
+	}
+	if !foundDone {
+		t.Error("done agent 'task two' not found in display lines")
+	}
+}

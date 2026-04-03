@@ -570,6 +570,8 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 
 	case EventSubAgentDelta:
 		// Update the agent's status with a snippet of the streaming text.
+		// No a.render() here — the 50ms agentTickMsg ticker handles display
+		// updates. This avoids ~3000 renders per sub-agent response stream.
 		sa := a.getOrCreateSubAgent(event.AgentID)
 		snippet := strings.TrimSpace(event.Text)
 		if snippet != "" {
@@ -579,7 +581,6 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 			}
 			sa.status = snippet
 		}
-		a.render()
 
 	case EventSubAgentStatus:
 		sa := a.getOrCreateSubAgent(event.AgentID)
@@ -609,13 +610,15 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 				a.agentTicker.Stop()
 				a.agentTicker = nil
 			}
+			a.render()
 		} else {
+			// Tool start notifications and other status updates — no immediate
+			// render needed. The 50ms agentTickMsg ticker will pick these up.
 			sa.status = event.Text
 			if strings.HasPrefix(event.Text, "tool:") {
 				sa.toolCount++
 			}
 		}
-		a.render()
 
 	case EventStreamClear:
 		// Discard in-progress streaming text before a stream retry so the
