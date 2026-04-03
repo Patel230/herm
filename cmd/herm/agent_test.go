@@ -4308,3 +4308,127 @@ func TestGracefulExhaustionCallsBackgroundWaiter(t *testing.T) {
 		t.Error("expected synthesis text from the final LLM call")
 	}
 }
+
+// TestE2EGracefulExhaustionWithBackgroundSubAgent is an end-to-end integration
+// test that exercises the full graceful exhaustion path with a real SubAgentTool.
+// Scenario: main agent spawns a background sub-agent, hits its iteration limit
+// while the sub-agent is running, waits for it, collects its results via
+// onBgComplete → InjectBackgroundResult, and produces a synthesized response
+// that includes the sub-agent's output.
+func TestE2EGracefulExhaustionWithBackgroundSubAgent(t *testing.T) {
+	// --- Sub-agent provider: returns text that the parent should incorporate. ---
+	subProv := &mockProvider{
+		model:     "test-model",
+		responses: []string{"The auth module uses JWT tokens stored in Redis with a 24h TTL."},
+	}
+	subStore := newMockStorage()
+	subClient := langdag.NewWithDeps(subStore, subProv)
+
+	// --- Parent provider sequence ---
+	// Response 0 (initial): spawn a background sub-agent
+	// Response 1 (iteration 0): after receiving "started in background", call bash
+	// Response 2 (iteration 1): after bash completes, request another bash call
+	//   → iteration reaches maxIter=2, toolCalls still pending → graceful exhaustion
+	// Response 3 (synthesis): text-only response incorporating background context
+	parentResponses := []scriptedResponse{
+		{
+			toolCalls: []types.ContentBlock{{
+				Type:  "tool_use",
+				ID:    "tc-agent",
+				Name:  "agent",
+				Input: json.RawMessage(`{"task":"research auth module","mode":"explore","background":true}`),
+			}},
+			tokensIn: 100, tokensOut: 50,
+		},
+		{
+			toolCalls: []types.ContentBlock{{
+				Type:  "tool_use",
+				ID:    "tc-bash1",
+				Name:  "bash",
+				Input: json.RawMessage(`{}`),
+			}},
+			tokensIn: 150, tokensOut: 60,
+		},
+		{
+			toolCalls: []types.ContentBlock{{
+				Type:  "tool_use",
+				ID:    "tc-bash2",
+				Name:  "bash",
+				Input: json.RawMessage(`{}`),
+			}},
+			tokensIn: 150, tokensOut: 60,
+		},
+		{
+			text:     "Based on the background research, the auth module uses JWT tokens in Redis with a 24h TTL. Here is the synthesized plan.",
+			tokensIn: 200, tokensOut: 80,
+		},
+	}
+
+	parentProv := &scriptedProvider{model: "test-model", responses: parentResponses}
+	parentStore := newMockStorage()
+	parentClient := langdag.NewWithDeps(parentStore, parentProv)
+
+	tmpDir := t.TempDir()
+	bashTool := &testTool{name: "bash", result: "ok"}
+	subAgentTool := NewSubAgentTool(subClient, nil, nil, "test-model", "", 10, 3, 0, tmpDir, "", "alpine:latest")
+
+	const parentMaxIterations = 2
+	agent := NewAgent(parentClient, []Tool{bashTool, subAgentTool}, nil, "", "test-model", 0,
+		WithMaxToolIterations(parentMaxIterations),
+	)
+
+	// Wire the background completion callback as production does (agentui.go:261).
+	subAgentTool.parentEvents = agent.events
+	subAgentTool.onBgComplete = agent.InjectBackgroundResult
+
+	go agent.Run(context.Background(), "plan auth module changes", "")
+	events := drainEvents(t, agent.Events(), 15*time.Second)
+
+	var (
+		gotExhaustionError bool
+		gotSynthesisText   bool
+		subAgentStartSeen  bool
+		doneNodeID         string
+		allText            strings.Builder
+	)
+	for _, ev := range events {
+		switch ev.Type {
+		case EventError:
+			if ev.Error != nil && strings.Contains(ev.Error.Error(), "synthesizing final response") {
+				gotExhaustionError = true
+			}
+		case EventTextDelta:
+			allText.WriteString(ev.Text)
+			if strings.Contains(ev.Text, "synthesized plan") {
+				gotSynthesisText = true
+			}
+		case EventSubAgentStart:
+			subAgentStartSeen = true
+		case EventDone:
+			doneNodeID = ev.NodeID
+		}
+	}
+
+	if !subAgentStartSeen {
+		t.Error("expected EventSubAgentStart — background sub-agent should have been spawned")
+	}
+	if !gotExhaustionError {
+		t.Error("expected error event about synthesizing final response (graceful exhaustion)")
+	}
+	if !gotSynthesisText {
+		t.Errorf("expected synthesis text containing sub-agent findings, got: %q", allText.String())
+	}
+	if doneNodeID == "" {
+		t.Error("EventDone should carry the nodeID from the synthesis call")
+	}
+
+	// Verify the sub-agent output file was written in the temp directory.
+	agentOutputPath := filepath.Join(tmpDir, ".herm", "agents")
+	entries, err := os.ReadDir(agentOutputPath)
+	if err != nil {
+		t.Fatalf("failed to read agent output dir: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Error("expected at least one sub-agent output file in .herm/agents/")
+	}
+}

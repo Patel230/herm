@@ -52,4 +52,4 @@ This replaces the current "emit error and die" behavior with a structured wind-d
 
 ## Phase 4: Integration test
 
-- [ ] 4a: Add an end-to-end test simulating a realistic scenario: main agent spawns background sub-agents, hits iteration limit, waits for sub-agents, and produces a synthesized response instead of hard-stopping
+- [x] 4a: Add an end-to-end test simulating a realistic scenario: main agent spawns background sub-agents, hits iteration limit, waits for sub-agents, and produces a synthesized response instead of hard-stopping
