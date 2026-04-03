@@ -404,6 +404,14 @@ func (a *App) buildBlockRows() []string {
 			rows = append(rows, "")
 		}
 	}
+	// Show live sub-agent activity above streaming text so that sub-agents
+	// (which started earlier) appear before the main agent's new response.
+	if subLines := a.subAgentDisplayLines(); len(subLines) > 0 {
+		for _, line := range subLines {
+			rows = append(rows, wrapString(line, 0, a.width)...)
+		}
+		rows = append(rows, "")
+	}
 	// Show streaming text above the input area
 	if a.streamingText != "" {
 		for _, logLine := range strings.Split(a.streamingText, "\n") {
@@ -419,14 +427,6 @@ func (a *App) buildBlockRows() []string {
 				}
 				rows = append(rows, wrapped...)
 			}
-		}
-		rows = append(rows, "")
-	}
-	// Show live sub-agent activity before the status line so the status line
-	// is always the last element before the input area.
-	if subLines := a.subAgentDisplayLines(); len(subLines) > 0 {
-		for _, line := range subLines {
-			rows = append(rows, wrapString(line, 0, a.width)...)
 		}
 		rows = append(rows, "")
 	}

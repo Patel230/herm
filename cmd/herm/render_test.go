@@ -2334,6 +2334,49 @@ func TestSubAgentElapsedFreezeOnCompletion(t *testing.T) {
 	}
 }
 
+func TestSubAgentLinesBeforeStreamingText(t *testing.T) {
+	strip := func(s string) string {
+		return ansiEscRe.ReplaceAllString(s, "")
+	}
+
+	now := time.Now().Add(-3 * time.Second)
+	app := &App{
+		width:         80,
+		agentRunning:  true,
+		streamingText: "Here is my analysis of the results.",
+		agentStartTime: now,
+	}
+	app.subAgents = map[string]*subAgentDisplay{
+		"sa1": {task: "Explore auth", mode: "explore", startTime: now, toolCount: 3},
+	}
+	app.messages = []chatMessage{
+		{kind: msgUser, content: "go"},
+	}
+
+	rows := app.buildBlockRows()
+
+	subAgentIdx := -1
+	streamingIdx := -1
+	for i, r := range rows {
+		s := strip(r)
+		if strings.Contains(s, "Explore auth") {
+			subAgentIdx = i
+		}
+		if strings.Contains(s, "Here is my analysis") {
+			streamingIdx = i
+		}
+	}
+	if subAgentIdx == -1 {
+		t.Fatal("sub-agent line not found in output")
+	}
+	if streamingIdx == -1 {
+		t.Fatal("streaming text not found in output")
+	}
+	if streamingIdx <= subAgentIdx {
+		t.Errorf("streaming text (row %d) should appear after sub-agent line (row %d)", streamingIdx, subAgentIdx)
+	}
+}
+
 func TestStatusLineAfterSubAgentLines(t *testing.T) {
 	strip := func(s string) string {
 		return ansiEscRe.ReplaceAllString(s, "")

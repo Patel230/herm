@@ -34,8 +34,8 @@ In `buildBlockRows()`, swap the rendering order so sub-agent display lines appea
 
 This preserves chronological ordering: committed messages (text before sub-agents) appear first, then sub-agent activity (which started during the previous response), then the main agent's current streaming text (generated after sub-agents complete). Multiple rounds work naturally — each time streaming text is committed to messages, it moves above the sub-agent section, and new streaming text flows below.
 
-- [ ] 2a: In `buildBlockRows()` (`render.go:407-432`), move the sub-agent display block (lines 427-432) to render before the streaming text block (lines 408-424). The status line section (lines 433-462) stays at the bottom unchanged
-- [ ] 2b: Add test: set up an `App` with both `streamingText` and populated `subAgents`, call `buildBlockRows()`, verify that sub-agent display lines appear before the streaming text lines in the output
+- [x] 2a: In `buildBlockRows()` (`render.go:407-432`), move the sub-agent display block (lines 427-432) to render before the streaming text block (lines 408-424). The status line section (lines 433-462) stays at the bottom unchanged
+- [x] 2b: Add test: set up an `App` with both `streamingText` and populated `subAgents`, call `buildBlockRows()`, verify that sub-agent display lines appear before the streaming text lines in the output
 
 ## Phase 3: Persist mode in agent state and inherit on resume
 
