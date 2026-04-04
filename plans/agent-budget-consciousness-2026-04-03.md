@@ -145,7 +145,7 @@ Budget-related values are scattered across Go code, prompt templates, and tool d
 - [x] 5b: Add `__DEFAULT_MAX_TURNS__` placeholder to `prompts/tools/agent.md` (replacing the hardcoded `20` and derived `15`). Extend `loadToolDescriptions()` to accept and replace this placeholder using `defaultSubAgentMaxTurns`. Pass the constant through from the call site
 - [x] 5c: Fix config editor fallbacks — replace the hardcoded `15` on lines 258 and 304 of `configeditor.go` with `defaultSubAgentMaxTurns`
 - [x] 5d: Make tests dynamic — update `systemprompt_test.go` assertions that check for `"20 turns per sub-agent"` or similar literals to build expected strings from `defaultSubAgentMaxTurns`. Same for `agent_test.go` budget tier tests: use the threshold constants to compute which tier a given turn/max ratio falls into, rather than asserting against magic numbers. Tests should pass unchanged if the default is changed from 20 to any other value
-- [ ] 5e: Tests: temporarily change `defaultSubAgentMaxTurns` (or use a helper) to verify prompts and tool descriptions reflect the new value, confirming no residual hardcoded "20" remains
+- [x] 5e: Tests: temporarily change `defaultSubAgentMaxTurns` (or use a helper) to verify prompts and tool descriptions reflect the new value, confirming no residual hardcoded "20" remains
 
 ## Phase 6: Integration tests — budget-aware sub-agent lifecycle
 
