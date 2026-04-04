@@ -434,6 +434,10 @@ func (a *Agent) backgroundCompletion(ctx context.Context, lastNodeID string, rem
 
 		// Build a message informing the model that background agents finished.
 		var msg strings.Builder
+		if reminder := a.budgetReminderBlock(); reminder.Text != "" {
+			msg.WriteString(reminder.Text)
+			msg.WriteString("\n\n")
+		}
 		msg.WriteString("[SYSTEM: Background agents have completed. Incorporate their results and continue.]")
 		msg.WriteString("\n\n[Background agent results:]\n")
 		for i, r := range bgResults {
@@ -524,12 +528,15 @@ func (a *Agent) backgroundCompletion(ctx context.Context, lastNodeID string, rem
 				})
 			}
 
+			opts = a.buildPromptOpts()
+			if reminder := a.budgetReminderBlock(); reminder.Text != "" {
+				toolResults = append([]types.ContentBlock{reminder}, toolResults...)
+			}
 			toolResultJSON, marshalErr := json.Marshal(toolResults)
 			if marshalErr != nil {
 				a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("marshal tool results: %w", marshalErr)})
 				return nodeID
 			}
-			opts = a.buildPromptOpts()
 			a.emit(AgentEvent{Type: EventLLMStart})
 			toolCalls, newNodeID, stopReason, err = a.retryableStream(ctx, defaultRetryConfig, func() (*langdag.PromptResult, error) {
 				return a.client.PromptFrom(ctx, nodeID, string(toolResultJSON), opts...)
@@ -570,8 +577,13 @@ func (a *Agent) gracefulExhaustion(ctx context.Context, lastNodeID string) strin
 	// These haven't been shown to the model yet.
 	bgResults := a.drainBackgroundResults()
 
-	// Build the final synthesis message.
+	// Build the final synthesis message. Budget stats go in the user message
+	// as a <system-reminder> so the model sees its budget state for scoping.
 	var msg strings.Builder
+	if reminder := a.budgetReminderBlock(); reminder.Text != "" {
+		msg.WriteString(reminder.Text)
+		msg.WriteString("\n\n")
+	}
 	msg.WriteString("[SYSTEM: Tool iteration limit reached. Synthesize a final response from the conversation so far. Do NOT request any tools — this is your last turn.]")
 	if len(bgResults) > 0 {
 		msg.WriteString("\n\n[Background agent results:]\n")
@@ -759,12 +771,63 @@ const (
 	turnBudgetFinalThreshold = 0.90
 )
 
-// systemPromptWithStats returns the system prompt with session usage stats
-// appended when non-zero. This gives the model visibility into cumulative
-// token consumption so it can self-regulate delegation decisions.
-// For sub-agents (maxTurns > 0), it also includes turn budget progress with
-// tiered pacing messages at 50%, 75%, and 90% thresholds.
+// systemPromptWithStats returns the static system prompt. Dynamic stats
+// (session tokens, context window %, iteration warnings, turn budget) are
+// now injected via budgetReminderBlock() as a user-message <system-reminder>,
+// keeping the system prompt identical across turns for prompt caching.
+// TODO: rename to systemPrompt() once callers are cleaned up (Phase 8).
 func (a *Agent) systemPromptWithStats() string {
+	return a.systemPrompt
+}
+
+// turnBudgetLine returns the turn budget status line for the system prompt.
+// Returns "" when no turn budget is set (main agent).
+func (a *Agent) turnBudgetLine() string {
+	a.turnMu.Lock()
+	maxT := a.maxTurns
+	used := a.turnsUsed
+	tokIn := a.turnTokensIn
+	tokOut := a.turnTokensOut
+	a.turnMu.Unlock()
+
+	if maxT <= 0 {
+		return ""
+	}
+
+	totalTokens := tokIn + tokOut
+	remaining := maxT - used
+	if remaining < 0 {
+		remaining = 0
+	}
+	progress := float64(used) / float64(maxT)
+
+	switch {
+	case progress >= turnBudgetFinalThreshold:
+		return fmt.Sprintf("Budget: Turn %d/%d — %d turn remaining | %d tokens used\n"+
+			"🛑 FINAL TURN: Produce your complete summary NOW. Do not make any more tool calls. Write your findings as a final response.",
+			used, maxT, remaining, totalTokens)
+	case progress >= turnBudgetLateThreshold:
+		return fmt.Sprintf("Budget: Turn %d/%d — %d turns remaining | %d tokens used\n"+
+			"⚠️ Wrap up: You're running low on turns. Stop exploring and begin synthesizing your findings. Your next response should start producing output.",
+			used, maxT, remaining, totalTokens)
+	case progress >= turnBudgetMidThreshold:
+		return fmt.Sprintf("Budget: Turn %d/%d | %d tokens used — you're past halfway. Start narrowing your focus.",
+			used, maxT, totalTokens)
+	default:
+		return fmt.Sprintf("Budget: Turn %d/%d | %d tokens used",
+			used, maxT, totalTokens)
+	}
+}
+
+// budgetReminderBlock returns a text ContentBlock wrapped in <system-reminder>
+// tags containing the same dynamic stats that were previously in
+// systemPromptWithStats(): session stats, context window %, iteration warnings,
+// and turn budget. Returns a zero-value ContentBlock when there's nothing to
+// show (e.g. first call before any stats exist).
+//
+// This block is prepended to the user message (tool results) on follow-up LLM
+// calls, keeping the system prompt fully static for prompt caching.
+func (a *Agent) budgetReminderBlock() types.ContentBlock {
 	var extra []string
 
 	// Session stats line: tokens, agent calls, and cost.
@@ -809,47 +872,11 @@ func (a *Agent) systemPromptWithStats() string {
 	}
 
 	if len(extra) == 0 {
-		return a.systemPrompt
+		return types.ContentBlock{}
 	}
-	return a.systemPrompt + "\n\n---\n" + strings.Join(extra, "\n")
-}
-
-// turnBudgetLine returns the turn budget status line for the system prompt.
-// Returns "" when no turn budget is set (main agent).
-func (a *Agent) turnBudgetLine() string {
-	a.turnMu.Lock()
-	maxT := a.maxTurns
-	used := a.turnsUsed
-	tokIn := a.turnTokensIn
-	tokOut := a.turnTokensOut
-	a.turnMu.Unlock()
-
-	if maxT <= 0 {
-		return ""
-	}
-
-	totalTokens := tokIn + tokOut
-	remaining := maxT - used
-	if remaining < 0 {
-		remaining = 0
-	}
-	progress := float64(used) / float64(maxT)
-
-	switch {
-	case progress >= turnBudgetFinalThreshold:
-		return fmt.Sprintf("Budget: Turn %d/%d — %d turn remaining | %d tokens used\n"+
-			"🛑 FINAL TURN: Produce your complete summary NOW. Do not make any more tool calls. Write your findings as a final response.",
-			used, maxT, remaining, totalTokens)
-	case progress >= turnBudgetLateThreshold:
-		return fmt.Sprintf("Budget: Turn %d/%d — %d turns remaining | %d tokens used\n"+
-			"⚠️ Wrap up: You're running low on turns. Stop exploring and begin synthesizing your findings. Your next response should start producing output.",
-			used, maxT, remaining, totalTokens)
-	case progress >= turnBudgetMidThreshold:
-		return fmt.Sprintf("Budget: Turn %d/%d | %d tokens used — you're past halfway. Start narrowing your focus.",
-			used, maxT, totalTokens)
-	default:
-		return fmt.Sprintf("Budget: Turn %d/%d | %d tokens used",
-			used, maxT, totalTokens)
+	return types.ContentBlock{
+		Type: "text",
+		Text: "<system-reminder>\n" + strings.Join(extra, "\n") + "\n</system-reminder>",
 	}
 }
 
@@ -1431,10 +1458,13 @@ func (a *Agent) runLoop(ctx context.Context, userMessage string, parentNodeID st
 		}
 
 		// Build tool results message and re-call LLM.
-		// Rebuild opts so the system prompt includes updated session stats
-		// and the remaining tool iteration count.
+		// Budget stats are injected as a <system-reminder> text block in the
+		// user message (not the system prompt) to preserve prompt caching.
 		a.currentIteration = iteration
 		opts = a.buildPromptOpts()
+		if reminder := a.budgetReminderBlock(); reminder.Text != "" {
+			toolResults = append([]types.ContentBlock{reminder}, toolResults...)
+		}
 		toolResultJSON, marshalErr := json.Marshal(toolResults)
 		if marshalErr != nil {
 			a.emit(AgentEvent{Type: EventError, Error: fmt.Errorf("marshal tool results: %w", marshalErr)})

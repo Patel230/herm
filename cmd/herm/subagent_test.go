@@ -2906,16 +2906,24 @@ func TestIntegrationBudgetAwareSubAgentLifecycle(t *testing.T) {
 		t.Fatalf("expected at least 5 LLM calls, got %d", len(requests))
 	}
 
-	// The initial system prompt should include a budget line with the starting state.
-	if !strings.Contains(requests[0].System, "Budget: Turn 0/5") {
-		t.Errorf("initial system prompt should show Turn 0/5, got budget line:\n%s",
-			extractBudgetLine(requests[0].System))
-	}
-
-	// Every LLM call should include the Budget management section in the prompt
-	// (this is a static prompt section, not the dynamic budget line).
+	// The system prompt should NOT contain the dynamic budget line (it's in
+	// user messages now for prompt caching). But it should contain the static
+	// Budget management section from role_subagent.md.
 	if !strings.Contains(requests[0].System, "Budget management") {
 		t.Errorf("system prompt should contain Budget management section")
+	}
+
+	// Follow-up calls (after the initial prompt) should have budget info in
+	// user messages as a <system-reminder> text block, not in the system prompt.
+	budgetInMessages := false
+	for _, req := range requests[1:] {
+		if requestUserMessagesContain(req, "Budget:") {
+			budgetInMessages = true
+			break
+		}
+	}
+	if !budgetInMessages {
+		t.Error("follow-up LLM calls should have budget info in user messages")
 	}
 
 	// Result should show turns within budget (4 tool-call turns counted).
@@ -3112,16 +3120,20 @@ func TestIntegrationBackgroundSubAgentBudgetAwareness(t *testing.T) {
 		t.Error("expected at least one EventSubAgentDelta from background agent")
 	}
 
-	// Verify budget was injected into the initial system prompt.
+	// Verify budget info appears in follow-up user messages (not system prompt).
 	requests := prov.getRequests()
 	if len(requests) < 5 {
 		t.Errorf("expected at least 5 LLM calls for background agent, got %d", len(requests))
 	}
-	if len(requests) > 0 {
-		if !strings.Contains(requests[0].System, fmt.Sprintf("Budget: Turn 0/%d", maxTurns)) {
-			t.Errorf("initial system prompt should include budget line, got:\n%s",
-				extractBudgetLine(requests[0].System))
+	budgetInMessages := false
+	for _, req := range requests[1:] {
+		if requestUserMessagesContain(req, "Budget:") {
+			budgetInMessages = true
+			break
 		}
+	}
+	if !budgetInMessages {
+		t.Error("follow-up LLM calls should have budget info in user messages")
 	}
 }
 
@@ -3164,28 +3176,32 @@ func TestIntegrationSubAgentSystemPromptIncludesTurnBudget(t *testing.T) {
 		t.Fatalf("expected at least 3 LLM calls, got %d", len(requests))
 	}
 
-	// The initial system prompt should include the dynamic budget line.
-	if !strings.Contains(requests[0].System, fmt.Sprintf("Budget: Turn 0/%d", maxTurns)) {
-		t.Errorf("initial system prompt should include budget line with Turn 0/%d, got:\n%s",
-			maxTurns, extractBudgetLine(requests[0].System))
-	}
-
-	// Every call should have a Budget line (langdag reuses root system prompt).
-	for i, req := range requests {
-		if !strings.Contains(req.System, "Budget:") {
-			t.Errorf("call %d system prompt should contain 'Budget:'", i+1)
-		}
-	}
-
-	// The system prompt should include the Budget management section from
-	// role_subagent.md (added in Phase 3).
+	// The system prompt should NOT contain the dynamic budget line (moved to
+	// user messages for prompt caching). Static sections remain.
 	if !strings.Contains(requests[0].System, "Budget management") {
 		t.Errorf("system prompt should contain 'Budget management' section")
 	}
-
-	// The system prompt should mention turns in the budget management section.
 	if !strings.Contains(requests[0].System, "limited number of turns") {
 		t.Errorf("system prompt should mention turns in budget management section")
+	}
+
+	// Follow-up calls should have budget info in user messages.
+	budgetInMessages := false
+	for _, req := range requests[1:] {
+		if requestUserMessagesContain(req, "Budget:") {
+			budgetInMessages = true
+			break
+		}
+	}
+	if !budgetInMessages {
+		t.Error("follow-up LLM calls should have budget info in user messages")
+	}
+
+	// System prompt should be identical across all calls (prompt caching).
+	for i := 1; i < len(requests); i++ {
+		if requests[i].System != requests[0].System {
+			t.Errorf("system prompt changed between call 1 and %d — breaks prompt caching", i+1)
+		}
 	}
 
 	// Verify the loaded tool description for "agent" mentions the default turn budget.
@@ -3202,13 +3218,138 @@ func TestIntegrationSubAgentSystemPromptIncludesTurnBudget(t *testing.T) {
 	}
 }
 
-// extractBudgetLine returns the Budget line from a system prompt, or a message
+// extractBudgetLine returns the Budget line from a string, or a message
 // if none found. Used for readable test failure messages.
-func extractBudgetLine(system string) string {
-	for _, line := range strings.Split(system, "\n") {
+func extractBudgetLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
 		if strings.Contains(line, "Budget:") {
 			return strings.TrimSpace(line)
 		}
 	}
 	return "(no Budget line found)"
+}
+
+// requestUserMessagesContain checks if any user message in the request contains
+// the given substring. Handles both plain string and []ContentBlock content.
+func requestUserMessagesContain(req *types.CompletionRequest, substr string) bool {
+	for _, msg := range req.Messages {
+		if msg.Role != "user" {
+			continue
+		}
+		// Try as plain string.
+		var s string
+		if err := json.Unmarshal(msg.Content, &s); err == nil {
+			if strings.Contains(s, substr) {
+				return true
+			}
+			continue
+		}
+		// Try as []ContentBlock.
+		var blocks []types.ContentBlock
+		if err := json.Unmarshal(msg.Content, &blocks); err == nil {
+			for _, b := range blocks {
+				if strings.Contains(b.Text, substr) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// extractSystemReminderFromLastUserMessage returns the <system-reminder> text
+// from the last user message in a CompletionRequest, or "" if not found.
+func extractSystemReminderFromLastUserMessage(req *types.CompletionRequest) string {
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		msg := req.Messages[i]
+		if msg.Role != "user" {
+			continue
+		}
+		// Try as plain string.
+		var s string
+		if err := json.Unmarshal(msg.Content, &s); err == nil {
+			if strings.Contains(s, "<system-reminder>") {
+				return s
+			}
+			continue
+		}
+		// Try as []ContentBlock.
+		var blocks []types.ContentBlock
+		if err := json.Unmarshal(msg.Content, &blocks); err == nil {
+			for _, b := range blocks {
+				if b.Type == "text" && strings.Contains(b.Text, "<system-reminder>") {
+					return b.Text
+				}
+			}
+		}
+		break // only check last user message
+	}
+	return ""
+}
+
+func TestPromptCachingPreservedAcrossTurns(t *testing.T) {
+	// 7g: Verify that the system prompt is identical across all LLM calls
+	// (proving prompt caching is not broken), and that budget info appears
+	// in user messages with correct turn progression.
+	const maxTurns = 5
+
+	mockTool := &delayedTool{name: "bash", result: "ok", delay: 10 * time.Millisecond}
+
+	prov := &budgetCapturingProvider{
+		model: "test-model",
+		responses: []scriptedResponse{
+			{text: "Turn 1.", toolCalls: []types.ContentBlock{
+				{Type: "tool_use", ID: "tu1", Name: "bash", Input: json.RawMessage(`{}`)},
+			}, tokensIn: 200, tokensOut: 100},
+			{text: "Turn 2.", toolCalls: []types.ContentBlock{
+				{Type: "tool_use", ID: "tu2", Name: "bash", Input: json.RawMessage(`{}`)},
+			}, tokensIn: 300, tokensOut: 150},
+			{text: "Turn 3.", toolCalls: []types.ContentBlock{
+				{Type: "tool_use", ID: "tu3", Name: "bash", Input: json.RawMessage(`{}`)},
+			}, tokensIn: 400, tokensOut: 200},
+			// Text-only — agent wraps up.
+			{text: "Final summary.", tokensIn: 500, tokensOut: 250},
+		},
+	}
+	store := newMockStorage()
+	client := langdag.NewWithDeps(store, prov)
+	tmpDir := t.TempDir()
+	tool := NewSubAgentTool(client, []Tool{mockTool}, nil, "test-model", "", maxTurns, 3, 0, tmpDir, "", "alpine:latest")
+
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"test caching","mode":"explore"}`))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	requests := prov.getRequests()
+	if len(requests) < 4 {
+		t.Fatalf("expected at least 4 LLM calls, got %d", len(requests))
+	}
+
+	// 1. System prompt must be IDENTICAL across all calls — proving prompt caching works.
+	baseSystem := requests[0].System
+	for i := 1; i < len(requests); i++ {
+		if requests[i].System != baseSystem {
+			t.Errorf("system prompt changed between call 1 and %d — breaks prompt caching.\ncall 1 len=%d, call %d len=%d",
+				i+1, len(baseSystem), i+1, len(requests[i].System))
+		}
+	}
+
+	// 2. System prompt must NOT contain dynamic budget content.
+	if strings.Contains(baseSystem, "tokens used") {
+		t.Error("system prompt should not contain dynamic token stats")
+	}
+
+	// 3. Follow-up calls should have <system-reminder> in user messages.
+	// The initial call (requests[0]) has no budget reminder; follow-ups do.
+	for i := 1; i < len(requests); i++ {
+		reminder := extractSystemReminderFromLastUserMessage(requests[i])
+		if reminder == "" {
+			t.Errorf("call %d should have <system-reminder> in user message", i+1)
+			continue
+		}
+		if !strings.Contains(reminder, "Budget:") {
+			t.Errorf("call %d <system-reminder> should contain Budget line, got: %q", i+1, reminder)
+		}
+	}
 }

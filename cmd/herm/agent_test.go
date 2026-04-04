@@ -1187,36 +1187,52 @@ func TestRunParallelAgentEventIDs(t *testing.T) {
 
 // --- Phase 5: Token budget awareness ---
 
-func TestSystemPromptWithStatsNoStats(t *testing.T) {
-	client := newTestClient("ok")
-	agent := NewAgent(client, nil, nil, "base prompt", "test-model", 0)
-
-	got := agent.systemPromptWithStats()
-	if got != "base prompt" {
-		t.Errorf("with no stats, systemPromptWithStats should return base prompt, got: %q", got)
-	}
-}
-
-func TestSystemPromptWithStatsIncludesStats(t *testing.T) {
+func TestSystemPromptWithStatsReturnsStaticPrompt(t *testing.T) {
 	client := newTestClient("ok")
 	agent := NewAgent(client, nil, nil, "base prompt", "test-model", 0)
 	agent.sessionInputTokens = 10000
 	agent.sessionOutputTokens = 2000
 	agent.sessionAgentCalls = 3
 
+	// systemPromptWithStats() should always return the static prompt now —
+	// dynamic stats are in budgetReminderBlock().
 	got := agent.systemPromptWithStats()
-	if !strings.Contains(got, "base prompt") {
-		t.Error("augmented prompt should still contain base prompt")
-	}
-	if !strings.Contains(got, "12000 tokens used") {
-		t.Errorf("prompt should contain total tokens (10000+2000=12000), got: %q", got)
-	}
-	if !strings.Contains(got, "3 agent calls") {
-		t.Errorf("prompt should contain agent call count, got: %q", got)
+	if got != "base prompt" {
+		t.Errorf("systemPromptWithStats should return static base prompt, got: %q", got)
 	}
 }
 
-func TestSystemPromptIterationWarningLowThreshold(t *testing.T) {
+func TestBudgetReminderBlockIncludesStats(t *testing.T) {
+	client := newTestClient("ok")
+	agent := NewAgent(client, nil, nil, "base prompt", "test-model", 0)
+	agent.sessionInputTokens = 10000
+	agent.sessionOutputTokens = 2000
+	agent.sessionAgentCalls = 3
+
+	block := agent.budgetReminderBlock()
+	got := block.Text
+	if !strings.Contains(got, "12000 tokens used") {
+		t.Errorf("reminder should contain total tokens (10000+2000=12000), got: %q", got)
+	}
+	if !strings.Contains(got, "3 agent calls") {
+		t.Errorf("reminder should contain agent call count, got: %q", got)
+	}
+	if !strings.Contains(got, "<system-reminder>") {
+		t.Errorf("reminder should be wrapped in <system-reminder> tags, got: %q", got)
+	}
+}
+
+func TestBudgetReminderBlockEmptyWhenNoStats(t *testing.T) {
+	client := newTestClient("ok")
+	agent := NewAgent(client, nil, nil, "base prompt", "test-model", 0)
+
+	block := agent.budgetReminderBlock()
+	if block.Text != "" {
+		t.Errorf("with no stats, budgetReminderBlock should return empty block, got: %q", block.Text)
+	}
+}
+
+func TestBudgetReminderIterationWarningLowThreshold(t *testing.T) {
 	client := newTestClient("ok")
 	agent := NewAgent(client, nil, nil, "base prompt", "test-model", 0,
 		WithMaxToolIterations(20),
@@ -1224,7 +1240,7 @@ func TestSystemPromptIterationWarningLowThreshold(t *testing.T) {
 	// Simulate being at iteration 16 of 20 (20% remaining < 25% low threshold).
 	agent.currentIteration = 16
 
-	got := agent.systemPromptWithStats()
+	got := agent.budgetReminderBlock().Text
 	if !strings.Contains(got, "4 tool iterations remaining out of 20") {
 		t.Errorf("expected low-threshold iteration warning, got: %q", got)
 	}
@@ -1233,7 +1249,7 @@ func TestSystemPromptIterationWarningLowThreshold(t *testing.T) {
 	}
 }
 
-func TestSystemPromptIterationWarningMidThreshold(t *testing.T) {
+func TestBudgetReminderIterationWarningMidThreshold(t *testing.T) {
 	client := newTestClient("ok")
 	agent := NewAgent(client, nil, nil, "base prompt", "test-model", 0,
 		WithMaxToolIterations(20),
@@ -1241,7 +1257,7 @@ func TestSystemPromptIterationWarningMidThreshold(t *testing.T) {
 	// Simulate being at iteration 12 of 20 (40% remaining < 50% mid threshold).
 	agent.currentIteration = 12
 
-	got := agent.systemPromptWithStats()
+	got := agent.budgetReminderBlock().Text
 	if !strings.Contains(got, "past halfway") {
 		t.Errorf("expected mid-threshold 'past halfway' warning, got: %q", got)
 	}
@@ -1250,7 +1266,7 @@ func TestSystemPromptIterationWarningMidThreshold(t *testing.T) {
 	}
 }
 
-func TestSystemPromptNoIterationWarningAboveThreshold(t *testing.T) {
+func TestBudgetReminderNoIterationWarningAboveThreshold(t *testing.T) {
 	client := newTestClient("ok")
 	agent := NewAgent(client, nil, nil, "base prompt", "test-model", 0,
 		WithMaxToolIterations(20),
@@ -1258,7 +1274,7 @@ func TestSystemPromptNoIterationWarningAboveThreshold(t *testing.T) {
 	// Simulate being at iteration 5 of 20 (75% remaining > 50% mid threshold).
 	agent.currentIteration = 5
 
-	got := agent.systemPromptWithStats()
+	got := agent.budgetReminderBlock().Text
 	if strings.Contains(got, "tool iterations remaining") || strings.Contains(got, "past halfway") {
 		t.Errorf("should not show iteration warning when above threshold, got: %q", got)
 	}
@@ -5099,7 +5115,7 @@ func TestTurnBudgetNotShownWhenMaxTurnsZero(t *testing.T) {
 	client := newTestClient("ok")
 	agent := NewAgent(client, nil, nil, "base prompt", "test-model", 0)
 	// Main agent: maxTurns == 0, no turn budget should appear.
-	got := agent.systemPromptWithStats()
+	got := agent.budgetReminderBlock().Text
 	if strings.Contains(got, "Budget:") {
 		t.Errorf("main agent (maxTurns=0) should not show budget, got: %q", got)
 	}
@@ -5118,7 +5134,7 @@ func TestTurnBudgetEarlyTier(t *testing.T) {
 	agent.SetTurnProgress(turn, maxT)
 	agent.SetTokenProgress(6000, 2200)
 
-	got := agent.systemPromptWithStats()
+	got := agent.budgetReminderBlock().Text
 	expected := fmt.Sprintf("Budget: Turn %d/%d | 8200 tokens used", turn, maxT)
 	if !strings.Contains(got, expected) {
 		t.Errorf("early tier should show basic budget, got: %q", got)
@@ -5138,7 +5154,7 @@ func TestTurnBudgetMidTier(t *testing.T) {
 	agent.SetTurnProgress(turn, maxT)
 	agent.SetTokenProgress(25000, 9100)
 
-	got := agent.systemPromptWithStats()
+	got := agent.budgetReminderBlock().Text
 	expected := fmt.Sprintf("Budget: Turn %d/%d", turn, maxT)
 	if !strings.Contains(got, expected) {
 		t.Errorf("mid tier should show turn progress, got: %q", got)
@@ -5158,7 +5174,7 @@ func TestTurnBudgetLateTier(t *testing.T) {
 	agent.SetTurnProgress(turn, maxT)
 	agent.SetTokenProgress(40000, 12300)
 
-	got := agent.systemPromptWithStats()
+	got := agent.budgetReminderBlock().Text
 	expected := fmt.Sprintf("Budget: Turn %d/%d", turn, maxT)
 	if !strings.Contains(got, expected) {
 		t.Errorf("late tier should show turn progress, got: %q", got)
@@ -5181,7 +5197,7 @@ func TestTurnBudgetFinalTier(t *testing.T) {
 	agent.SetTurnProgress(turn, maxT)
 	agent.SetTokenProgress(50000, 11800)
 
-	got := agent.systemPromptWithStats()
+	got := agent.budgetReminderBlock().Text
 	expected := fmt.Sprintf("Budget: Turn %d/%d", turn, maxT)
 	if !strings.Contains(got, expected) {
 		t.Errorf("final tier should show turn progress, got: %q", got)
@@ -5206,7 +5222,7 @@ func TestSetTurnProgressThreadSafe(t *testing.T) {
 			defer wg.Done()
 			agent.SetTurnProgress(turn, maxT)
 			agent.SetTokenProgress(turn*1000, turn*200)
-			_ = agent.systemPromptWithStats()
+			_ = agent.budgetReminderBlock()
 		}(i)
 	}
 	wg.Wait()
@@ -5220,7 +5236,7 @@ func TestContextWindowUtilizationShown(t *testing.T) {
 	agent := NewAgent(client, nil, nil, "base prompt", "test-model", 200000)
 	agent.lastInputTokens = 80000
 
-	got := agent.systemPromptWithStats()
+	got := agent.budgetReminderBlock().Text
 	if !strings.Contains(got, "Context: ~40% full (80000/200000 tokens)") {
 		t.Errorf("expected context window utilization, got: %q", got)
 	}
@@ -5231,7 +5247,7 @@ func TestContextWindowNotShownWhenZero(t *testing.T) {
 	agent := NewAgent(client, nil, nil, "base prompt", "test-model", 0)
 	agent.lastInputTokens = 80000
 
-	got := agent.systemPromptWithStats()
+	got := agent.budgetReminderBlock().Text
 	if strings.Contains(got, "Context:") {
 		t.Errorf("should not show context window when contextWindow=0, got: %q", got)
 	}
@@ -5242,7 +5258,7 @@ func TestContextWindowNotShownWhenNoInputTokens(t *testing.T) {
 	agent := NewAgent(client, nil, nil, "base prompt", "test-model", 200000)
 	// lastInputTokens defaults to 0
 
-	got := agent.systemPromptWithStats()
+	got := agent.budgetReminderBlock().Text
 	if strings.Contains(got, "Context:") {
 		t.Errorf("should not show context window when lastInputTokens=0, got: %q", got)
 	}
@@ -5256,7 +5272,7 @@ func TestSessionCostShownInStats(t *testing.T) {
 	agent.sessionAgentCalls = 2
 	agent.SetSessionCost(0.15)
 
-	got := agent.systemPromptWithStats()
+	got := agent.budgetReminderBlock().Text
 	if !strings.Contains(got, "~$0.15") {
 		t.Errorf("expected cost in stats, got: %q", got)
 	}
@@ -5271,7 +5287,7 @@ func TestSessionCostNotShownWhenZero(t *testing.T) {
 	agent.sessionInputTokens = 50000
 	agent.sessionOutputTokens = 5000
 
-	got := agent.systemPromptWithStats()
+	got := agent.budgetReminderBlock().Text
 	if strings.Contains(got, "$") {
 		t.Errorf("should not show cost when zero, got: %q", got)
 	}
@@ -5285,7 +5301,7 @@ func TestGraduatedIterationWarningLow(t *testing.T) {
 	// 20% remaining — below 25% low threshold.
 	agent.currentIteration = 80
 
-	got := agent.systemPromptWithStats()
+	got := agent.budgetReminderBlock().Text
 	if !strings.Contains(got, "⚠️") {
 		t.Errorf("expected warning emoji at low threshold, got: %q", got)
 	}
@@ -5302,7 +5318,7 @@ func TestGraduatedIterationWarningMid(t *testing.T) {
 	// 40% remaining — below 50% mid threshold but above 25% low.
 	agent.currentIteration = 60
 
-	got := agent.systemPromptWithStats()
+	got := agent.budgetReminderBlock().Text
 	if !strings.Contains(got, "past halfway") {
 		t.Errorf("expected 'past halfway' at mid threshold, got: %q", got)
 	}
@@ -5319,7 +5335,7 @@ func TestGraduatedIterationWarningNone(t *testing.T) {
 	// 70% remaining — above all thresholds.
 	agent.currentIteration = 30
 
-	got := agent.systemPromptWithStats()
+	got := agent.budgetReminderBlock().Text
 	if strings.Contains(got, "past halfway") || strings.Contains(got, "iterations remaining") {
 		t.Errorf("should not show iteration warnings above thresholds, got: %q", got)
 	}
@@ -5336,7 +5352,7 @@ func TestSetSessionCostThreadSafe(t *testing.T) {
 		go func(v int) {
 			defer wg.Done()
 			agent.SetSessionCost(float64(v) * 0.01)
-			_ = agent.systemPromptWithStats()
+			_ = agent.budgetReminderBlock()
 		}(i)
 	}
 	wg.Wait()

@@ -971,7 +971,14 @@ func (t *SubAgentTool) gracefulSubAgentSynthesis(ctx context.Context, agent *Age
 		opts = append(opts, langdag.WithModel(model))
 	}
 
-	result, err := t.client.PromptFrom(synthCtx, lastNodeID, subAgentSynthesisPrompt, opts...)
+	// Prepend budget stats as a <system-reminder> in the user message so the
+	// model sees its budget state when producing the synthesis.
+	synthMsg := subAgentSynthesisPrompt
+	if reminder := agent.budgetReminderBlock(); reminder.Text != "" {
+		synthMsg = reminder.Text + "\n\n" + synthMsg
+	}
+
+	result, err := t.client.PromptFrom(synthCtx, lastNodeID, synthMsg, opts...)
 	if err != nil {
 		debugLog("gracefulSubAgentSynthesis failed: %v", err)
 		return ""
