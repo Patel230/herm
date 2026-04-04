@@ -46,6 +46,10 @@ type PromptData struct {
 	// Tool iteration budget (injected dynamically via systemPromptWithStats).
 	RemainingToolIterations int
 	MaxToolIterations       int
+
+	// DefaultSubAgentMaxTurns is the default turn budget for sub-agents.
+	// Flows into templates so prompt text uses a single source of truth.
+	DefaultSubAgentMaxTurns int
 }
 
 // buildSystemPrompt constructs the system prompt for the coding agent.
@@ -78,12 +82,13 @@ func buildSystemPrompt(tools []Tool, serverTools []types.ToolDefinition, skills 
 		HasOutline:     toolNames["outline"],
 		HasEditFile:    toolNames["edit_file"],
 		HasWriteFile:   toolNames["write_file"],
-		ContainerImage: containerImage,
-		WorkDir:        workDir,
-		WorktreeBranch: worktreeBranch,
-		Date:           time.Now().Format("2006-01-02 15:04 MST"),
-		Personality:    personality,
-		Skills:         skills,
+		ContainerImage:          containerImage,
+		WorkDir:                 workDir,
+		WorktreeBranch:          worktreeBranch,
+		Date:                    time.Now().Format("2006-01-02 15:04 MST"),
+		Personality:             personality,
+		Skills:                  skills,
+		DefaultSubAgentMaxTurns: defaultSubAgentMaxTurns,
 	}
 
 	data.ContainerEnv = readContainerEnv(workDir)
@@ -150,11 +155,12 @@ func buildSubAgentSystemPrompt(tools []Tool, serverTools []types.ToolDefinition,
 		HasOutline:     toolNames["outline"],
 		HasEditFile:    toolNames["edit_file"],
 		HasWriteFile:   toolNames["write_file"],
-		IsSubAgent:     true,
-		ContainerImage: containerImage,
-		ContainerEnv:   readContainerEnv(workDir),
-		WorkDir:        workDir,
-		Date:           time.Now().Format("2006-01-02 15:04 MST"),
+		IsSubAgent:              true,
+		ContainerImage:          containerImage,
+		ContainerEnv:            readContainerEnv(workDir),
+		WorkDir:                 workDir,
+		Date:                    time.Now().Format("2006-01-02 15:04 MST"),
+		DefaultSubAgentMaxTurns: defaultSubAgentMaxTurns,
 		// Personality, Skills, WorktreeBranch intentionally omitted for sub-agents.
 	}
 
