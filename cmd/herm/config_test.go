@@ -500,6 +500,57 @@ func TestBuildConfigRowsProjectOverrideShown(t *testing.T) {
 	}
 }
 
+func TestBuildConfigRowsAPIKeysShowsEffectiveProviderFromMergedActiveModel(t *testing.T) {
+	a := &App{
+		cfgTab: 0, // API Keys tab
+		cfgDraft: Config{
+			GeminiAPIKey: "test-key",
+			ActiveModel:  "gemini-2.5-pro",
+		},
+		cfgProjectDraft: ProjectConfig{
+			ActiveModel: "gemini-2.5-flash",
+		},
+		models: []ModelDef{
+			{Provider: ProviderGemini, ID: "gemini-2.5-pro"},
+			{Provider: ProviderGemini, ID: "gemini-2.5-flash"},
+		},
+	}
+
+	rows := a.buildConfigRows()
+	found := false
+	for _, row := range rows {
+		if strings.Contains(row, "Effective provider: gemini") && strings.Contains(row, "active model: gemini-2.5-flash") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected effective provider row for merged project active model, got: %v", rows)
+	}
+}
+
+func TestEnterConfigModeSetsPreferredAPIKeyCursorFromEffectiveProvider(t *testing.T) {
+	a := &App{
+		config: Config{
+			GeminiAPIKey: "test-key",
+			ActiveModel:  "gemini-2.5-flash",
+		},
+		models: []ModelDef{
+			{Provider: ProviderGemini, ID: "gemini-2.5-flash"},
+		},
+	}
+
+	a.enterConfigMode()
+
+	// API Keys rows: Anthropic(0), OpenAI(1), Grok(2), Gemini(3), Ollama(4)
+	if a.cfgCursor != 3 {
+		t.Fatalf("cfgCursor = %d, want 3 (Gemini row)", a.cfgCursor)
+	}
+	if a.cfgTabCursor[0] != 3 {
+		t.Fatalf("cfgTabCursor[0] = %d, want 3", a.cfgTabCursor[0])
+	}
+}
+
 func TestExitConfigModeSavesBothConfigs(t *testing.T) {
 	globalDir := t.TempDir()
 	repoDir := t.TempDir()
