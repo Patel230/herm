@@ -43,6 +43,9 @@ fi
 
 # Ensure a buildx builder with multi-arch support exists
 BUILDER="herm-multiarch"
+cleanup_builder() { docker buildx rm "$BUILDER" 2>/dev/null || true; }
+trap cleanup_builder EXIT
+
 if ! docker buildx inspect "$BUILDER" &>/dev/null; then
   echo "Creating buildx builder: ${BUILDER}"
   docker buildx create --name "$BUILDER" --driver docker-container --use
