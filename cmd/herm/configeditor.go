@@ -399,6 +399,7 @@ func (a *App) buildConfigRows() []string {
 	var rows []string
 	configured := a.cfgDraft.configuredProviders()
 	hasProvider := len(configured) > 0
+	isProjectTab := a.cfgTab == 2
 
 	// Tab bar
 	var tabParts []string
@@ -478,7 +479,7 @@ func (a *App) buildConfigRows() []string {
 				p := ollamaModelProvider(val, a.models, a.cfgDraft.OllamaBaseURL)
 				// Hide model values when no providers are configured, or when this
 				// model's provider is not currently configured.
-				if !hasProvider || p == "" || !configured[p] {
+				if !isProjectTab && (!hasProvider || p == "" || !configured[p]) {
 					val = ""
 				}
 			}
@@ -488,11 +489,11 @@ func (a *App) buildConfigRows() []string {
 				val = val + " \033[33m(offline)\033[0m"
 			}
 			if val == "" {
-				if f.picker != nil && !hasProvider {
+				if f.picker != nil && !hasProvider && !isProjectTab {
 					val = "(not set)"
 				} else if f.globalHint != nil {
 					hint := f.globalHint(a.cfgDraft)
-					if f.picker != nil {
+					if f.picker != nil && !isProjectTab {
 						p := ollamaModelProvider(hint, a.models, a.cfgDraft.OllamaBaseURL)
 						if hint == "" || p == "" || !configured[p] {
 							hint = "not set"
