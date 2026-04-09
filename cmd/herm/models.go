@@ -167,6 +167,8 @@ func fetchOpenRouterModelsFrom(apiKey, baseURL string) []ModelDef {
 		return nil
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("HTTP-Referer", "https://github.com/aduermael/herm")
+	req.Header.Set("X-Title", "herm")
 
 	resp, err := client.Do(req)
 	if err != nil {

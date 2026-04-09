@@ -235,6 +235,28 @@ func TestFetchOpenRouterModelsMissingContextLength(t *testing.T) {
 	}
 }
 
+func TestFetchOpenRouterModelsRequiredHeaders(t *testing.T) {
+	var gotAuth, gotReferer, gotTitle string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotReferer = r.Header.Get("HTTP-Referer")
+		gotTitle = r.Header.Get("X-Title")
+		json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{}})
+	}))
+	defer srv.Close()
+
+	fetchOpenRouterModelsFrom("test-key", srv.URL)
+	if gotAuth != "Bearer test-key" {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer test-key")
+	}
+	if gotReferer == "" {
+		t.Error("expected HTTP-Referer header to be set")
+	}
+	if gotTitle == "" {
+		t.Error("expected X-Title header to be set")
+	}
+}
+
 func TestFetchOpenRouterModelsProviderField(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
