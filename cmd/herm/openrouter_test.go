@@ -5,6 +5,7 @@ import "testing"
 // testOpenRouterModels returns a model list that includes OpenRouter models.
 func testOpenRouterModels() []ModelDef {
 	return append(testModels(), []ModelDef{
+		{Provider: ProviderOpenRouter, ID: "z-ai/glm-4.5-air:free", PromptPrice: 0, CompletionPrice: 0},
 		{Provider: ProviderOpenRouter, ID: "deepseek/deepseek-r1:free", PromptPrice: 0, CompletionPrice: 0},
 		{Provider: ProviderOpenRouter, ID: "google/gemini-2.0-flash-exp:free", PromptPrice: 0, CompletionPrice: 0},
 		{Provider: ProviderOpenRouter, ID: "anthropic/claude-sonnet-4-5", PromptPrice: 3.0, CompletionPrice: 15.0},
