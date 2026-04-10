@@ -70,4 +70,4 @@ require (
 	modernc.org/token v1.1.0 // indirect
 )
 
-replace langdag.com/langdag => github.com/aduermael/langdag v0.8.0
+replace langdag.com/langdag => ./external-deps-workspace/langdag
