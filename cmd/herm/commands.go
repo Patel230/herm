@@ -187,13 +187,13 @@ func (a *App) handleCommand(input string) {
 
 			if idx == 0 {
 				// "New worktree" — prompt for a name.
-				a.promptForWorktreeName(repoRoot, baseDir)
+				a.promptForWorktreeName(promptForWorktreeNameOptions{repoRoot: repoRoot, baseDir: baseDir})
 				return
 			}
 			wtIdx := idx - 1
 			if wtIdx >= 0 && wtIdx < len(wts) {
 				selected := wts[wtIdx]
-				a.switchToWorktree(selected.Path, filepath.Base(selected.Path), selected.Branch)
+				a.switchToWorktree(switchToWorktreeOptions{wtPath: selected.Path, name: filepath.Base(selected.Path), branch: selected.Branch})
 			}
 		}
 		a.renderInput()
@@ -245,7 +245,7 @@ func (a *App) handleCompactCommand(input string) {
 	a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Compacting conversation..."})
 	a.render()
 
-	result, err := compactConversation(context.Background(), a.langdagClient, a.agentNodeID, model, focusHint)
+	result, err := compactConversation(context.Background(), compactConversationOptions{client: a.langdagClient, nodeID: a.agentNodeID, model: model, focusHint: focusHint})
 	if err != nil {
 		a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Compact failed: %v", err)})
 		a.render()
@@ -334,7 +334,7 @@ func (a *App) handleUsageCommand() {
 
 	// Context window status.
 	contextWindow := 0
-	if m := findModelByID(a.models, a.config.resolveActiveModel(a.models)); m != nil {
+	if m := findModelByID(findModelByIDOptions{models: a.models, id: a.config.resolveActiveModel(a.models)}); m != nil {
 		contextWindow = m.ContextWindow
 	}
 	if contextWindow > 0 && a.lastInputTokens > 0 {
@@ -347,27 +347,43 @@ func (a *App) handleUsageCommand() {
 	a.render()
 }
 
-func (a *App) promptForWorktreeName(repoRoot, baseDir string) {
+// promptForWorktreeNameOptions holds the parameters for promptForWorktreeName.
+type promptForWorktreeNameOptions struct {
+	repoRoot string
+	baseDir  string
+}
+
+func (a *App) promptForWorktreeName(opts promptForWorktreeNameOptions) {
 	a.promptLabel = "Enter worktree name:"
 	a.promptCallback = func(name string) {
-		wtPath, err := createWorktree(repoRoot, baseDir, name)
+		wtPath, err := createWorktree(createWorktreeOptions{repoRoot: opts.repoRoot, baseDir: opts.baseDir, name: name})
 		if err != nil {
 			a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Failed to create worktree: %v", err)})
 			a.render()
 			return
 		}
 		branch := "herm-" + name
-		a.switchToWorktree(wtPath, name, branch)
+		a.switchToWorktree(switchToWorktreeOptions{wtPath: wtPath, name: name, branch: branch})
 	}
 	a.resetInput()
 	a.renderInput()
 }
 
-func (a *App) switchToWorktree(wtPath, name, branch string) {
+// switchToWorktreeOptions holds the parameters for switchToWorktree.
+type switchToWorktreeOptions struct {
+	wtPath string
+	name   string
+	branch string
+}
+
+func (a *App) switchToWorktree(opts switchToWorktreeOptions) {
+	wtPath := opts.wtPath
+	name := opts.name
+	branch := opts.branch
 	a.worktreePath = wtPath
 	a.status.WorktreeName = name
 	a.status.Branch = branch
-	_ = lockWorktree(wtPath, os.Getpid())
+	_ = lockWorktree(lockWorktreeOptions{wtPath: wtPath, pid: os.Getpid()})
 
 	a.messages = append(a.messages, chatMessage{kind: msgSuccess, content: fmt.Sprintf("Switched to worktree '%s' (%s)", name, branch)})
 
@@ -385,7 +401,7 @@ func (a *App) switchToWorktree(wtPath, name, branch string) {
 				{Source: wtPath, Destination: wtPath},
 				{Source: attachDir, Destination: "/attachments", ReadOnly: true},
 			}
-			if err := a.container.Start(wtPath, mounts); err != nil {
+			if err := a.container.Start(containerStartOptions{workspace: wtPath, mounts: mounts}); err != nil {
 				a.resultCh <- containerStatusMsg{text: "start failed"}
 				a.resultCh <- containerErrMsg{err: err}
 				return

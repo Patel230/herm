@@ -13,12 +13,18 @@ import (
 	"langdag.com/langdag/types"
 )
 
+// formatToolDefinitionsOptions is the parameter bundle for formatToolDefinitions.
+type formatToolDefinitionsOptions struct {
+	tools       []Tool
+	serverTools []types.ToolDefinition
+}
+
 // formatToolDefinitions builds a compact display of all tool definitions
 // the LLM receives, including client tools and server tools.
-func formatToolDefinitions(tools []Tool, serverTools []types.ToolDefinition) string {
+func formatToolDefinitions(opts formatToolDefinitionsOptions) string {
 	var b strings.Builder
 	b.WriteString("── Tool Definitions ──\n")
-	for _, t := range tools {
+	for _, t := range opts.tools {
 		def := t.Definition()
 		b.WriteString("\n")
 		b.WriteString(def.Name)
@@ -43,7 +49,7 @@ func formatToolDefinitions(tools []Tool, serverTools []types.ToolDefinition) str
 		}
 		b.WriteString("\n")
 	}
-	for _, st := range serverTools {
+	for _, st := range opts.serverTools {
 		b.WriteString("\n")
 		b.WriteString(st.Name)
 		b.WriteString(": ")
@@ -116,7 +122,7 @@ func (a *App) startAgent(userMessage string) {
 
 	var tools []Tool
 	if a.containerReady && a.container != nil {
-		tools = append(tools, NewBashTool(a.container, 120))
+		tools = append(tools, NewBashTool(NewBashToolOptions{Container: a.container, Timeout: 120}))
 		tools = append(tools, NewGlobTool(a.container))
 		tools = append(tools, NewGrepTool(a.container))
 		tools = append(tools, NewReadFileTool(a.container))
@@ -141,11 +147,19 @@ func (a *App) startAgent(userMessage string) {
 			onStatus := func(text string) {
 				a.resultCh <- containerStatusMsg{text: text}
 			}
-			tools = append(tools, NewDevEnvTool(a.container, hermDir, a.worktreePath, mounts, projectID, onRebuild, onStatus))
+			tools = append(tools, NewDevEnvTool(NewDevEnvToolOptions{
+				Container: a.container,
+				HermDir:   hermDir,
+				Workspace: a.worktreePath,
+				Mounts:    mounts,
+				ProjectID: projectID,
+				OnRebuild: onRebuild,
+				OnStatus:  onStatus,
+			}))
 		}
 	}
 	if a.worktreePath != "" {
-		tools = append(tools, NewGitTool(a.worktreePath, a.config.effectiveGitCoAuthor()))
+		tools = append(tools, NewGitTool(NewGitToolOptions{WorkDir: a.worktreePath, CoAuthor: a.config.effectiveGitCoAuthor()}))
 	}
 
 	modelID := a.config.resolveActiveModel(a.models)
@@ -156,14 +170,14 @@ func (a *App) startAgent(userMessage string) {
 	}
 
 	var modelProvider string
-	if modelDef := findModelByID(a.models, modelID); modelDef != nil {
+	if modelDef := findModelByID(findModelByIDOptions{models: a.models, id: modelID}); modelDef != nil {
 		modelProvider = modelDef.Provider
 	}
 
 	// Server-side tools (e.g. web search) are handled by the LLM provider.
 	// Some models don't support them, so we check before including them.
 	var serverTools []types.ToolDefinition
-	if supportsServerTools(modelProvider, modelID, a.models) {
+	if supportsServerTools(supportsServerToolsOptions{provider: modelProvider, modelID: modelID, models: a.models}) {
 		serverTools = []types.ToolDefinition{WebSearchToolDef()}
 	}
 
@@ -171,7 +185,7 @@ func (a *App) startAgent(userMessage string) {
 		if a.langdagClient != nil {
 			a.langdagClient.Close()
 		}
-		client, err := newLangdagClientForProvider(a.config, modelProvider)
+		client, err := newLangdagClientForProvider(newLangdagClientForProviderOptions{cfg: a.config, provider: modelProvider})
 		if err != nil {
 			a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error initializing %s provider: %v", modelProvider, err)})
 			return
@@ -205,14 +219,19 @@ func (a *App) startAgent(userMessage string) {
 	}
 
 	// Load tool descriptions from embedded markdown files, replacing dynamic placeholders.
-	toolDescriptions = loadToolDescriptions(containerImage, workDir, exploreMaxTurns, generalMaxTurns)
+	toolDescriptions = loadToolDescriptions(loadToolDescriptionsOptions{
+		containerImage:  containerImage,
+		workDir:         workDir,
+		exploreMaxTurns: exploreMaxTurns,
+		generalMaxTurns: generalMaxTurns,
+	})
 	maxDepth := a.config.MaxAgentDepth
 	if maxDepth <= 0 {
 		maxDepth = defaultMaxAgentDepth
 	}
 	explorationModelID := a.config.resolveExplorationModel(a.models)
 	subAgentServerTools := serverTools
-	if !supportsServerTools(modelProvider, explorationModelID, a.models) {
+	if !supportsServerTools(supportsServerToolsOptions{provider: modelProvider, modelID: explorationModelID, models: a.models}) {
 		subAgentServerTools = nil
 	}
 	subAgentTool := NewSubAgentTool(SubAgentConfig{
@@ -234,7 +253,16 @@ func (a *App) startAgent(userMessage string) {
 	if a.worktreePath != "" {
 		wtBranch = worktreeBranch(a.worktreePath)
 	}
-	systemPrompt := buildSystemPrompt(tools, serverTools, skills, workDir, a.config.Personality, containerImage, wtBranch, a.projectSnap)
+	systemPrompt := buildSystemPrompt(buildSystemPromptOptions{
+		tools:          tools,
+		serverTools:    serverTools,
+		skills:         skills,
+		workDir:        workDir,
+		personality:    a.config.Personality,
+		containerImage: containerImage,
+		worktreeBranch: wtBranch,
+		snap:           a.projectSnap,
+	})
 
 	// Feed system prompt, tool definitions, and user message to trace collector.
 	if a.traceCollector != nil {
@@ -262,14 +290,21 @@ func (a *App) startAgent(userMessage string) {
 	a.showModelChange(modelID)
 
 	ctxWindow := 0
-	if m := findModelByID(a.models, modelID); m != nil {
+	if m := findModelByID(findModelByIDOptions{models: a.models, id: modelID}); m != nil {
 		ctxWindow = m.ContextWindow
 	}
 	mainMaxIter := a.config.MaxToolIterations
 	if mainMaxIter <= 0 {
 		mainMaxIter = defaultMaxToolIterations
 	}
-	agent := NewAgent(a.langdagClient, tools, serverTools, systemPrompt, modelID, ctxWindow,
+	agent := NewAgent(NewAgentOptions{
+		Client:        a.langdagClient,
+		Tools:         tools,
+		ServerTools:   serverTools,
+		SystemPrompt:  systemPrompt,
+		Model:         modelID,
+		ContextWindow: ctxWindow,
+	},
 		WithExplorationModel(explorationModelID),
 		WithMaxToolIterations(mainMaxIter),
 		WithThinking(a.config.Thinking))
@@ -302,7 +337,7 @@ func (a *App) startAgent(userMessage string) {
 	}(a.agentTicker, a.resultCh)
 
 	parentNodeID := a.agentNodeID
-	go agent.Run(context.Background(), userMessage, parentNodeID)
+	go agent.Run(context.Background(), RunOptions{UserMessage: userMessage, ParentNodeID: parentNodeID})
 }
 
 // hasActiveSubAgents returns true if any sub-agent in the display map is still running.
@@ -443,7 +478,7 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 				a.traceCollector.FinalizeTurn(event.AgentID)
 				a.traceUsageSeen = false
 			}
-			a.traceCollector.AddTextDelta(event.AgentID, event.Text)
+			a.traceCollector.AddTextDelta(AddTextDeltaOptions{agentID: event.AgentID, text: event.Text})
 		}
 		// Suppress main-agent narration while background sub-agents are
 		// still running. The UI already shows live sub-agent status, so
@@ -475,17 +510,17 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 			a.streamingText = ""
 		}
 		if a.traceCollector != nil {
-			a.traceCollector.StartToolCall(event.AgentID, event.ToolID, event.ToolName, event.ToolInput)
+			a.traceCollector.StartToolCall(StartToolCallOptions{agentID: event.AgentID, toolID: event.ToolID, toolName: event.ToolName, input: event.ToolInput})
 		}
 		// Suppress internal tool calls (agent status checks, sleep waits, background agent spawns) from the UI.
-		if isAgentStatusCheck(event.ToolName, event.ToolInput) || isSleepWaitCommand(event.ToolName, event.ToolInput) || isBackgroundAgentCall(event.ToolName, event.ToolInput) {
+		if isAgentStatusCheck(isAgentStatusCheckOptions{toolName: event.ToolName, input: event.ToolInput}) || isSleepWaitCommand(isSleepWaitCommandOptions{toolName: event.ToolName, input: event.ToolInput}) || isBackgroundAgentCall(isBackgroundAgentCallOptions{toolName: event.ToolName, input: event.ToolInput}) {
 			if a.suppressedToolIDs == nil {
 				a.suppressedToolIDs = make(map[string]bool)
 			}
 			a.suppressedToolIDs[event.ToolID] = true
 			break
 		}
-		a.messages = append(a.messages, chatMessage{kind: msgToolCall, content: toolCallSummary(event.ToolName, event.ToolInput), leadBlank: true, toolName: event.ToolName})
+		a.messages = append(a.messages, chatMessage{kind: msgToolCall, content: toolCallSummary(toolCallSummaryOptions{toolName: event.ToolName, input: event.ToolInput}), leadBlank: true, toolName: event.ToolName})
 		a.toolStartTime = time.Now()
 		if a.toolTimer != nil {
 			a.toolTimer.Stop()
@@ -503,7 +538,7 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 		a.render()
 
 	case EventToolResult:
-		debugLog("tool_result: err=%v result=%q", event.IsError, truncateForLog(event.ToolResult, 500))
+		debugLog("tool_result: err=%v result=%q", event.IsError, truncateForLog(truncateForLogOptions{s: event.ToolResult, max: 500}))
 		if a.toolTimer != nil {
 			a.toolTimer.Stop()
 			a.toolTimer = nil
@@ -525,7 +560,7 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 			a.mainAgentToolCount++
 		}
 		if a.traceCollector != nil {
-			a.traceCollector.EndToolCall(event.ToolID, event.ToolResult, event.IsError, event.Duration)
+			a.traceCollector.EndToolCall(EndToolCallOptions{toolID: event.ToolID, result: event.ToolResult, isError: event.IsError, duration: event.Duration})
 			a.traceCollector.FlushToFile(a.traceFilePath)
 		}
 		// Skip UI message for suppressed tool calls (e.g., agent status checks).
@@ -543,7 +578,7 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 			a.traceUsageSeen = false
 		}
 		if event.Usage != nil {
-			cost := computeCost(a.models, event.Model, *event.Usage)
+			cost := computeCost(computeCostOptions{models: a.models, modelID: event.Model, usage: *event.Usage})
 			a.sessionCostUSD += cost
 			a.lastInputTokens = event.Usage.InputTokens + event.Usage.CacheReadInputTokens + event.Usage.CacheCreationInputTokens
 			// Propagate cost to the main agent for system prompt budget display.
@@ -566,8 +601,14 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 				sa.outputTokens += event.Usage.OutputTokens
 			}
 			if a.traceCollector != nil {
-				a.traceCollector.SetUsage(event.AgentID, event.Model, event.NodeID,
-					traceUsageFromTypes(event.Usage), cost, event.StopReason)
+				a.traceCollector.SetUsage(SetUsageOptions{
+					agentID:    event.AgentID,
+					model:      event.Model,
+					nodeID:     event.NodeID,
+					usage:      traceUsageFromTypes(event.Usage),
+					costUSD:    cost,
+					stopReason: event.StopReason,
+				})
 				a.traceCollector.FlushToFile(a.traceFilePath)
 			}
 			if a.agent != nil && event.AgentID == a.agent.ID() {
@@ -584,7 +625,7 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 		a.awaitingApproval = true
 		a.approvalPauseStart = time.Now()
 		a.approvalToolID = event.ToolID
-		a.approvalSummary = approvalShortDesc(event.ToolName, event.ToolInput)
+		a.approvalSummary = approvalShortDesc(approvalShortDescOptions{toolName: event.ToolName, input: event.ToolInput})
 		a.approvalDesc = event.ApprovalDesc
 		// Stop tool timer ticker so the tool box timer freezes during approval.
 		if a.toolTimer != nil {
@@ -599,7 +640,7 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 			a.agentNodeID = event.NodeID
 		}
 		if a.traceCollector != nil {
-			a.traceCollector.AddCompaction(event.NodeID, event.Text)
+			a.traceCollector.AddCompaction(AddCompactionOptions{nodeID: event.NodeID, summary: event.Text})
 		}
 		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: event.Text})
 		a.render()
@@ -700,7 +741,7 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 			event.Duration.Truncate(time.Second), event.Attempt, event.MaxRetry, errMsg)
 		debugLog("retry: %s", retryMsg)
 		if a.traceCollector != nil {
-			a.traceCollector.AddRetry(event.Attempt, event.MaxRetry, event.Duration, errMsg)
+			a.traceCollector.AddRetry(AddRetryOptions{attempt: event.Attempt, maxAttempts: event.MaxRetry, delay: event.Duration, errMsg: errMsg})
 		}
 		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: retryMsg})
 		a.render()

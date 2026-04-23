@@ -3,12 +3,10 @@
 package main
 
 import (
-	"cmp"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -23,11 +21,18 @@ type vline struct {
 	startCol int // visual column where text starts
 }
 
+type getVisualLinesOptions struct {
+	input  []rune
+	cursor int
+	width  int
+}
+
 // getVisualLines splits the input runes into visual lines, accounting for
 // the prompt prefix on the first line and terminal-width wrapping.
 // It prefers word boundaries (spaces) for wrapping, falling back to
 // character-level breaks for words longer than the available width.
-func getVisualLines(input []rune, cursor int, width int) []vline {
+func getVisualLines(opts getVisualLinesOptions) []vline {
+	input, width := opts.input, opts.width
 	var lines []vline
 	start := 0
 	startCol := promptPrefixCols
@@ -70,8 +75,15 @@ func getVisualLines(input []rune, cursor int, width int) []vline {
 	return lines
 }
 
-func cursorVisualPos(input []rune, cursor int, width int) (int, int) {
-	vlines := getVisualLines(input, cursor, width)
+type cursorVisualPosOptions struct {
+	input  []rune
+	cursor int
+	width  int
+}
+
+func cursorVisualPos(opts cursorVisualPosOptions) (int, int) {
+	input, cursor, width := opts.input, opts.cursor, opts.width
+	vlines := getVisualLines(getVisualLinesOptions{input: input, cursor: cursor, width: width})
 	for i, vl := range vlines {
 		end := vl.start + vl.length
 		if cursor >= vl.start && cursor <= end {
@@ -88,9 +100,15 @@ func cursorVisualPos(input []rune, cursor int, width int) (int, int) {
 	return last, vl.startCol + vl.length
 }
 
+type padCodeBlockRowOptions struct {
+	row   string
+	width int
+}
+
 // padCodeBlockRow pads a code block row with spaces so the background fills
 // the full terminal width. It ensures \033[0m comes after the padding.
-func padCodeBlockRow(row string, width int) string {
+func padCodeBlockRow(opts padCodeBlockRowOptions) string {
+	row, width := opts.row, opts.width
 	const reset = "\033[0m"
 	stripped := row
 	hasReset := strings.HasSuffix(row, reset)
@@ -104,13 +122,20 @@ func padCodeBlockRow(row string, width int) string {
 	return stripped + reset
 }
 
+type wrapStringOptions struct {
+	s        string
+	startCol int
+	w        int
+}
+
 // wrapString splits a string into visual rows of at most `w` columns.
 // It is ANSI-aware: escape sequences don't count toward visual width, and
 // active styling is re-emitted on continuation lines. Character widths are
 // measured with uniseg.StringWidth (so wide chars like emoji count as 2).
 // Wrapping prefers word boundaries (spaces); words longer than `w` columns
 // fall back to character-level breaking.
-func wrapString(s string, startCol int, w int) []string {
+func wrapString(opts wrapStringOptions) []string {
+	s, startCol, w := opts.s, opts.startCol, opts.w
 	if w <= 0 {
 		return []string{s}
 	}
@@ -275,7 +300,13 @@ type toolGroup struct {
 // parallel (call, call, result, result) patterns. The group continues as long
 // as tool calls or tool results appear without a different message kind in
 // between. inProgress is set when there are more calls than results.
-func collectToolGroup(messages []chatMessage, startIdx int) toolGroup {
+type collectToolGroupOptions struct {
+	messages []chatMessage
+	startIdx int
+}
+
+func collectToolGroup(opts collectToolGroupOptions) toolGroup {
+	messages, startIdx := opts.messages, opts.startIdx
 	var g toolGroup
 	i := startIdx
 
@@ -324,7 +355,7 @@ done:
 func (a *App) buildBlockRows() []string {
 	var rows []string
 	for _, line := range buildLogo(a.width) {
-		rows = append(rows, wrapString(line, 0, a.width)...)
+		rows = append(rows, wrapString(wrapStringOptions{s: line, w: a.width})...)
 	}
 	inCodeBlock := false
 	skipUntil := 0
@@ -335,7 +366,7 @@ func (a *App) buildBlockRows() []string {
 
 		// Consecutive tool calls → collect into a group and render as a single block.
 		if msg.kind == msgToolCall {
-			group := collectToolGroup(a.messages, i)
+			group := collectToolGroup(collectToolGroupOptions{messages: a.messages, startIdx: i})
 			skipUntil = i + group.consumed
 			if msg.leadBlank {
 				rows = append(rows, "")
@@ -344,9 +375,9 @@ func (a *App) buildBlockRows() []string {
 			if group.inProgress && !a.toolStartTime.IsZero() {
 				liveDur = formatDuration(time.Since(a.toolStartTime))
 			}
-			block := renderToolGroup(group.entries, a.width, group.inProgress, liveDur)
+			block := renderToolGroup(renderToolGroupOptions{entries: group.entries, maxWidth: a.width, inProgress: group.inProgress, liveDur: liveDur})
 			for _, logLine := range strings.Split(block, "\n") {
-				rows = append(rows, wrapString(logLine, 0, a.width)...)
+				rows = append(rows, wrapString(wrapStringOptions{s: logLine, w: a.width})...)
 			}
 			// Blank line after group unless next message has leadBlank.
 			if skipUntil >= len(a.messages) || !a.messages[skipUntil].leadBlank {
@@ -358,12 +389,12 @@ func (a *App) buildBlockRows() []string {
 		// Standalone tool result (no preceding tool call) — render as box.
 		if msg.kind == msgToolResult {
 			content := strings.ReplaceAll(msg.content, "\r", "")
-			box := renderToolBox("~ result", content, a.width, msg.isError, formatDuration(msg.duration))
+			box := renderToolBox(renderToolBoxOptions{title: "~ result", content: content, maxWidth: a.width, isError: msg.isError, durationStr: formatDuration(msg.duration)})
 			if msg.leadBlank {
 				rows = append(rows, "")
 			}
 			for _, logLine := range strings.Split(box, "\n") {
-				rows = append(rows, wrapString(logLine, 0, a.width)...)
+				rows = append(rows, wrapString(wrapStringOptions{s: logLine, w: a.width})...)
 			}
 			nextIdx := i + 1
 			if nextIdx >= len(a.messages) || !a.messages[nextIdx].leadBlank {
@@ -376,7 +407,7 @@ func (a *App) buildBlockRows() []string {
 		if msg.kind == msgSubAgentGroup {
 			if subLines := a.subAgentDisplayLines(); len(subLines) > 0 {
 				for _, line := range subLines {
-					rows = append(rows, wrapString(line, 0, a.width)...)
+					rows = append(rows, wrapString(wrapStringOptions{s: line, w: a.width})...)
 				}
 				rows = append(rows, "")
 			}
@@ -389,15 +420,15 @@ func (a *App) buildBlockRows() []string {
 				wasInCodeBlock := inCodeBlock
 				if msg.kind == msgAssistant {
 					var skip bool
-					logLine, inCodeBlock, skip = processMarkdownLine(logLine, inCodeBlock)
+					logLine, inCodeBlock, skip = processMarkdownLine(processMarkdownLineOptions{line: logLine, inCodeBlock: inCodeBlock})
 					if skip {
 						continue
 					}
 				}
-				wrapped := wrapString(logLine, 0, a.width)
+				wrapped := wrapString(wrapStringOptions{s: logLine, w: a.width})
 				if wasInCodeBlock && msg.kind == msgAssistant {
 					for j := range wrapped {
-						wrapped[j] = padCodeBlockRow(wrapped[j], a.width)
+						wrapped[j] = padCodeBlockRow(padCodeBlockRowOptions{row: wrapped[j], width: a.width})
 					}
 				}
 				rows = append(rows, wrapped...)
@@ -420,12 +451,12 @@ func (a *App) buildBlockRows() []string {
 		for _, logLine := range strings.Split(a.streamingText, "\n") {
 			wasInCodeBlock := inCodeBlock
 			var skip bool
-			logLine, inCodeBlock, skip = processMarkdownLine(logLine, inCodeBlock)
+			logLine, inCodeBlock, skip = processMarkdownLine(processMarkdownLineOptions{line: logLine, inCodeBlock: inCodeBlock})
 			if !skip {
-				wrapped := wrapString(logLine, 0, a.width)
+				wrapped := wrapString(wrapStringOptions{s: logLine, w: a.width})
 				if wasInCodeBlock {
 					for j := range wrapped {
-						wrapped[j] = padCodeBlockRow(wrapped[j], a.width)
+						wrapped[j] = padCodeBlockRow(padCodeBlockRowOptions{row: wrapped[j], width: a.width})
 					}
 				}
 				rows = append(rows, wrapped...)
@@ -442,7 +473,7 @@ func (a *App) buildBlockRows() []string {
 			text, a.mainAgentToolCount, elapsed.Seconds(),
 			formatTokenCount(int(math.Round(a.agentDisplayInTok))),
 			formatTokenCount(int(math.Round(a.agentDisplayOutTok))))
-		rows = append(rows, wrapString(label, 0, a.width)...)
+		rows = append(rows, wrapString(wrapStringOptions{s: label, w: a.width})...)
 		rows = append(rows, "")
 	} else if a.agentRunning {
 		elapsed := a.agentElapsedTime()
@@ -453,14 +484,14 @@ func (a *App) buildBlockRows() []string {
 			spinner, color, text, a.mainAgentToolCount, elapsed.Seconds(),
 			formatTokenCount(int(math.Round(a.agentDisplayInTok))),
 			formatTokenCount(int(math.Round(a.agentDisplayOutTok))))
-		rows = append(rows, wrapString(label, 0, a.width)...)
+		rows = append(rows, wrapString(wrapStringOptions{s: label, w: a.width})...)
 		rows = append(rows, "")
 	} else if a.agentElapsed > 0 {
 		elapsed := fmt.Sprintf("\033[32m✓\033[2m %d 🛠️  | %.2fs | ↑%s ↓%s\033[0m",
 			a.mainAgentToolCount, a.agentElapsed.Seconds(),
 			formatTokenCount(a.mainAgentInputTokens),
 			formatTokenCount(a.mainAgentOutputTokens))
-		rows = append(rows, wrapString(elapsed, 0, a.width)...)
+		rows = append(rows, wrapString(wrapStringOptions{s: elapsed, w: a.width})...)
 		rows = append(rows, "")
 	}
 	return collapseBlankRows(rows)
@@ -487,243 +518,13 @@ func isBlankRow(s string) bool {
 	return strings.TrimSpace(ansiEscRe.ReplaceAllString(s, "")) == ""
 }
 
-// subAgentDisplay tracks per-agent display state for live TUI rendering.
-type subAgentDisplay struct {
-	task         string    // task label (first ~40 chars of the task description)
-	status       string    // current activity (tool name or text snippet)
-	done         bool
-	mode         string    // "explore" or "general"
-	toolCount    int       // number of tool calls executed
-	startTime    time.Time // when this sub-agent started
-	completedAt  time.Time // when this sub-agent finished (zero if still running)
-	inputTokens  int       // total input tokens consumed
-	outputTokens int       // total output tokens consumed
-	failed       bool      // true if the sub-agent failed
-	replacedBy   string    // ID of the retry agent that supersedes this one (empty if not replaced)
-}
-
 // toolGroupOverflowThreshold is the entry count above which tool groups collapse middle entries.
 const toolGroupOverflowThreshold = 6
 
 // toolGroupShowEdge is the number of entries shown at each end when collapsing.
 const toolGroupShowEdge = 3
 
-// maxSubAgentDisplayLines is the maximum number of agent lines shown per group.
-const maxSubAgentDisplayLines = 5
-
-// brailleSpinnerFrames is the 8-frame braille spinner animation sequence.
-var brailleSpinnerFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
-
-// brailleSpinnerFrameCount is the number of frames in the braille spinner.
-const brailleSpinnerFrameCount = 8
-
-// brailleSpinner returns a colored braille spinner character for the given elapsed time.
-func brailleSpinner(elapsed time.Duration) string {
-	frameIdx := int(elapsed.Milliseconds()/50) % brailleSpinnerFrameCount
-	color := pastelColor(elapsed)
-	return fmt.Sprintf("%s%s\033[0m", color, brailleSpinnerFrames[frameIdx])
-}
-
-// subAgentDisplayLines returns grouped sub-agent display lines with per-agent metrics.
-// Agents are grouped by mode. Each group has a header ("Running N Explore agents…")
-// and per-agent lines showing spinner/✓/✗ + task + metrics.
-func (a *App) subAgentDisplayLines() []string {
-	if len(a.subAgents) == 0 {
-		return nil
-	}
-
-	// Collect all visible agents (active + recently completed within the group).
-	// Skip agents that have been replaced by a retry.
-	var visible []*subAgentDisplay
-	for _, sa := range a.subAgents {
-		if sa.replacedBy != "" {
-			continue
-		}
-		visible = append(visible, sa)
-	}
-	if len(visible) == 0 {
-		return nil
-	}
-
-	// Stable ordering: completed agents first (by completedAt ascending),
-	// then running agents (by startTime ascending).
-	slices.SortFunc(visible, func(a, b *subAgentDisplay) int {
-		// Completed before running.
-		if a.done != b.done {
-			if a.done {
-				return -1
-			}
-			return 1
-		}
-		if a.done {
-			// Both completed — sort by completedAt ascending.
-			return cmp.Compare(a.completedAt.UnixNano(), b.completedAt.UnixNano())
-		}
-		// Both running — sort by startTime ascending.
-		return cmp.Compare(a.startTime.UnixNano(), b.startTime.UnixNano())
-	})
-
-	// Group by mode.
-	groups := make(map[string][]*subAgentDisplay)
-	for _, sa := range visible {
-		mode := sa.mode
-		if mode == "" {
-			mode = "agent"
-		}
-		groups[mode] = append(groups[mode], sa)
-	}
-
-	// Stable ordering: explore first, then general, then other.
-	modeOrder := []string{ModeExplore, ModeGeneral}
-	for mode := range groups {
-		found := false
-		for _, m := range modeOrder {
-			if mode == m {
-				found = true
-				break
-			}
-		}
-		if !found {
-			modeOrder = append(modeOrder, mode)
-		}
-	}
-
-	var out []string
-	for _, mode := range modeOrder {
-		agents, ok := groups[mode]
-		if !ok {
-			continue
-		}
-
-		// Count active agents in this group.
-		activeCount := 0
-		for _, sa := range agents {
-			if !sa.done {
-				activeCount++
-			}
-		}
-
-		// Header line: "Running N Explore agents…" while active,
-		// "N Explore agents" when all done.
-		modeLabel := strings.ToUpper(mode[:1]) + mode[1:]
-		total := len(agents)
-		var header string
-		if activeCount > 0 {
-			if total == 1 {
-				header = fmt.Sprintf("\033[2;3mRunning %s agent…\033[0m", modeLabel)
-			} else {
-				header = fmt.Sprintf("\033[2;3mRunning %d %s agents…\033[0m", total, modeLabel)
-			}
-		} else {
-			if total == 1 {
-				header = fmt.Sprintf("\033[2;3m%s agent\033[0m", modeLabel)
-			} else {
-				header = fmt.Sprintf("\033[2;3m%d %s agents\033[0m", total, modeLabel)
-			}
-		}
-		out = append(out, header)
-
-		// Per-agent lines (capped).
-		shown := agents
-		if len(shown) > maxSubAgentDisplayLines {
-			shown = shown[:maxSubAgentDisplayLines]
-		}
-		for _, sa := range shown {
-			out = append(out, formatSubAgentLine(sa))
-		}
-		if len(agents) > maxSubAgentDisplayLines {
-			out = append(out, fmt.Sprintf("\033[2;3m  …and %d more\033[0m", len(agents)-maxSubAgentDisplayLines))
-		}
-	}
-	return out
-}
-
-// formatSubAgentLine renders a single sub-agent status line:
-// spinner/✓/✗ + task + | N 🛠️ | Xs | ↑in ↓out
-func formatSubAgentLine(sa *subAgentDisplay) string {
-	var prefix string
-	if sa.done {
-		if sa.failed {
-			prefix = "\033[31m✗\033[0m" // red ✗
-		} else {
-			prefix = "\033[32m✓\033[0m" // green ✓
-		}
-	} else {
-		elapsed := time.Since(sa.startTime)
-		prefix = brailleSpinner(elapsed)
-	}
-
-	var metrics []string
-	if sa.toolCount > 0 {
-		metrics = append(metrics, fmt.Sprintf("%d 🛠️ ", sa.toolCount))
-	}
-	var elapsed time.Duration
-	if !sa.startTime.IsZero() {
-		if sa.done && !sa.completedAt.IsZero() {
-			elapsed = sa.completedAt.Sub(sa.startTime)
-		} else {
-			elapsed = time.Since(sa.startTime)
-		}
-		metrics = append(metrics, fmt.Sprintf("%.2fs", elapsed.Seconds()))
-	}
-	if sa.inputTokens > 0 || sa.outputTokens > 0 {
-		metrics = append(metrics, fmt.Sprintf("↑%s ↓%s",
-			formatTokenCount(sa.inputTokens),
-			formatTokenCount(sa.outputTokens)))
-	}
-
-	line := fmt.Sprintf("%s \033[2m%s\033[0m", prefix, sa.task)
-	if len(metrics) > 0 {
-		line += fmt.Sprintf(" \033[2m| %s\033[0m", strings.Join(metrics, " | "))
-	}
-	return line
-}
-
-// truncateTaskLabel returns the first ~40 chars of a task description for display.
-func truncateTaskLabel(task string) string {
-	// Take first line only.
-	if idx := strings.IndexByte(task, '\n'); idx >= 0 {
-		task = task[:idx]
-	}
-	const maxLen = 40
-	if len(task) > maxLen {
-		task = task[:maxLen] + "…"
-	}
-	return task
-}
-
-// shortID returns the first 8 characters of an agent ID for display.
-func shortID(id string) string {
-	if len(id) > 8 {
-		return id[:8]
-	}
-	return id
-}
-
-// hasPendingBackgroundAgents returns true if any non-replaced sub-agent is
-// still running. Used to suppress chatty main-agent narration while the UI
-// already shows live sub-agent status.
-func (a *App) hasPendingBackgroundAgents() bool {
-	for _, sa := range a.subAgents {
-		if !sa.done && sa.replacedBy == "" {
-			return true
-		}
-	}
-	return false
-}
-
-// getOrCreateSubAgent returns the display state for the given agent ID, creating it if needed.
-func (a *App) getOrCreateSubAgent(agentID string) *subAgentDisplay {
-	if a.subAgents == nil {
-		a.subAgents = make(map[string]*subAgentDisplay)
-	}
-	sa, ok := a.subAgents[agentID]
-	if !ok {
-		sa = &subAgentDisplay{task: "unknown task"}
-		a.subAgents[agentID] = sa
-	}
-	return sa
-}
+// subAgent display state, spinner, and line formatting live in render_subagent.go.
 
 func (a *App) buildInputRows() []string {
 	sep := strings.Repeat("─", a.width)
@@ -734,7 +535,7 @@ func (a *App) buildInputRows() []string {
 		color := approvalGradientColor(t)
 		shortMsg := fmt.Sprintf("Allow %s? [y/n]", a.approvalSummary)
 		if visibleWidth(shortMsg) > a.width {
-			shortMsg = truncateVisual(shortMsg, a.width)
+			shortMsg = truncateVisual(truncateVisualOptions{s: shortMsg, maxCols: a.width})
 		}
 		shortPad := (a.width - visibleWidth(shortMsg)) / 2
 		if shortPad < 0 {
@@ -748,7 +549,7 @@ func (a *App) buildInputRows() []string {
 		approvalRows = append(approvalRows, fmt.Sprintf("%s%s%s[0m", color, strings.Repeat(" ", shortPad), shortMsg))
 		if detail != "" {
 			if visibleWidth(detail) > a.width {
-				detail = truncateVisual(detail, a.width)
+				detail = truncateVisual(truncateVisualOptions{s: detail, maxCols: a.width})
 			}
 			detailPad := (a.width - visibleWidth(detail)) / 2
 			if detailPad < 0 {
@@ -773,7 +574,7 @@ func (a *App) buildInputRows() []string {
 	if a.menuActive && len(a.menuLines) > 0 {
 		w := a.width
 		if a.menuHeader != "" {
-			rows = append(rows, fmt.Sprintf("\033[1m%s\033[0m", truncateWithEllipsis(a.menuHeader, w)))
+			rows = append(rows, fmt.Sprintf("\033[1m%s\033[0m", truncateWithEllipsis(truncateWithEllipsisOptions{s: a.menuHeader, maxLen: w})))
 		}
 		maxVisible := getTerminalHeight() * 60 / 100
 		if maxVisible < 1 {
@@ -787,18 +588,18 @@ func (a *App) buildInputRows() []string {
 		for i := a.menuScrollOffset; i < end; i++ {
 			line := a.menuLines[i]
 			if i == a.menuCursor {
-				rows = append(rows, fmt.Sprintf("\033[36;1m%s ◆\033[0m", truncateWithEllipsis(line, w-2)))
+				rows = append(rows, fmt.Sprintf("\033[36;1m%s ◆\033[0m", truncateWithEllipsis(truncateWithEllipsisOptions{s: line, maxLen: w - 2})))
 			} else {
-				rows = append(rows, truncateWithEllipsis(line, w))
+				rows = append(rows, truncateWithEllipsis(truncateWithEllipsisOptions{s: line, maxLen: w}))
 			}
 		}
 		first := a.menuScrollOffset + 1
 		last := end
 		indicator := fmt.Sprintf("(%d->%d / %d)", first, last, total)
-		rows = append(rows, fmt.Sprintf("\033[2m%s\033[0m", truncateWithEllipsis(indicator, w)))
+		rows = append(rows, fmt.Sprintf("\033[2m%s\033[0m", truncateWithEllipsis(truncateWithEllipsisOptions{s: indicator, maxLen: w})))
 		if a.menuModels != nil {
 			hints := "←/→ sort column  Tab flip order  Enter select  Esc close"
-			rows = append(rows, fmt.Sprintf("\033[2m%s\033[0m", truncateWithEllipsis(hints, w)))
+			rows = append(rows, fmt.Sprintf("\033[2m%s\033[0m", truncateWithEllipsis(truncateWithEllipsisOptions{s: hints, maxLen: w})))
 		}
 		rows = append(rows, sep)
 		return rows
@@ -808,7 +609,7 @@ func (a *App) buildInputRows() []string {
 		rows = append(rows, fmt.Sprintf("\033[33;1m%s\033[0m", a.promptLabel))
 	}
 
-	vlines := getVisualLines(a.input, a.cursor, a.width)
+	vlines := getVisualLines(getVisualLinesOptions{input: a.input, cursor: a.cursor, width: a.width})
 	for i, vl := range vlines {
 		line := string(a.input[vl.start : vl.start+vl.length])
 		if i == 0 {
@@ -878,10 +679,10 @@ func (a *App) buildInputRows() []string {
 		}
 		contextTokens := a.lastInputTokens + len(a.input)/charsPerToken
 		contextWindow := 200000
-		if m := findModelByID(a.models, a.config.resolveActiveModel(a.models)); m != nil {
+		if m := findModelByID(findModelByIDOptions{models: a.models, id: a.config.resolveActiveModel(a.models)}); m != nil {
 			contextWindow = m.ContextWindow
 		}
-		bar := progressBar(contextTokens, contextWindow)
+		bar := progressBar(progressBarOptions{n: contextTokens, max: contextWindow})
 		barWidth := 3
 		padding := a.width - branchTextWidth - diffTextWidth - commitTextWidth - costTextWidth - barWidth - 1
 		if padding < 0 {
@@ -955,7 +756,7 @@ func (a *App) positionCursor(buf *strings.Builder) {
 		return
 	}
 	buf.WriteString("\033[?25h")
-	curLine, curCol := cursorVisualPos(a.input, a.cursor, a.width)
+	curLine, curCol := cursorVisualPos(cursorVisualPosOptions{input: a.input, cursor: a.cursor, width: a.width})
 	buf.WriteString(fmt.Sprintf("\033[%d;%dH", a.inputStartRow+curLine-s, curCol+1))
 }
 
@@ -993,13 +794,13 @@ func (a *App) render() {
 			}
 		}
 		visibleRows := allRows[newScrollShift:]
-		writeRows(&buf, visibleRows, 1)
+		writeRows(writeRowsOptions{buf: &buf, rows: visibleRows, from: 1})
 	} else {
 		// No overflow, or content shrank: write from top.
 		if a.scrollShift > 0 {
 			buf.WriteString("\033[H\033[2J\033[3J") // clear screen + scrollback
 		}
-		writeRows(&buf, allRows, 1)
+		writeRows(writeRowsOptions{buf: &buf, rows: allRows, from: 1})
 	}
 
 	buf.WriteString("\033[0m\033[J") // clear from cursor to end of screen
@@ -1049,7 +850,7 @@ func (a *App) renderInput() {
 	}
 
 	var buf strings.Builder
-	writeRows(&buf, inputRows, screenSepRow)
+	writeRows(writeRowsOptions{buf: &buf, rows: inputRows, from: screenSepRow})
 	buf.WriteString("\033[0m\033[J") // clear remaining lines
 
 	a.scrollShift = newScrollShift

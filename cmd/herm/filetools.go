@@ -76,7 +76,7 @@ func NewGlobTool(container *ContainerClient) *GlobTool {
 func (t *GlobTool) Definition() types.ToolDefinition {
 	return types.ToolDefinition{
 		Name:        "glob",
-		Description: getToolDescription("glob", "Find files by glob pattern. Returns matching paths sorted alphabetically, one per line. Respects .gitignore."),
+		Description: getToolDescription(getToolDescriptionOptions{name: "glob", fallback: "Find files by glob pattern. Returns matching paths sorted alphabetically, one per line. Respects .gitignore."}),
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -126,7 +126,7 @@ func (t *GlobTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 	cmd := fmt.Sprintf("cd %s && rg --files -g %s --sort path 2>&1",
 		shellQuote(searchDir), shellQuote(in.Pattern))
 
-	result, err := t.container.Exec(cmd, 30)
+	result, err := t.container.Exec(containerExecOptions{command: cmd, timeout: 30})
 	if err != nil {
 		return "", err
 	}
@@ -171,7 +171,7 @@ func NewGrepTool(container *ContainerClient) *GrepTool {
 func (t *GrepTool) Definition() types.ToolDefinition {
 	return types.ToolDefinition{
 		Name:        "grep",
-		Description: getToolDescription("grep", "Search file contents by regex pattern. Returns matching files, lines, or counts. Respects .gitignore."),
+		Description: getToolDescription(getToolDescriptionOptions{name: "grep", fallback: "Search file contents by regex pattern. Returns matching files, lines, or counts. Respects .gitignore."}),
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -273,7 +273,7 @@ func (t *GrepTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 	cmd := fmt.Sprintf("cd %s && %s %s 2>&1",
 		shellQuote(t.container.WorkDir()), strings.Join(args, " "), shellQuote(searchDir))
 
-	result, err := t.container.Exec(cmd, 30)
+	result, err := t.container.Exec(containerExecOptions{command: cmd, timeout: 30})
 	if err != nil {
 		return "", err
 	}
@@ -316,7 +316,7 @@ func NewReadFileTool(container *ContainerClient) *ReadFileTool {
 func (t *ReadFileTool) Definition() types.ToolDefinition {
 	return types.ToolDefinition{
 		Name:        "read_file",
-		Description: getToolDescription("read_file", "Read file contents with line numbers. Supports reading specific line ranges to avoid loading entire large files."),
+		Description: getToolDescription(getToolDescriptionOptions{name: "read_file", fallback: "Read file contents with line numbers. Supports reading specific line ranges to avoid loading entire large files."}),
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -382,7 +382,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, input json.RawMessage) (stri
 	cmd := fmt.Sprintf("awk 'NR>=%d && NR<=%d { printf \"%%6d\\t%%s\\n\", NR, (length>%d ? substr($0,1,%d)\"…\" : $0) } NR>%d { exit }' %s 2>&1",
 		offset, endLine, readFileMaxLineWidth, readFileMaxLineWidth, endLine, shellQuote(filePath))
 
-	result, err := t.container.Exec(cmd, 30)
+	result, err := t.container.Exec(containerExecOptions{command: cmd, timeout: 30})
 	if err != nil {
 		return "", err
 	}
@@ -396,7 +396,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, input json.RawMessage) (stri
 	if output == "" {
 		// Check if file exists but range is past end, or file is empty.
 		checkCmd := fmt.Sprintf("wc -l < %s 2>&1", shellQuote(filePath))
-		checkResult, checkErr := t.container.Exec(checkCmd, 5)
+		checkResult, checkErr := t.container.Exec(containerExecOptions{command: checkCmd, timeout: 5})
 		if checkErr != nil || checkResult.ExitCode != 0 {
 			return fmt.Sprintf("error: cannot read %s", in.FilePath), nil
 		}
@@ -411,7 +411,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, input json.RawMessage) (stri
 	outputLines := strings.Count(output, "\n") + 1
 	if outputLines >= limit {
 		wcCmd := fmt.Sprintf("wc -l < %s 2>&1", shellQuote(filePath))
-		wcResult, wcErr := t.container.Exec(wcCmd, 5)
+		wcResult, wcErr := t.container.Exec(containerExecOptions{command: wcCmd, timeout: 5})
 		if wcErr == nil && wcResult.ExitCode == 0 {
 			total := strings.TrimSpace(wcResult.Stdout)
 			output += fmt.Sprintf("\n[showing lines %d-%d of %s]", offset, offset+outputLines-1, total)
@@ -441,7 +441,7 @@ func NewEditFileTool(container *ContainerClient) *EditFileTool {
 func (t *EditFileTool) Definition() types.ToolDefinition {
 	return types.ToolDefinition{
 		Name:        "edit_file",
-		Description: getToolDescription("edit_file", "Replace a specific string in a file. old_string must appear exactly once unless replace_all is true. Returns a unified diff showing the change."),
+		Description: getToolDescription(getToolDescriptionOptions{name: "edit_file", fallback: "Replace a specific string in a file. old_string must appear exactly once unless replace_all is true. Returns a unified diff showing the change."}),
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -511,7 +511,7 @@ func (t *EditFileTool) Execute(ctx context.Context, input json.RawMessage) (stri
 		return "", fmt.Errorf("marshalling edit-file input: %w", err)
 	}
 
-	result, err := t.container.ExecWithStdin(inputJSON, 30, "edit-file")
+	result, err := t.container.ExecWithStdin(containerExecWithStdinOptions{stdin: inputJSON, timeout: 30}, "edit-file")
 	if err != nil {
 		return "", err
 	}
@@ -550,7 +550,7 @@ func NewWriteFileTool(container *ContainerClient) *WriteFileTool {
 func (t *WriteFileTool) Definition() types.ToolDefinition {
 	return types.ToolDefinition{
 		Name:        "write_file",
-		Description: getToolDescription("write_file", "Create a new file or overwrite an existing one. Returns a summary (line count, byte count) and a unified diff if overwriting."),
+		Description: getToolDescription(getToolDescriptionOptions{name: "write_file", fallback: "Create a new file or overwrite an existing one. Returns a summary (line count, byte count) and a unified diff if overwriting."}),
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -607,7 +607,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, input json.RawMessage) (str
 		return "", fmt.Errorf("marshalling write-file input: %w", err)
 	}
 
-	result, err := t.container.ExecWithStdin(inputJSON, 30, "write-file")
+	result, err := t.container.ExecWithStdin(containerExecWithStdinOptions{stdin: inputJSON, timeout: 30}, "write-file")
 	if err != nil {
 		return "", err
 	}
@@ -658,7 +658,7 @@ func NewOutlineTool(container *ContainerClient) *OutlineTool {
 func (t *OutlineTool) Definition() types.ToolDefinition {
 	return types.ToolDefinition{
 		Name:        "outline",
-		Description: getToolDescription("outline", "Extract function/type/class signatures from one or more files. Returns a compact outline with line numbers — much cheaper than reading the full file."),
+		Description: getToolDescription(getToolDescriptionOptions{name: "outline", fallback: "Extract function/type/class signatures from one or more files. Returns a compact outline with line numbers — much cheaper than reading the full file."}),
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -728,7 +728,7 @@ func (t *OutlineTool) outlineOne(displayPath string) (string, error) {
 		filePath = t.container.WorkDir() + "/" + filePath
 	}
 
-	result, err := t.container.Exec(fmt.Sprintf("outline %s", shellQuote(filePath)), 15)
+	result, err := t.container.Exec(containerExecOptions{command: fmt.Sprintf("outline %s", shellQuote(filePath)), timeout: 15})
 	if err != nil {
 		return "", err
 	}
@@ -738,7 +738,7 @@ func (t *OutlineTool) outlineOne(displayPath string) (string, error) {
 
 	// Binary not found (old container image) — fall back to grep.
 	if result.ExitCode == 127 || (result.ExitCode != 0 && strings.Contains(stderr, "not found")) {
-		return t.outlineFallback(filePath, displayPath)
+		return t.outlineFallback(outlineFallbackOptions{filePath: filePath, displayPath: displayPath})
 	}
 
 	if result.ExitCode != 0 {
@@ -755,8 +755,16 @@ func (t *OutlineTool) outlineOne(displayPath string) (string, error) {
 	return output, nil
 }
 
+// outlineFallbackOptions holds the parameters for outlineFallback.
+type outlineFallbackOptions struct {
+	filePath    string
+	displayPath string
+}
+
 // outlineFallback uses grep when the outline binary is missing (old container image).
-func (t *OutlineTool) outlineFallback(filePath, displayPath string) (string, error) {
+func (t *OutlineTool) outlineFallback(opts outlineFallbackOptions) (string, error) {
+	filePath := opts.filePath
+	displayPath := opts.displayPath
 	ext := ""
 	if dot := strings.LastIndex(displayPath, "."); dot >= 0 {
 		ext = displayPath[dot:]
@@ -779,7 +787,7 @@ func (t *OutlineTool) outlineFallback(filePath, displayPath string) (string, err
 
 	if pattern != "" {
 		cmd := fmt.Sprintf("grep -n -E %s %s 2>&1 | head -n 101", shellQuote(pattern), shellQuote(filePath))
-		result, err := t.container.Exec(cmd, 15)
+		result, err := t.container.Exec(containerExecOptions{command: cmd, timeout: 15})
 		if err != nil {
 			return "", err
 		}
@@ -792,7 +800,7 @@ func (t *OutlineTool) outlineFallback(filePath, displayPath string) (string, err
 
 	// Unknown language — head + tail.
 	cmd := fmt.Sprintf("(head -n 20 %s && echo '---' && tail -n 20 %s) 2>&1", shellQuote(filePath), shellQuote(filePath))
-	result, err := t.container.Exec(cmd, 10)
+	result, err := t.container.Exec(containerExecOptions{command: cmd, timeout: 10})
 	if err != nil {
 		return "", err
 	}

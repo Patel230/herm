@@ -1,7 +1,6 @@
-// debuglog.go implements JSON trace debug logging for sessions.
-// When debug mode is enabled, every conversation gets a .json trace file in
-// .herm/debug/ that captures LLM calls, tool calls, sub-agent traces, and
-// session totals.
+// debuglog.go implements JSON trace debug logging for sessions. When debug
+// mode is enabled, every conversation gets a .json trace file in .herm/debug/
+// capturing LLM calls, tool calls, sub-agent traces, and session totals.
 package main
 
 import (
@@ -37,5 +36,5 @@ func (a *App) initAppDebugLog() {
 	name := fmt.Sprintf("debug-%s.json", time.Now().Format("20060102-150405"))
 	a.traceFilePath = filepath.Join(dir, name)
 	a.traceCollector = NewTraceCollector(a.sessionID)
-	a.traceCollector.SetGitInfo(a.status.Branch, a.repoRoot)
+	a.traceCollector.SetGitInfo(SetGitInfoOptions{branch: a.status.Branch, root: a.repoRoot})
 }

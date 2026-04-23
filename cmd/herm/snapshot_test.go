@@ -153,7 +153,7 @@ func TestBuildSystemPromptWithSnapshot(t *testing.T) {
 		GitStatus:     "M main.go",
 	}
 
-	prompt := buildSystemPrompt(nil, nil, nil, "/work", "", "alpine:latest", "", snap)
+	prompt := buildSystemPrompt(buildSystemPromptOptions{tools: nil, serverTools: nil, skills: nil, workDir: "/work", personality: "", containerImage: "alpine:latest", worktreeBranch: "", snap: snap})
 
 	if !strings.Contains(prompt, "## Project context") {
 		t.Error("prompt should contain Project context section when snapshot is provided")
@@ -179,7 +179,7 @@ func TestBuildSystemPromptWithSnapshot(t *testing.T) {
 }
 
 func TestBuildSystemPromptWithoutSnapshot(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, nil, "/work", "", "alpine:latest", "", nil)
+	prompt := buildSystemPrompt(buildSystemPromptOptions{tools: nil, serverTools: nil, skills: nil, workDir: "/work", personality: "", containerImage: "alpine:latest", worktreeBranch: "", snap: nil})
 
 	if strings.Contains(prompt, "## Project context") {
 		t.Error("prompt should NOT contain Project context section when snapshot is nil")
@@ -193,7 +193,7 @@ func TestBuildSystemPromptCleanRepo(t *testing.T) {
 		GitStatus:     "", // clean
 	}
 
-	prompt := buildSystemPrompt(nil, nil, nil, "/work", "", "alpine:latest", "", snap)
+	prompt := buildSystemPrompt(buildSystemPromptOptions{tools: nil, serverTools: nil, skills: nil, workDir: "/work", personality: "", containerImage: "alpine:latest", worktreeBranch: "", snap: snap})
 
 	if !strings.Contains(prompt, "## Project context") {
 		t.Error("prompt should contain Project context section")
@@ -213,7 +213,7 @@ func TestBuildSubAgentSystemPromptWithSnapshot(t *testing.T) {
 	}
 
 	tools := []Tool{stubTool{"bash"}}
-	prompt := buildSubAgentSystemPrompt(tools, nil, "/work", "alpine:latest", snap)
+	prompt := buildSubAgentSystemPrompt(buildSubAgentSystemPromptOptions{tools: tools, serverTools: nil, workDir: "/work", containerImage: "alpine:latest", snap: snap})
 
 	if !strings.Contains(prompt, "## Project context") {
 		t.Error("sub-agent prompt should contain Project context when snapshot is provided")
@@ -228,7 +228,7 @@ func TestBuildSubAgentSystemPromptWithSnapshot(t *testing.T) {
 
 func TestBuildSubAgentSystemPromptWithoutSnapshot(t *testing.T) {
 	tools := []Tool{stubTool{"bash"}}
-	prompt := buildSubAgentSystemPrompt(tools, nil, "/work", "alpine:latest", nil)
+	prompt := buildSubAgentSystemPrompt(buildSubAgentSystemPromptOptions{tools: tools, serverTools: nil, workDir: "/work", containerImage: "alpine:latest", snap: nil})
 
 	if strings.Contains(prompt, "## Project context") {
 		t.Error("sub-agent prompt should NOT contain Project context when snapshot is nil")
@@ -248,7 +248,7 @@ func TestBuildProjectTree_TwoLevel(t *testing.T) {
 	os.WriteFile(filepath.Join(tmp, "cmd", "main.go"), []byte("package main"), 0o644)
 	os.WriteFile(filepath.Join(tmp, "pkg", "lib.go"), []byte("package pkg"), 0o644)
 
-	result := buildProjectTree(tmp, 20, 8)
+	result := buildProjectTree(buildProjectTreeOptions{rootPath: tmp, maxTopLevel: 20, maxPerSubdir: 8})
 
 	if result == "" {
 		t.Fatal("expected non-empty tree output")
@@ -287,7 +287,7 @@ func TestBuildProjectTree_TopLevelTruncation(t *testing.T) {
 	// Add an important file that should survive truncation.
 	os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module test"), 0o644)
 
-	result := buildProjectTree(tmp, 5, 8)
+	result := buildProjectTree(buildProjectTreeOptions{rootPath: tmp, maxTopLevel: 5, maxPerSubdir: 8})
 
 	if !strings.Contains(result, "go.mod") {
 		t.Errorf("important file go.mod should be preserved during truncation, got:\n%s", result)
@@ -318,7 +318,7 @@ func TestBuildProjectTree_SubdirTruncation(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, fmt.Sprintf("item%02d.go", i)), []byte("x"), 0o644)
 	}
 
-	result := buildProjectTree(tmp, 20, 3)
+	result := buildProjectTree(buildProjectTreeOptions{rootPath: tmp, maxTopLevel: 20, maxPerSubdir: 3})
 
 	if !strings.Contains(result, "bigdir/") {
 		t.Errorf("should contain bigdir/, got:\n%s", result)
@@ -336,7 +336,7 @@ func TestBuildProjectTree_HiddenFilesExcluded(t *testing.T) {
 	os.MkdirAll(filepath.Join(tmp, ".git"), 0o755)
 	os.WriteFile(filepath.Join(tmp, ".git", "config"), []byte("x"), 0o644)
 
-	result := buildProjectTree(tmp, 20, 8)
+	result := buildProjectTree(buildProjectTreeOptions{rootPath: tmp, maxTopLevel: 20, maxPerSubdir: 8})
 
 	if strings.Contains(result, ".hidden") {
 		t.Errorf("hidden files should be excluded, got:\n%s", result)
@@ -445,7 +445,7 @@ func TestExploreModeSkipsGitStatus(t *testing.T) {
 	exploreSnap := *snap
 	exploreSnap.GitStatus = ""
 	exploreTools := tool.buildSubAgentTools(ModeExplore)
-	explorePrompt := buildSubAgentSystemPrompt(exploreTools, nil, "/workspace", "alpine:latest", &exploreSnap)
+	explorePrompt := buildSubAgentSystemPrompt(buildSubAgentSystemPromptOptions{tools: exploreTools, serverTools: nil, workDir: "/workspace", containerImage: "alpine:latest", snap: &exploreSnap})
 
 	if strings.Contains(explorePrompt, "M main.go") {
 		t.Error("explore-mode prompt should NOT contain git status content")
@@ -479,7 +479,7 @@ func TestGeneralModeGetsFullContext(t *testing.T) {
 	}
 	tool := NewSubAgentTool(SubAgentConfig{Tools: allTools, ExploreMaxTurns: 10, GeneralMaxTurns: 10, MaxDepth: 1, WorkDir: "/workspace", ContainerImage: "alpine:latest"})
 	generalTools := tool.buildSubAgentTools(ModeGeneral)
-	generalPrompt := buildSubAgentSystemPrompt(generalTools, nil, "/workspace", "alpine:latest", snap)
+	generalPrompt := buildSubAgentSystemPrompt(buildSubAgentSystemPromptOptions{tools: generalTools, serverTools: nil, workDir: "/workspace", containerImage: "alpine:latest", snap: snap})
 
 	if !strings.Contains(generalPrompt, "M main.go") {
 		t.Error("general-mode prompt should contain git status content")
