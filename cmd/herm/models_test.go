@@ -206,6 +206,7 @@ func TestModelsFromCatalog(t *testing.T) {
 		Providers: map[string][]langdag.ModelPricing{
 			"anthropic": {
 				{ID: "claude-opus-4-6", InputPricePer1M: 5, OutputPricePer1M: 25, ContextWindow: 200000},
+				{ID: "claude-opus-4-7", InputPricePer1M: 5, OutputPricePer1M: 25, ContextWindow: 200000},
 			},
 			"grok": {
 				{ID: "grok-4-1-fast-reasoning", InputPricePer1M: 3, OutputPricePer1M: 15, ContextWindow: 131072},
@@ -213,8 +214,8 @@ func TestModelsFromCatalog(t *testing.T) {
 		},
 	}
 	models := modelsFromCatalog(catalog)
-	if len(models) != 2 {
-		t.Fatalf("expected 2 models, got %d", len(models))
+	if len(models) != 3 {
+		t.Fatalf("expected 3 models, got %d", len(models))
 	}
 	// anthropic comes first in supportedProviders order
 	if models[0].ID != "claude-opus-4-6" || models[0].Provider != "anthropic" {
@@ -264,7 +265,10 @@ func TestModelsFromCatalogNil(t *testing.T) {
 func TestModelsFromCatalogSkipsUnknownProviders(t *testing.T) {
 	catalog := &langdag.ModelCatalog{
 		Providers: map[string][]langdag.ModelPricing{
-			"anthropic":        {{ID: "claude-opus-4-6", InputPricePer1M: 5, OutputPricePer1M: 25, ContextWindow: 200000}},
+			"anthropic": {
+				{ID: "claude-opus-4-6", InputPricePer1M: 5, OutputPricePer1M: 25, ContextWindow: 200000},
+				{ID: "claude-opus-4-7", InputPricePer1M: 5, OutputPricePer1M: 25, ContextWindow: 200000},
+			},
 			"unknown-provider": {{ID: "mystery-model", InputPricePer1M: 1, OutputPricePer1M: 2, ContextWindow: 100000}},
 		},
 	}
@@ -555,7 +559,6 @@ func TestSortColFromName(t *testing.T) {
 	}
 }
 
-
 // --- formatTokenCount tests ---
 
 func TestFormatTokenCountSmall(t *testing.T) {
@@ -759,4 +762,3 @@ func TestSupportsServerToolsUnknownModel(t *testing.T) {
 		t.Error("unknown model should not support server tools")
 	}
 }
-
