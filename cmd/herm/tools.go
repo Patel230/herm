@@ -33,18 +33,25 @@ type BashTool struct {
 	timeout   int // default timeout in seconds
 }
 
+// NewBashToolOptions holds the parameters for NewBashTool.
+type NewBashToolOptions struct {
+	Container *ContainerClient
+	Timeout   int
+}
+
 // NewBashTool creates a BashTool with the given container client and default timeout.
-func NewBashTool(container *ContainerClient, timeout int) *BashTool {
+func NewBashTool(opts NewBashToolOptions) *BashTool {
+	timeout := opts.Timeout
 	if timeout <= 0 {
 		timeout = 120
 	}
-	return &BashTool{container: container, timeout: timeout}
+	return &BashTool{container: opts.Container, timeout: timeout}
 }
 
 func (t *BashTool) Definition() types.ToolDefinition {
 	return types.ToolDefinition{
 		Name:        "bash",
-		Description: getToolDescription("bash", "Run a shell command in the dev container. Output is truncated to 80 lines / 12KB (head+tail)."),
+		Description: getToolDescription(getToolDescriptionOptions{name: "bash", fallback: "Run a shell command in the dev container. Output is truncated to 80 lines / 12KB (head+tail)."}),
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -88,7 +95,7 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 	// (e.g. && → &amp;&amp;). Unescape before execution.
 	command := html.UnescapeString(in.Command)
 
-	result, err := t.container.Exec(command, timeout)
+	result, err := t.container.Exec(containerExecOptions{command: command, timeout: timeout})
 	if err != nil {
 		return "", err
 	}
@@ -161,15 +168,21 @@ var allowedGitSubcommands = map[string]bool{
 	"tag":      true,
 }
 
+// NewGitToolOptions holds the parameters for NewGitTool.
+type NewGitToolOptions struct {
+	WorkDir  string
+	CoAuthor bool
+}
+
 // NewGitTool creates a GitTool that runs in the given worktree directory.
-func NewGitTool(workDir string, coAuthor bool) *GitTool {
-	return &GitTool{workDir: workDir, coAuthor: coAuthor}
+func NewGitTool(opts NewGitToolOptions) *GitTool {
+	return &GitTool{workDir: opts.WorkDir, coAuthor: opts.CoAuthor}
 }
 
 func (t *GitTool) Definition() types.ToolDefinition {
 	return types.ToolDefinition{
 		Name:        "git",
-		Description: getToolDescription("git", "Run git commands on the host in the project worktree. Required for remote operations (push/pull/fetch) since only the host has SSH keys and credentials."),
+		Description: getToolDescription(getToolDescriptionOptions{name: "git", fallback: "Run git commands on the host in the project worktree. Required for remote operations (push/pull/fetch) since only the host has SSH keys and credentials."}),
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -304,23 +317,34 @@ type DevEnvTool struct {
 	onStatus  func(text string)      // called with container status updates
 }
 
+// NewDevEnvToolOptions holds the parameters for NewDevEnvTool.
+type NewDevEnvToolOptions struct {
+	Container *ContainerClient
+	HermDir   string
+	Workspace string
+	Mounts    []MountSpec
+	ProjectID string
+	OnRebuild func(imageName string)
+	OnStatus  func(text string)
+}
+
 // NewDevEnvTool creates a DevEnvTool with the given container client and paths.
-func NewDevEnvTool(container *ContainerClient, hermDir, workspace string, mounts []MountSpec, projectID string, onRebuild func(string), onStatus func(string)) *DevEnvTool {
+func NewDevEnvTool(opts NewDevEnvToolOptions) *DevEnvTool {
 	return &DevEnvTool{
-		container: container,
-		hermDir:   hermDir,
-		workspace: workspace,
-		mounts:    mounts,
-		projectID: projectID,
-		onRebuild: onRebuild,
-		onStatus:  onStatus,
+		container: opts.Container,
+		hermDir:   opts.HermDir,
+		workspace: opts.Workspace,
+		mounts:    opts.Mounts,
+		projectID: opts.ProjectID,
+		onRebuild: opts.OnRebuild,
+		onStatus:  opts.OnStatus,
 	}
 }
 
 func (t *DevEnvTool) Definition() types.ToolDefinition {
 	return types.ToolDefinition{
 		Name:        "devenv",
-		Description: getToolDescription("devenv", "Manage the single dev container Dockerfile at .herm/Dockerfile. The built image replaces the running container and persists across sessions."),
+		Description: getToolDescription(getToolDescriptionOptions{name: "devenv", fallback: "Manage the single dev container Dockerfile at .herm/Dockerfile. The built image replaces the running container and persists across sessions."}),
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -492,7 +516,7 @@ func (t *DevEnvTool) buildAndReplace() (string, error) {
 	if t.onStatus != nil {
 		t.onStatus("rebuilding…")
 	}
-	if err := t.container.Rebuild(imageName, tmpFile.Name(), t.workspace, t.mounts); err != nil {
+	if err := t.container.Rebuild(containerRebuildOptions{imageName: imageName, dockerfilePath: tmpFile.Name(), workspace: t.workspace, mounts: t.mounts}); err != nil {
 		if t.onStatus != nil {
 			t.onStatus("rebuild failed")
 		}

@@ -129,7 +129,7 @@ func TestResolveActiveModelOpenRouterFallsBackToDefault(t *testing.T) {
 	if resolved == "" {
 		t.Error("expected a fallback model, got empty string")
 	}
-	m := findModelByID(models, resolved)
+	m := findModelByID(findModelByIDOptions{models: models, id: resolved})
 	if m == nil || m.Provider != ProviderOpenRouter {
 		t.Errorf("fallback model %q should be an openrouter model", resolved)
 	}
@@ -187,7 +187,7 @@ func TestLoadConfigRoundTripWithOpenRouterKey(t *testing.T) {
 	dir := t.TempDir()
 
 	original := Config{OpenRouterAPIKey: "sk-or-v1-test123"}
-	if err := saveConfigTo(dir, original); err != nil {
+	if err := saveConfigTo(saveConfigToOptions{dir: dir, cfg: original}); err != nil {
 		t.Fatalf("saveConfigTo: %v", err)
 	}
 
@@ -262,7 +262,7 @@ func TestResolveExplorationModel_OpenRouterFallsBackToDefault(t *testing.T) {
 	if got == "" {
 		t.Error("expected a fallback exploration model, got empty string")
 	}
-	m := findModelByID(openRouterDefaultTestModels(), got)
+	m := findModelByID(findModelByIDOptions{models: openRouterDefaultTestModels(), id: got})
 	if m == nil || m.Provider != ProviderOpenRouter {
 		t.Errorf("fallback exploration model %q should be an openrouter model", got)
 	}

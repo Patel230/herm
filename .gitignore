@@ -6,6 +6,10 @@
 cmd/herm/herm
 cmd/debug/debug
 cmd/simple-chat/simple-chat
+tools/ci-check/ci-check
+tools/outline/outline
+tools/write-file/write-file
+tools/edit-file/edit-file
 *.exe
 
 # App data
@@ -14,7 +18,4 @@ cmd/simple-chat/simple-chat
 
 # OS
 .DS_Store
-external-deps-workspace/
-go.work
-go.work.sum
 .claude/worktrees/

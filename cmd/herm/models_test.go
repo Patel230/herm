@@ -23,7 +23,7 @@ func testModels() []ModelDef {
 
 func TestFilterModelsByProvidersSingle(t *testing.T) {
 	providers := map[string]bool{ProviderAnthropic: true}
-	models := filterModelsByProviders(testModels(), providers)
+	models := filterModelsByProviders(filterModelsByProvidersOptions{models: testModels(), providers: providers})
 
 	for _, m := range models {
 		if m.Provider != ProviderAnthropic {
@@ -37,7 +37,7 @@ func TestFilterModelsByProvidersSingle(t *testing.T) {
 
 func TestFilterModelsByProvidersMultiple(t *testing.T) {
 	providers := map[string]bool{ProviderGrok: true, ProviderOpenAI: true}
-	models := filterModelsByProviders(testModels(), providers)
+	models := filterModelsByProviders(filterModelsByProvidersOptions{models: testModels(), providers: providers})
 
 	for _, m := range models {
 		if m.Provider != ProviderGrok && m.Provider != ProviderOpenAI {
@@ -50,14 +50,14 @@ func TestFilterModelsByProvidersMultiple(t *testing.T) {
 }
 
 func TestFilterModelsByProvidersEmpty(t *testing.T) {
-	models := filterModelsByProviders(testModels(), map[string]bool{})
+	models := filterModelsByProviders(filterModelsByProvidersOptions{models: testModels(), providers: map[string]bool{}})
 	if len(models) != 0 {
 		t.Errorf("expected no models, got %d", len(models))
 	}
 }
 
 func TestFindModelByIDFound(t *testing.T) {
-	m := findModelByID(testModels(), "gpt-4o")
+	m := findModelByID(findModelByIDOptions{models: testModels(), id: "gpt-4o"})
 	if m == nil {
 		t.Fatal("expected to find gpt-4o")
 	}
@@ -67,7 +67,7 @@ func TestFindModelByIDFound(t *testing.T) {
 }
 
 func TestFindModelByIDNotFound(t *testing.T) {
-	m := findModelByID(testModels(), "nonexistent-model")
+	m := findModelByID(findModelByIDOptions{models: testModels(), id: "nonexistent-model"})
 	if m != nil {
 		t.Errorf("expected nil for nonexistent model, got %+v", m)
 	}
@@ -146,7 +146,7 @@ func TestResolveActiveModelMissingKeyFallback(t *testing.T) {
 	if resolved == "" {
 		t.Error("should fall back to first available model")
 	}
-	m := findModelByID(models, resolved)
+	m := findModelByID(findModelByIDOptions{models: models, id: resolved})
 	if m == nil || m.Provider != ProviderGrok {
 		t.Errorf("fallback should be a grok model, got %q", resolved)
 	}
@@ -170,7 +170,7 @@ func TestResolveActiveModelInvalidID(t *testing.T) {
 	if resolved == "nonexistent-model" {
 		t.Error("should not resolve to invalid model ID")
 	}
-	m := findModelByID(models, resolved)
+	m := findModelByID(findModelByIDOptions{models: models, id: resolved})
 	if m == nil || m.Provider != ProviderOpenAI {
 		t.Errorf("fallback should be an openai model, got %q", resolved)
 	}
@@ -206,6 +206,7 @@ func TestModelsFromCatalog(t *testing.T) {
 		Providers: map[string][]langdag.ModelPricing{
 			"anthropic": {
 				{ID: "claude-opus-4-6", InputPricePer1M: 5, OutputPricePer1M: 25, ContextWindow: 200000},
+				{ID: "claude-opus-4-7", InputPricePer1M: 5, OutputPricePer1M: 25, ContextWindow: 200000},
 			},
 			"grok": {
 				{ID: "grok-4-1-fast-reasoning", InputPricePer1M: 3, OutputPricePer1M: 15, ContextWindow: 131072},
@@ -213,8 +214,8 @@ func TestModelsFromCatalog(t *testing.T) {
 		},
 	}
 	models := modelsFromCatalog(catalog)
-	if len(models) != 2 {
-		t.Fatalf("expected 2 models, got %d", len(models))
+	if len(models) != 3 {
+		t.Fatalf("expected 3 models, got %d", len(models))
 	}
 	// anthropic comes first in supportedProviders order
 	if models[0].ID != "claude-opus-4-6" || models[0].Provider != "anthropic" {
@@ -241,13 +242,13 @@ func TestModelsFromCatalogServerTools(t *testing.T) {
 	}
 	models := modelsFromCatalog(catalog)
 	// anthropic model should have server tools
-	if m := findModelByID(models, "claude-sonnet-4"); m == nil {
+	if m := findModelByID(findModelByIDOptions{models: models, id: "claude-sonnet-4"}); m == nil {
 		t.Fatal("claude-sonnet-4 not found")
 	} else if len(m.ServerTools) != 1 || m.ServerTools[0] != "web_search" {
 		t.Errorf("claude-sonnet-4 ServerTools = %v, want [web_search]", m.ServerTools)
 	}
 	// grok model should have no server tools
-	if m := findModelByID(models, "grok-3"); m == nil {
+	if m := findModelByID(findModelByIDOptions{models: models, id: "grok-3"}); m == nil {
 		t.Fatal("grok-3 not found")
 	} else if len(m.ServerTools) != 0 {
 		t.Errorf("grok-3 ServerTools = %v, want []", m.ServerTools)
@@ -264,7 +265,10 @@ func TestModelsFromCatalogNil(t *testing.T) {
 func TestModelsFromCatalogSkipsUnknownProviders(t *testing.T) {
 	catalog := &langdag.ModelCatalog{
 		Providers: map[string][]langdag.ModelPricing{
-			"anthropic":        {{ID: "claude-opus-4-6", InputPricePer1M: 5, OutputPricePer1M: 25, ContextWindow: 200000}},
+			"anthropic": {
+				{ID: "claude-opus-4-6", InputPricePer1M: 5, OutputPricePer1M: 25, ContextWindow: 200000},
+				{ID: "claude-opus-4-7", InputPricePer1M: 5, OutputPricePer1M: 25, ContextWindow: 200000},
+			},
 			"unknown-provider": {{ID: "mystery-model", InputPricePer1M: 1, OutputPricePer1M: 2, ContextWindow: 100000}},
 		},
 	}
@@ -393,7 +397,7 @@ func TestMatchSWEScoresExactMatch(t *testing.T) {
 		"gpt-4o":                   55.0,
 	}
 
-	matchSWEScores(models, scores)
+	matchSWEScores(matchSWEScoresOptions{models: models, scores: scores})
 
 	if models[0].SWEScore != 79.2 {
 		t.Errorf("claude-opus SWEScore = %f, want 79.2", models[0].SWEScore)
@@ -411,7 +415,7 @@ func TestMatchSWEScoresSubstringMatch(t *testing.T) {
 		"o3-mini-2025-01-31": 49.3,
 	}
 
-	matchSWEScores(models, scores)
+	matchSWEScores(matchSWEScoresOptions{models: models, scores: scores})
 
 	if models[0].SWEScore != 49.3 {
 		t.Errorf("o3-mini SWEScore = %f, want 49.3", models[0].SWEScore)
@@ -426,7 +430,7 @@ func TestMatchSWEScoresNoMatch(t *testing.T) {
 		"claude-opus-4-5": 79.2,
 	}
 
-	matchSWEScores(models, scores)
+	matchSWEScores(matchSWEScoresOptions{models: models, scores: scores})
 
 	if models[0].SWEScore != 0 {
 		t.Errorf("grok SWEScore = %f, want 0 (no match)", models[0].SWEScore)
@@ -442,7 +446,7 @@ func TestMatchSWEScoresTakesBestScore(t *testing.T) {
 		"claude-sonnet-4":            60.0,
 	}
 
-	matchSWEScores(models, scores)
+	matchSWEScores(matchSWEScoresOptions{models: models, scores: scores})
 
 	if models[0].SWEScore != 65.0 {
 		t.Errorf("SWEScore = %f, want 65.0 (best match)", models[0].SWEScore)
@@ -451,7 +455,7 @@ func TestMatchSWEScoresTakesBestScore(t *testing.T) {
 
 func TestMatchSWEScoresEmptyScores(t *testing.T) {
 	models := testModels()
-	matchSWEScores(models, map[string]float64{})
+	matchSWEScores(matchSWEScoresOptions{models: models, scores: map[string]float64{}})
 
 	for _, m := range models {
 		if m.SWEScore != 0 {
@@ -472,7 +476,7 @@ func sortTestModels() []ModelDef {
 
 func TestSortModelsByColNameAsc(t *testing.T) {
 	m := sortTestModels()
-	sortModelsByCol(m, 0, true)
+	sortModelsByCol(sortModelsByColOptions{models: m, col: 0, asc: true})
 	want := []string{"claude-opus", "gemini-pro", "gpt-4o"}
 	for i, w := range want {
 		if m[i].ID != w {
@@ -483,7 +487,7 @@ func TestSortModelsByColNameAsc(t *testing.T) {
 
 func TestSortModelsByColNameDesc(t *testing.T) {
 	m := sortTestModels()
-	sortModelsByCol(m, 0, false)
+	sortModelsByCol(sortModelsByColOptions{models: m, col: 0, asc: false})
 	want := []string{"gpt-4o", "gemini-pro", "claude-opus"}
 	for i, w := range want {
 		if m[i].ID != w {
@@ -494,7 +498,7 @@ func TestSortModelsByColNameDesc(t *testing.T) {
 
 func TestSortModelsByColProvider(t *testing.T) {
 	m := sortTestModels()
-	sortModelsByCol(m, 1, true)
+	sortModelsByCol(sortModelsByColOptions{models: m, col: 1, asc: true})
 	want := []string{"anthropic", "gemini", "openai"}
 	for i, w := range want {
 		if m[i].Provider != w {
@@ -505,7 +509,7 @@ func TestSortModelsByColProvider(t *testing.T) {
 
 func TestSortModelsByColPrice(t *testing.T) {
 	m := sortTestModels()
-	sortModelsByCol(m, 2, true)
+	sortModelsByCol(sortModelsByColOptions{models: m, col: 2, asc: true})
 	want := []float64{1.25, 2.5, 15.0}
 	for i, w := range want {
 		if m[i].PromptPrice != w {
@@ -516,7 +520,7 @@ func TestSortModelsByColPrice(t *testing.T) {
 
 func TestSortModelsByColPriceDesc(t *testing.T) {
 	m := sortTestModels()
-	sortModelsByCol(m, 2, false)
+	sortModelsByCol(sortModelsByColOptions{models: m, col: 2, asc: false})
 	want := []float64{15.0, 2.5, 1.25}
 	for i, w := range want {
 		if m[i].PromptPrice != w {
@@ -527,7 +531,7 @@ func TestSortModelsByColPriceDesc(t *testing.T) {
 
 func TestSortModelsByColContext(t *testing.T) {
 	m := sortTestModels()
-	sortModelsByCol(m, 3, true)
+	sortModelsByCol(sortModelsByColOptions{models: m, col: 3, asc: true})
 	want := []int{128000, 200000, 1000000}
 	for i, w := range want {
 		if m[i].ContextWindow != w {
@@ -554,7 +558,6 @@ func TestSortColFromName(t *testing.T) {
 		}
 	}
 }
-
 
 // --- formatTokenCount tests ---
 
@@ -621,7 +624,7 @@ func TestComputeCostStandardTokens(t *testing.T) {
 		{Provider: ProviderOpenAI, ID: "gpt-4o", PromptPrice: 2.5, CompletionPrice: 10.0},
 	}
 	usage := types.Usage{InputTokens: 1000, OutputTokens: 500}
-	got := computeCost(models, "gpt-4o", usage)
+	got := computeCost(computeCostOptions{models: models, modelID: "gpt-4o", usage: usage})
 	// (1000 * 2.5 + 500 * 10.0) / 1_000_000 = (2500 + 5000) / 1_000_000 = 0.0075
 	want := 0.0075
 	if got != want {
@@ -638,7 +641,7 @@ func TestComputeCostAnthropicCacheRead(t *testing.T) {
 		OutputTokens:         500,
 		CacheReadInputTokens: 10000,
 	}
-	got := computeCost(models, "claude-sonnet-4-0-20250514", usage)
+	got := computeCost(computeCostOptions{models: models, modelID: "claude-sonnet-4-0-20250514", usage: usage})
 	// input: 1000 * 3.0 / 1M = 0.003
 	// output: 500 * 15.0 / 1M = 0.0075
 	// cache read: 10000 * 3.0 * 0.1 / 1M = 0.003
@@ -657,7 +660,7 @@ func TestComputeCostNonAnthropicCacheReadIgnored(t *testing.T) {
 		OutputTokens:         500,
 		CacheReadInputTokens: 10000,
 	}
-	got := computeCost(models, "gpt-4o", usage)
+	got := computeCost(computeCostOptions{models: models, modelID: "gpt-4o", usage: usage})
 	// Cache read tokens should not add cost for non-Anthropic
 	want := (1000*2.5 + 500*10.0) / 1_000_000
 	if got != want {
@@ -670,7 +673,7 @@ func TestComputeCostModelNotFound(t *testing.T) {
 		{Provider: ProviderOpenAI, ID: "gpt-4o", PromptPrice: 2.5, CompletionPrice: 10.0},
 	}
 	usage := types.Usage{InputTokens: 1000, OutputTokens: 500}
-	got := computeCost(models, "nonexistent-model", usage)
+	got := computeCost(computeCostOptions{models: models, modelID: "nonexistent-model", usage: usage})
 	if got != 0 {
 		t.Errorf("computeCost for unknown model = %f, want 0", got)
 	}
@@ -681,7 +684,7 @@ func TestComputeCostZeroPricing(t *testing.T) {
 		{Provider: ProviderGrok, ID: "grok-free", PromptPrice: 0, CompletionPrice: 0},
 	}
 	usage := types.Usage{InputTokens: 5000, OutputTokens: 1000}
-	got := computeCost(models, "grok-free", usage)
+	got := computeCost(computeCostOptions{models: models, modelID: "grok-free", usage: usage})
 	if got != 0 {
 		t.Errorf("computeCost with zero pricing = %f, want 0", got)
 	}
@@ -733,7 +736,7 @@ func TestSupportsServerToolsWithCapability(t *testing.T) {
 		{ID: "grok-4-1-fast-reasoning", Provider: ProviderGrok, ServerTools: []string{"web_search"}},
 	}
 	for _, m := range models {
-		if !supportsServerTools(m.Provider, m.ID, models) {
+		if !supportsServerTools(supportsServerToolsOptions{provider: m.Provider, modelID: m.ID, models: models}) {
 			t.Errorf("%s should support server tools", m.ID)
 		}
 	}
@@ -745,7 +748,7 @@ func TestSupportsServerToolsWithoutCapability(t *testing.T) {
 		{ID: "grok-code-fast-1", Provider: ProviderGrok},
 	}
 	for _, m := range models {
-		if supportsServerTools(m.Provider, m.ID, models) {
+		if supportsServerTools(supportsServerToolsOptions{provider: m.Provider, modelID: m.ID, models: models}) {
 			t.Errorf("%s should not support server tools", m.ID)
 		}
 	}
@@ -755,8 +758,7 @@ func TestSupportsServerToolsUnknownModel(t *testing.T) {
 	models := []ModelDef{
 		{ID: "claude-sonnet-4-6", Provider: ProviderAnthropic, ServerTools: []string{"web_search"}},
 	}
-	if supportsServerTools(ProviderOpenAI, "nonexistent-model", models) {
+	if supportsServerTools(supportsServerToolsOptions{provider: ProviderOpenAI, modelID: "nonexistent-model", models: models}) {
 		t.Error("unknown model should not support server tools")
 	}
 }
-

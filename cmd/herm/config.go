@@ -27,6 +27,8 @@ type Config struct {
 	ModelSortCol          string          `json:"model_sort_col,omitempty"`   // "name","provider","price","context"
 	ModelSortDirs         map[string]bool `json:"model_sort_dirs,omitempty"` // column name → ascending (per-column)
 	SubAgentMaxTurns      int             `json:"sub_agent_max_turns,omitempty"`
+	ExploreMaxTurns       int             `json:"explore_max_turns,omitempty"`
+	GeneralMaxTurns       int             `json:"general_max_turns,omitempty"`
 	MaxToolIterations     int             `json:"max_tool_iterations,omitempty"`     // main agent tool-call loop cap; 0 = default (200)
 	MaxAgentDepth         int             `json:"max_agent_depth,omitempty"`         // max sub-agent nesting depth; 0 = default (1)
 	Personality           string          `json:"personality,omitempty"` // optional agent personality/tone
@@ -106,7 +108,7 @@ func (c Config) defaultLangdagProvider() string {
 
 // availableModels returns the models whose provider has a configured API key.
 func (c Config) availableModels(models []ModelDef) []ModelDef {
-	return filterModelsByProviders(models, c.configuredProviders())
+	return filterModelsByProviders(filterModelsByProvidersOptions{models: models, providers: c.configuredProviders()})
 }
 
 // defaultActiveModels maps provider to the preferred default active model ID.
@@ -134,9 +136,17 @@ var defaultExplorationModels = map[string]string{
 	ProviderGemini:     "gemini-2.5-flash",
 }
 
+// preferredDefaultOptions is the parameter bundle for preferredDefault.
+type preferredDefaultOptions struct {
+	models   []ModelDef
+	provider string
+	defaults map[string]string
+}
+
 // preferredDefault looks up the default model ID for the given provider and
 // returns it if it exists in the available models list. Returns "" otherwise.
-func preferredDefault(models []ModelDef, provider string, defaults map[string]string) string {
+func preferredDefault(opts preferredDefaultOptions) string {
+	models, provider, defaults := opts.models, opts.provider, opts.defaults
 	id, ok := defaults[provider]
 	if !ok {
 		return ""
@@ -157,7 +167,7 @@ func (c Config) resolveActiveModel(models []ModelDef) string {
 	// provider is offline and not in the live model list (e.g. Ollama down).
 	if c.ActiveModel != "" {
 		providers := c.configuredProviders()
-		if providers[ollamaModelProvider(c.ActiveModel, models, c.OllamaBaseURL)] {
+		if providers[ollamaModelProvider(ollamaModelProviderOptions{modelID: c.ActiveModel, models: models, ollamaURL: c.OllamaBaseURL})] {
 			return c.ActiveModel
 		}
 	}
@@ -173,17 +183,25 @@ func (c Config) resolveActiveModel(models []ModelDef) string {
 		}
 	}
 	// Try provider-specific default before falling back to first available
-	if id := preferredDefault(available, c.defaultLangdagProvider(), defaultActiveModels); id != "" {
+	if id := preferredDefault(preferredDefaultOptions{models: available, provider: c.defaultLangdagProvider(), defaults: defaultActiveModels}); id != "" {
 		return id
 	}
 	return available[0].ID
+}
+
+// ollamaModelProviderOptions is the parameter bundle for ollamaModelProvider.
+type ollamaModelProviderOptions struct {
+	modelID   string
+	models    []ModelDef
+	ollamaURL string
 }
 
 // ollamaModelProvider returns the provider for a model ID. If the model is
 // found in the live list, its provider is returned. Otherwise, if an Ollama
 // URL is configured and the model is not in the catalog at all, it is assumed
 // to be an Ollama model.
-func ollamaModelProvider(modelID string, models []ModelDef, ollamaURL string) string {
+func ollamaModelProvider(opts ollamaModelProviderOptions) string {
+	modelID, models, ollamaURL := opts.modelID, opts.models, opts.ollamaURL
 	for _, m := range models {
 		if m.ID == modelID {
 			return m.Provider
@@ -202,7 +220,7 @@ func ollamaModelProvider(modelID string, models []ModelDef, ollamaURL string) st
 func (c Config) resolveExplorationModel(models []ModelDef) string {
 	if c.ExplorationModel == "" {
 		available := c.availableModels(models)
-		if id := preferredDefault(available, c.defaultLangdagProvider(), defaultExplorationModels); id != "" {
+		if id := preferredDefault(preferredDefaultOptions{models: available, provider: c.defaultLangdagProvider(), defaults: defaultExplorationModels}); id != "" {
 			return id
 		}
 		return c.resolveActiveModel(models)
@@ -210,7 +228,7 @@ func (c Config) resolveExplorationModel(models []ModelDef) string {
 	// If the saved exploration model's provider is configured, trust it.
 	if c.ExplorationModel != "" {
 		providers := c.configuredProviders()
-		if providers[ollamaModelProvider(c.ExplorationModel, models, c.OllamaBaseURL)] {
+		if providers[ollamaModelProvider(ollamaModelProviderOptions{modelID: c.ExplorationModel, models: models, ollamaURL: c.OllamaBaseURL})] {
 			return c.ExplorationModel
 		}
 	}
@@ -231,14 +249,23 @@ type ProjectConfig struct {
 	ExplorationModel  string `json:"exploration_model,omitempty"`
 	Personality       string `json:"personality,omitempty"`
 	SubAgentMaxTurns  int    `json:"sub_agent_max_turns,omitempty"`
+	ExploreMaxTurns   int    `json:"explore_max_turns,omitempty"`
+	GeneralMaxTurns   int    `json:"general_max_turns,omitempty"`
 	MaxToolIterations int    `json:"max_tool_iterations,omitempty"`
 	MaxAgentDepth     int    `json:"max_agent_depth,omitempty"`
 	DebugMode         *bool  `json:"debug_mode,omitempty"` // nil = not overridden
 	Thinking          *bool  `json:"thinking,omitempty"`   // nil = not overridden
 }
 
+// mergeConfigsOptions is the parameter bundle for mergeConfigs.
+type mergeConfigsOptions struct {
+	global  Config
+	project ProjectConfig
+}
+
 // mergeConfigs overlays non-zero ProjectConfig fields onto a global Config.
-func mergeConfigs(global Config, project ProjectConfig) Config {
+func mergeConfigs(opts mergeConfigsOptions) Config {
+	global, project := opts.global, opts.project
 	merged := global
 	if project.ActiveModel != "" {
 		merged.ActiveModel = project.ActiveModel
@@ -251,6 +278,12 @@ func mergeConfigs(global Config, project ProjectConfig) Config {
 	}
 	if project.SubAgentMaxTurns != 0 {
 		merged.SubAgentMaxTurns = project.SubAgentMaxTurns
+	}
+	if project.ExploreMaxTurns != 0 {
+		merged.ExploreMaxTurns = project.ExploreMaxTurns
+	}
+	if project.GeneralMaxTurns != 0 {
+		merged.GeneralMaxTurns = project.GeneralMaxTurns
 	}
 	if project.MaxToolIterations != 0 {
 		merged.MaxToolIterations = project.MaxToolIterations
@@ -342,7 +375,7 @@ func loadConfigFrom(dir string) (Config, error) {
 	cfgPath := filepath.Join(cfgDir, configFile)
 	data, err := os.ReadFile(cfgPath)
 	if os.IsNotExist(err) {
-		if saveErr := saveConfigTo(dir, cfg); saveErr != nil {
+		if saveErr := saveConfigTo(saveConfigToOptions{dir: dir, cfg: cfg}); saveErr != nil {
 			return cfg, fmt.Errorf("writing default config: %w", saveErr)
 		}
 		return cfg, nil
@@ -372,8 +405,15 @@ func saveConfig(cfg Config) error {
 	return os.WriteFile(configPath(), data, 0o644)
 }
 
+// saveConfigToOptions is the parameter bundle for saveConfigTo.
+type saveConfigToOptions struct {
+	dir string
+	cfg Config
+}
+
 // saveConfigTo writes config to a specific directory path.
-func saveConfigTo(dir string, cfg Config) error {
+func saveConfigTo(opts saveConfigToOptions) error {
+	dir, cfg := opts.dir, opts.cfg
 	cfgDir := filepath.Join(dir, configDir)
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		return fmt.Errorf("creating config dir: %w", err)
@@ -404,8 +444,15 @@ func loadProjectConfig(repoRoot string) ProjectConfig {
 	return pc
 }
 
+// saveProjectConfigOptions is the parameter bundle for saveProjectConfig.
+type saveProjectConfigOptions struct {
+	repoRoot string
+	pc       ProjectConfig
+}
+
 // saveProjectConfig writes project-level overrides to <repoRoot>/.herm/config.json.
-func saveProjectConfig(repoRoot string, pc ProjectConfig) error {
+func saveProjectConfig(opts saveProjectConfigOptions) error {
+	repoRoot, pc := opts.repoRoot, opts.pc
 	cfgDir := filepath.Join(repoRoot, configDir)
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		return fmt.Errorf("creating project config dir: %w", err)

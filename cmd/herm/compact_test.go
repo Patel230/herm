@@ -56,7 +56,7 @@ func TestCallLLMDirect(t *testing.T) {
 	prov := &mockProvider{responses: []string{"This is the summary."}, model: "test-model"}
 	client := langdag.NewWithDeps(store, prov)
 
-	result, err := callLLMDirect(context.Background(), client, "test-model", "Summarize this.")
+	result, err := callLLMDirect(context.Background(), callLLMDirectOptions{client: client, model: "test-model", prompt: "Summarize this."})
 	if err != nil {
 		t.Fatalf("callLLMDirect error: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestCompactConversation(t *testing.T) {
 	}
 	store.ancestorChains[leafID] = ancestorIDs
 
-	result, err := compactConversation(context.Background(), client, leafID, "test-model", "")
+	result, err := compactConversation(context.Background(), compactConversationOptions{client: client, nodeID: leafID, model: "test-model", focusHint: ""})
 	if err != nil {
 		t.Fatalf("compactConversation error: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestCompactConversationTooShort(t *testing.T) {
 	}
 	store.ancestorChains["c"] = ids
 
-	_, err := compactConversation(context.Background(), client, "c", "test-model", "")
+	_, err := compactConversation(context.Background(), compactConversationOptions{client: client, nodeID: "c", model: "test-model", focusHint: ""})
 	if err == nil {
 		t.Fatal("expected error for too-short conversation")
 	}
@@ -184,10 +184,10 @@ func TestMaybeCompactBelowThreshold(t *testing.T) {
 	prov := &mockProvider{model: "test-model"}
 	client := langdag.NewWithDeps(store, prov)
 
-	agent := NewAgent(client, nil, nil, "", "test-model", 200000)
+	agent := NewAgent(NewAgentOptions{Client: client, Tools: nil, ServerTools: nil, SystemPrompt: "", Model: "test-model", ContextWindow: 200000})
 
 	// 100k tokens, threshold is 190k (95%) → should NOT compact.
-	result := agent.maybeCompact(context.Background(), "node-1", 100000)
+	result := agent.maybeCompact(context.Background(), maybeCompactOptions{nodeID: "node-1", inputTokens: 100000})
 	if result != "node-1" {
 		t.Errorf("should return same nodeID when below threshold, got %q", result)
 	}
@@ -198,9 +198,9 @@ func TestMaybeCompactNoContextWindow(t *testing.T) {
 	prov := &mockProvider{model: "test-model"}
 	client := langdag.NewWithDeps(store, prov)
 
-	agent := NewAgent(client, nil, nil, "", "test-model", 0)
+	agent := NewAgent(NewAgentOptions{Client: client, Tools: nil, ServerTools: nil, SystemPrompt: "", Model: "test-model", ContextWindow: 0})
 
-	result := agent.maybeCompact(context.Background(), "node-1", 500000)
+	result := agent.maybeCompact(context.Background(), maybeCompactOptions{nodeID: "node-1", inputTokens: 500000})
 	if result != "node-1" {
 		t.Errorf("should return same nodeID when context window is 0")
 	}
@@ -254,7 +254,7 @@ func TestCompactConversationPreservesStructure(t *testing.T) {
 	}
 	store.ancestorChains["n9"] = ids
 
-	result, err := compactConversation(context.Background(), client, "n9", "test-model", "")
+	result, err := compactConversation(context.Background(), compactConversationOptions{client: client, nodeID: "n9", model: "test-model", focusHint: ""})
 	if err != nil {
 		t.Fatalf("compact error: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestCompactConversationWithFocusHint(t *testing.T) {
 	}
 	store.ancestorChains[leafID] = ids
 
-	_, err := compactConversation(context.Background(), client, leafID, "test-model", "the database migration")
+	_, err := compactConversation(context.Background(), compactConversationOptions{client: client, nodeID: leafID, model: "test-model", focusHint: "the database migration"})
 	if err != nil {
 		t.Fatalf("compact error: %v", err)
 	}
@@ -410,7 +410,7 @@ func TestCompactThenContinueConversation(t *testing.T) {
 	}
 	store.ancestorChains[leafID] = ids
 
-	result, err := compactConversation(context.Background(), client, leafID, "test-model", "")
+	result, err := compactConversation(context.Background(), compactConversationOptions{client: client, nodeID: leafID, model: "test-model", focusHint: ""})
 	if err != nil {
 		t.Fatalf("compact error: %v", err)
 	}
@@ -451,7 +451,7 @@ func TestCompactConversation_GetAncestorsError(t *testing.T) {
 	prov := &mockProvider{model: "test-model"}
 	client := langdag.NewWithDeps(store, prov)
 
-	_, err := compactConversation(context.Background(), client, "any-node", "test-model", "")
+	_, err := compactConversation(context.Background(), compactConversationOptions{client: client, nodeID: "any-node", model: "test-model", focusHint: ""})
 	if err == nil {
 		t.Fatal("expected error when GetAncestors fails")
 	}
@@ -494,7 +494,7 @@ func TestCompactConversation_LLMFailure(t *testing.T) {
 	}
 	store.ancestorChains[leafID] = ids
 
-	_, err := compactConversation(context.Background(), client, leafID, "test-model", "")
+	_, err := compactConversation(context.Background(), compactConversationOptions{client: client, nodeID: leafID, model: "test-model", focusHint: ""})
 	if err == nil {
 		t.Fatal("expected error when LLM call fails")
 	}
@@ -510,7 +510,7 @@ func TestCompactConversation_EmptyConversation(t *testing.T) {
 	prov := &mockProvider{model: "test-model"}
 	client := langdag.NewWithDeps(store, prov)
 
-	_, err := compactConversation(context.Background(), client, "nonexistent", "test-model", "")
+	_, err := compactConversation(context.Background(), compactConversationOptions{client: client, nodeID: "nonexistent", model: "test-model", focusHint: ""})
 	if err == nil {
 		t.Fatal("expected error for empty/nonexistent conversation")
 	}
@@ -536,5 +536,77 @@ func (p *failingProvider) Stream(_ context.Context, _ *types.CompletionRequest) 
 	return nil, fmt.Errorf("LLM service unavailable")
 }
 
-func (p *failingProvider) Name() string               { return "mock" }
-func (p *failingProvider) Models() []types.ModelInfo   { return nil }
+func (p *failingProvider) Name() string             { return "mock" }
+func (p *failingProvider) Models() []types.ModelInfo { return nil }
+
+func TestCompactSummaryPromptCoversAllFocuses(t *testing.T) {
+	// Verify the prompt includes all 6 focus areas for rich summaries.
+	expectedFocuses := []string{
+		"task/goal",
+		"Key decisions",
+		"Current state",
+		"important context",
+		"Pending tasks or plan steps",
+		"Errors encountered",
+	}
+	for _, focus := range expectedFocuses {
+		if !strings.Contains(compactSummaryPrompt, focus) {
+			t.Errorf("compactSummaryPrompt missing focus area: %q", focus)
+		}
+	}
+}
+
+// TestCompactPromptPassedToLLM verifies the full prompt (with all focuses) is
+// sent to the LLM during compaction.
+func TestCompactPromptPassedToLLM(t *testing.T) {
+	store := newClearingMockStorage()
+	prov := &focusCaptureProvider{
+		mockProvider: mockProvider{
+			responses: []string{"Summary with errors and pending tasks."},
+			model:     "test-model",
+		},
+	}
+	client := langdag.NewWithDeps(store, prov)
+
+	now := time.Now()
+	nodeCount := compactKeepRecent + 4
+	nodes := make([]*types.Node, nodeCount)
+	for i := 0; i < nodeCount; i++ {
+		id := fmt.Sprintf("pp-%d", i)
+		parentID := ""
+		if i > 0 {
+			parentID = nodes[i-1].ID
+		}
+		nt := types.NodeTypeUser
+		content := fmt.Sprintf("user msg %d", i)
+		if i%2 == 1 {
+			nt = types.NodeTypeAssistant
+			content = fmt.Sprintf("assistant msg %d", i)
+		}
+		nodes[i] = &types.Node{
+			ID: id, ParentID: parentID, RootID: "pp-0", Sequence: i,
+			NodeType: nt, Content: content, CreatedAt: now,
+		}
+	}
+
+	leafID := nodes[len(nodes)-1].ID
+	var ids []string
+	for _, n := range nodes {
+		_ = store.CreateNode(context.Background(), n)
+		ids = append(ids, n.ID)
+	}
+	store.ancestorChains[leafID] = ids
+
+	_, err := compactConversation(context.Background(), compactConversationOptions{client: client, nodeID: leafID, model: "test-model", focusHint: ""})
+	if err != nil {
+		t.Fatalf("compact error: %v", err)
+	}
+
+	// Verify all 6 focus areas were in the prompt sent to the LLM.
+	if !strings.Contains(prov.lastPrompt, "Pending tasks or plan steps") {
+		t.Error("prompt sent to LLM missing 'Pending tasks or plan steps'")
+	}
+	if !strings.Contains(prov.lastPrompt, "Errors encountered") {
+		t.Error("prompt sent to LLM missing 'Errors encountered'")
+	}
+}

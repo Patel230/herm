@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/aduermael/herm/actions/workflows/test.yml/badge.svg)](https://github.com/aduermael/herm/actions/workflows/test.yml)
 [![Prompt Length](https://github.com/aduermael/herm/actions/workflows/prompt-length.yml/badge.svg)](https://github.com/aduermael/herm/actions/workflows/prompt-length.yml)
-[![Source File Length](https://github.com/aduermael/herm/actions/workflows/source-file-length.yml/badge.svg)](https://github.com/aduermael/herm/actions/workflows/source-file-length.yml)
+[![CI Checks](https://github.com/aduermael/herm/actions/workflows/ci-checks.yml/badge.svg)](https://github.com/aduermael/herm/actions/workflows/ci-checks.yml)
 
 A coding agent CLI that's containerized by default. Every command runs inside a Docker container, nothing touches your host. No approval prompts, no "are you sure?" dialogs. Just let it work.
 
@@ -59,8 +59,13 @@ You'll need an API key for at least one provider (Anthropic, OpenAI, Grok, or Ge
 
 ## Roadmap
 
-- OCI container support without Docker, using Apple's [Containerization framework](https://developer.apple.com/documentation/containerization)
-- Test and verify Windows support (WSL2 + Docker Desktop)
+Rough priority order — subject to change.
+
+1. **Credential-free third-party APIs** — let herm call any external API without ever seeing your credentials.
+2. **Benchmarks** — measure herm against Claude Code and other coding agents on standard coding tasks.
+3. **Skills & `herm.md`** — first-class skills and a project config file. Optional import from other agents' configs (e.g. `CLAUDE.md`).
+4. **PR review bot** — a herm bot that reviews pull requests.
+5. **Dynamic model list** — pick up newly released models without updating herm.
 
 ## Project Structure
 
@@ -118,7 +123,7 @@ herm is built on top of [langdag](https://langdag.com), a Go library for managin
 
 ## Community
 
-Join the [Discord](https://discord.gg/xMEF646A) to chat, ask questions, or share feedback.
+Join the [Discord](https://discord.gg/WFjcymwtZU) to chat, ask questions, or share feedback.
 
 ## License
 
