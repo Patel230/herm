@@ -151,7 +151,7 @@ func fetchOllamaModels(baseURL string) []ModelDef {
 }
 
 const openRouterDefaultBase = "https://openrouter.ai/api/v1"
-const openRouterReferer = "https://github.com/fundamental-research-labs/herm"
+const openRouterReferer = "https://github.com/aduermael/herm"
 
 // fetchOpenRouterModels fetches available models from the OpenRouter API.
 // Returns nil if apiKey is empty or the request fails.
