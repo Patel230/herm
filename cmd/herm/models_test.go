@@ -1,7 +1,9 @@
 package main
 
 import (
+	"math"
 	"testing"
+	"time"
 
 	"langdag.com/langdag"
 	"langdag.com/langdag/types"
@@ -18,6 +20,69 @@ func testModels() []ModelDef {
 		{Provider: ProviderOpenAI, ID: "gpt-4o", PromptPrice: 2.5, CompletionPrice: 10.0},
 		{Provider: ProviderOpenAI, ID: "gpt-4o-mini", PromptPrice: 0.15, CompletionPrice: 0.6},
 		{Provider: ProviderOpenAI, ID: "o3-mini", PromptPrice: 1.1, CompletionPrice: 4.4},
+	}
+}
+
+func testModelCatalogFromLegacyProviders(providers map[string][]langdag.ModelPricing) *langdag.ModelCatalog {
+	catalog := langdag.ReferenceCatalogV1()
+	generatedAt := time.Date(2026, 5, 15, 0, 0, 0, 0, time.UTC)
+	catalog.GeneratedAt = generatedAt
+	catalog.StaleAfter = generatedAt.Add(30 * 24 * time.Hour)
+	catalog.Models = map[string]*langdag.ModelV1{}
+	catalog.Offerings = nil
+	catalog.OfferingTemplates = nil
+	catalog.Aliases = map[string]string{}
+
+	for provider, modelList := range providers {
+		deploymentID, ownerID := testCatalogDeploymentAndOwner(provider)
+		if catalog.Providers[ownerID] == nil {
+			catalog.Providers[ownerID] = &langdag.ProviderV1{ID: ownerID, Name: ownerID}
+		}
+		for _, pricing := range modelList {
+			canonicalID := ownerID + "/" + pricing.ID
+			catalog.Models[canonicalID] = &langdag.ModelV1{
+				ID:            canonicalID,
+				ProviderID:    ownerID,
+				Name:          pricing.ID,
+				ContextWindow: pricing.ContextWindow,
+				MaxOutput:     pricing.MaxOutput,
+			}
+			serverTools := map[string]langdag.CapabilityState{}
+			for _, tool := range pricing.ServerTools {
+				serverTools[tool] = langdag.CapabilitySupported
+			}
+			catalog.Offerings = append(catalog.Offerings, langdag.ModelOfferingV1{
+				ID:               deploymentID + ":" + pricing.ID,
+				CanonicalModelID: canonicalID,
+				DeploymentID:     deploymentID,
+				NativeModelID:    pricing.ID,
+				Capabilities:     langdag.CapabilitySetV1{ServerTools: serverTools},
+				Pricing: langdag.PricingV1{
+					Status:   langdag.PricingKnown,
+					Currency: "USD",
+					RatesPer1M: map[string]float64{
+						"input_tokens":  pricing.InputPricePer1M,
+						"output_tokens": pricing.OutputPricePer1M,
+					},
+				},
+			})
+		}
+	}
+	return catalog
+}
+
+func testCatalogDeploymentAndOwner(provider string) (deploymentID string, ownerID string) {
+	switch provider {
+	case ProviderAnthropic:
+		return "anthropic-direct", "anthropic"
+	case ProviderGrok:
+		return "grok-direct", "xai"
+	case ProviderOpenAI:
+		return "openai-direct", "openai"
+	case ProviderGemini:
+		return "gemini-direct", "google"
+	default:
+		return provider, provider
 	}
 }
 
@@ -202,24 +267,21 @@ func TestFormatPriceZero(t *testing.T) {
 // --- modelsFromCatalog tests ---
 
 func TestModelsFromCatalog(t *testing.T) {
-	catalog := &langdag.ModelCatalog{
-		Providers: map[string][]langdag.ModelPricing{
-			"anthropic": {
-				{ID: "claude-opus-4-6", InputPricePer1M: 5, OutputPricePer1M: 25, ContextWindow: 200000},
-				{ID: "claude-opus-4-7", InputPricePer1M: 5, OutputPricePer1M: 25, ContextWindow: 200000},
-			},
-			"grok": {
-				{ID: "grok-4-1-fast-reasoning", InputPricePer1M: 3, OutputPricePer1M: 15, ContextWindow: 131072},
-			},
+	catalog := testModelCatalogFromLegacyProviders(map[string][]langdag.ModelPricing{
+		"anthropic": {
+			{ID: "claude-opus-4-6", InputPricePer1M: 5, OutputPricePer1M: 25, ContextWindow: 200000},
+			{ID: "claude-opus-4-7", InputPricePer1M: 5, OutputPricePer1M: 25, ContextWindow: 200000},
 		},
-	}
+		"grok": {
+			{ID: "grok-4-1-fast-reasoning", InputPricePer1M: 3, OutputPricePer1M: 15, ContextWindow: 131072},
+		},
+	})
 	models := modelsFromCatalog(catalog)
 	if len(models) != 3 {
 		t.Fatalf("expected 3 models, got %d", len(models))
 	}
-	// anthropic comes first in supportedProviders order
-	if models[0].ID != "claude-opus-4-6" || models[0].Provider != "anthropic" {
-		t.Errorf("first model: got %s/%s, want claude-opus-4-6/anthropic", models[0].ID, models[0].Provider)
+	if models[0].ID != "anthropic/claude-opus-4-6" || models[0].Provider != "anthropic" {
+		t.Errorf("first model: got %s/%s, want anthropic/claude-opus-4-6/anthropic", models[0].ID, models[0].Provider)
 	}
 	if models[0].PromptPrice != 5 || models[0].CompletionPrice != 25 {
 		t.Errorf("pricing: got %f/%f, want 5/25", models[0].PromptPrice, models[0].CompletionPrice)
@@ -230,16 +292,14 @@ func TestModelsFromCatalog(t *testing.T) {
 }
 
 func TestModelsFromCatalogServerTools(t *testing.T) {
-	catalog := &langdag.ModelCatalog{
-		Providers: map[string][]langdag.ModelPricing{
-			"anthropic": {
-				{ID: "claude-sonnet-4", InputPricePer1M: 3, OutputPricePer1M: 15, ContextWindow: 200000, ServerTools: []string{"web_search"}},
-			},
-			"grok": {
-				{ID: "grok-3", InputPricePer1M: 3, OutputPricePer1M: 15, ContextWindow: 131072},
-			},
+	catalog := testModelCatalogFromLegacyProviders(map[string][]langdag.ModelPricing{
+		"anthropic": {
+			{ID: "claude-sonnet-4", InputPricePer1M: 3, OutputPricePer1M: 15, ContextWindow: 200000, ServerTools: []string{"web_search"}},
 		},
-	}
+		"grok": {
+			{ID: "grok-3", InputPricePer1M: 3, OutputPricePer1M: 15, ContextWindow: 131072},
+		},
+	})
 	models := modelsFromCatalog(catalog)
 	// anthropic model should have server tools
 	if m := findModelByID(findModelByIDOptions{models: models, id: "claude-sonnet-4"}); m == nil {
@@ -255,6 +315,31 @@ func TestModelsFromCatalogServerTools(t *testing.T) {
 	}
 }
 
+func TestModelsFromCatalogUsesOfferingAPIProtocolOverride(t *testing.T) {
+	catalog := langdag.ReferenceCatalogV1()
+	for i := range catalog.Offerings {
+		if catalog.Offerings[i].ID == "openai-direct:gpt-4.1-2025-04-14" {
+			catalog.Offerings[i].APIProtocolID = "openai-chat-completions"
+		}
+	}
+
+	models := modelsFromCatalog(catalog)
+	model := findModelByID(findModelByIDOptions{models: models, id: "openai/gpt-4.1-2025-04-14"})
+	if model == nil {
+		t.Fatal("openai/gpt-4.1-2025-04-14 not found")
+	}
+	var got string
+	for _, deployment := range model.Deployments {
+		if deployment.DeploymentID == "openai-direct" {
+			got = deployment.APIProtocolID
+			break
+		}
+	}
+	if got != "openai-chat-completions" {
+		t.Fatalf("openai-direct APIProtocolID = %q, want offering override openai-chat-completions", got)
+	}
+}
+
 func TestModelsFromCatalogNil(t *testing.T) {
 	models := modelsFromCatalog(nil)
 	if models != nil {
@@ -263,20 +348,48 @@ func TestModelsFromCatalogNil(t *testing.T) {
 }
 
 func TestModelsFromCatalogSkipsUnknownProviders(t *testing.T) {
-	catalog := &langdag.ModelCatalog{
-		Providers: map[string][]langdag.ModelPricing{
-			"anthropic": {
-				{ID: "claude-opus-4-6", InputPricePer1M: 5, OutputPricePer1M: 25, ContextWindow: 200000},
-				{ID: "claude-opus-4-7", InputPricePer1M: 5, OutputPricePer1M: 25, ContextWindow: 200000},
-			},
-			"unknown-provider": {{ID: "mystery-model", InputPricePer1M: 1, OutputPricePer1M: 2, ContextWindow: 100000}},
+	catalog := testModelCatalogFromLegacyProviders(map[string][]langdag.ModelPricing{
+		"anthropic": {
+			{ID: "claude-opus-4-6", InputPricePer1M: 5, OutputPricePer1M: 25, ContextWindow: 200000},
+			{ID: "claude-opus-4-7", InputPricePer1M: 5, OutputPricePer1M: 25, ContextWindow: 200000},
 		},
-	}
+		"unknown-provider": {{ID: "mystery-model", InputPricePer1M: 1, OutputPricePer1M: 2, ContextWindow: 100000}},
+	})
 	models := modelsFromCatalog(catalog)
 	for _, m := range models {
 		if m.Provider == "unknown-provider" {
 			t.Errorf("should not include models from unknown providers")
 		}
+	}
+}
+
+func TestModelsFromCatalogPreservingDynamicKeepsFetchedProviders(t *testing.T) {
+	catalog := testModelCatalogFromLegacyProviders(map[string][]langdag.ModelPricing{
+		"anthropic": {
+			{ID: "claude-opus-4-6", InputPricePer1M: 5, OutputPricePer1M: 25, ContextWindow: 200000},
+		},
+	})
+	current := []ModelDef{
+		{Provider: ProviderOpenRouter, ID: "z-ai/glm-4.5-air:free"},
+		{Provider: ProviderOllama, ID: "llama3.1:8b"},
+		{Provider: ProviderOpenAI, ID: "old-catalog-row"},
+	}
+
+	models := modelsFromCatalogPreservingDynamic(modelsFromCatalogPreservingDynamicOptions{
+		catalog: catalog,
+		current: current,
+	})
+	if findModelByID(findModelByIDOptions{models: models, id: "claude-opus-4-6"}) == nil {
+		t.Fatal("catalog model missing")
+	}
+	if findModelByID(findModelByIDOptions{models: models, id: "z-ai/glm-4.5-air:free"}) == nil {
+		t.Fatal("OpenRouter dynamic model was not preserved")
+	}
+	if findModelByID(findModelByIDOptions{models: models, id: "llama3.1:8b"}) == nil {
+		t.Fatal("Ollama dynamic model was not preserved")
+	}
+	if findModelByID(findModelByIDOptions{models: models, id: "old-catalog-row"}) != nil {
+		t.Fatal("non-dynamic stale catalog row should not be preserved")
 	}
 }
 
@@ -627,7 +740,7 @@ func TestComputeCostStandardTokens(t *testing.T) {
 	got := computeCost(computeCostOptions{models: models, modelID: "gpt-4o", usage: usage})
 	// (1000 * 2.5 + 500 * 10.0) / 1_000_000 = (2500 + 5000) / 1_000_000 = 0.0075
 	want := 0.0075
-	if got != want {
+	if math.Abs(got-want) > 1e-12 {
 		t.Errorf("computeCost = %f, want %f", got, want)
 	}
 }
@@ -646,7 +759,7 @@ func TestComputeCostAnthropicCacheRead(t *testing.T) {
 	// output: 500 * 15.0 / 1M = 0.0075
 	// cache read: 10000 * 3.0 * 0.1 / 1M = 0.003
 	want := 0.003 + 0.0075 + 0.003
-	if got != want {
+	if math.Abs(got-want) > 1e-12 {
 		t.Errorf("computeCost = %f, want %f", got, want)
 	}
 }
@@ -663,7 +776,7 @@ func TestComputeCostNonAnthropicCacheReadIgnored(t *testing.T) {
 	got := computeCost(computeCostOptions{models: models, modelID: "gpt-4o", usage: usage})
 	// Cache read tokens should not add cost for non-Anthropic
 	want := (1000*2.5 + 500*10.0) / 1_000_000
-	if got != want {
+	if math.Abs(got-want) > 1e-12 {
 		t.Errorf("computeCost = %f, want %f", got, want)
 	}
 }
@@ -681,12 +794,55 @@ func TestComputeCostModelNotFound(t *testing.T) {
 
 func TestComputeCostZeroPricing(t *testing.T) {
 	models := []ModelDef{
-		{Provider: ProviderGrok, ID: "grok-free", PromptPrice: 0, CompletionPrice: 0},
+		{Provider: ProviderGrok, ID: "grok-free", PromptPrice: 0, CompletionPrice: 0, PricingStatus: types.CostStatusFree},
 	}
 	usage := types.Usage{InputTokens: 5000, OutputTokens: 1000}
 	got := computeCost(computeCostOptions{models: models, modelID: "grok-free", usage: usage})
 	if got != 0 {
 		t.Errorf("computeCost with zero pricing = %f, want 0", got)
+	}
+}
+
+func TestComputeCostResultStatuses(t *testing.T) {
+	usage := types.Usage{InputTokens: 1000, OutputTokens: 500, ReasoningTokens: 100}
+	result := computeCostResult(computeCostOptions{
+		models:  []ModelDef{{Provider: ProviderOpenAI, ID: "gpt", PromptPrice: 2, CompletionPrice: 8}},
+		modelID: "gpt",
+		usage:   usage,
+	})
+	if result.Status != types.CostStatusPartial {
+		t.Fatalf("status = %q, want partial for missing reasoning token rate", result.Status)
+	}
+	if len(result.MissingDimensions) != 1 || result.MissingDimensions[0] != "reasoning_tokens" {
+		t.Fatalf("missing dimensions = %+v", result.MissingDimensions)
+	}
+
+	ambiguous := computeCostResult(computeCostOptions{
+		models: []ModelDef{
+			{Provider: ProviderOpenAI, ID: "same-native", PromptPrice: 1, CompletionPrice: 2},
+			{Provider: ProviderGemini, ID: "same-native", PromptPrice: 3, CompletionPrice: 4},
+		},
+		modelID: "same-native",
+		usage:   usage,
+	})
+	if ambiguous.Status != types.CostStatusUnknown || len(ambiguous.MissingDimensions) != 1 || ambiguous.MissingDimensions[0] != "ambiguous_model_id:same-native" {
+		t.Fatalf("ambiguous result = %+v", ambiguous)
+	}
+
+	dimensionAmbiguous := computeCostResult(computeCostOptions{
+		models: []ModelDef{
+			{Provider: ProviderOpenAI, ID: "dimension-native", PromptPrice: 1, CompletionPrice: 2},
+			{
+				Provider:          ProviderGemini,
+				ID:                "dimension-native",
+				PricingRatesPer1M: map[string]float64{"input_tokens": 1, "output_tokens": 2, "reasoning_tokens": 3},
+			},
+		},
+		modelID: "dimension-native",
+		usage:   usage,
+	})
+	if dimensionAmbiguous.Status != types.CostStatusUnknown || len(dimensionAmbiguous.MissingDimensions) != 1 || dimensionAmbiguous.MissingDimensions[0] != "ambiguous_model_id:dimension-native" {
+		t.Fatalf("dimension ambiguous result = %+v", dimensionAmbiguous)
 	}
 }
 

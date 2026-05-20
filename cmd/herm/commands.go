@@ -65,6 +65,9 @@ func (a *App) handleCommand(input string) {
 		a.agentElapsed = 0
 		a.shownInitialModel = false
 		a.lastModelID = ""
+		a.lastModelDisplayLine = ""
+		a.lastOllamaOfflineNotice = ""
+		a.lastModelDiagnostics = ""
 		a.subAgents = nil
 		a.subAgentGroupInserted = false
 		// Finalize old trace and create a new one for the new conversation.
@@ -90,10 +93,10 @@ func (a *App) handleCommand(input string) {
 		// Open config at the model fields tab. If in a repo, go to Project tab;
 		// otherwise Global tab. Cursor starts on Active Model.
 		a.enterConfigMode()
-		if a.repoRoot != "" {
-			a.cfgTab = 2 // Project tab
+		if a.projectConfigRoot() != "" {
+			a.cfgTab = cfgTabProject
 		} else {
-			a.cfgTab = 1 // Global tab
+			a.cfgTab = cfgTabGlobal
 		}
 		a.cfgCursor = 0 // Active Model is the first field
 		a.renderInput()
@@ -237,6 +240,8 @@ func (a *App) handleCompactCommand(input string) {
 	}
 
 	// Use exploration model for cheap summarization.
+	a.normalizeProjectConfigWithCurrentModels()
+	a.showProjectModelDiagnostics()
 	model := a.config.resolveExplorationModel(a.models)
 	if model == "" {
 		model = a.config.resolveActiveModel(a.models)
@@ -253,6 +258,12 @@ func (a *App) handleCompactCommand(input string) {
 	}
 
 	a.agentNodeID = result.NewNodeID
+	if a.traceCollector != nil {
+		a.traceCollector.AddCompaction(AddCompactionOptions{nodeID: result.NewNodeID, summary: result.Summary})
+		if err := a.traceCollector.FlushToFile(a.traceFilePath); err != nil {
+			fmt.Fprintf(os.Stderr, "debug: failed to write trace: %v\n", err)
+		}
+	}
 	a.messages = append(a.messages, chatMessage{
 		kind:    msgSuccess,
 		content: fmt.Sprintf("Compacted: %d nodes → summary + %d recent nodes", result.OriginalNodes, result.KeptNodes),
@@ -285,7 +296,7 @@ func (a *App) handleUsageCommand() {
 	// Per-tool breakdown (sorted by bytes descending).
 	if len(a.sessionToolStats) > 0 {
 		type toolStat struct {
-			name       string
+			name         string
 			count, bytes int
 		}
 		var stats []toolStat
@@ -307,14 +318,12 @@ func (a *App) handleUsageCommand() {
 		if err == nil && len(ancestors) > 0 {
 			b.WriteString("\nConversation (" + fmt.Sprintf("%d nodes", len(ancestors)) + ")\n")
 			var convIn, convOut, convCacheRead int
-			var convCost float64
 			var toolResultBytes int
 			var toolResultCount int
 			for _, n := range ancestors {
 				convIn += n.TokensIn
 				convOut += n.TokensOut
 				convCacheRead += n.TokensCacheRead
-				convCost += a.nodeCost(n)
 				if n.NodeType == types.NodeTypeUser && isToolResultContent(n.Content) {
 					toolResultBytes += len(n.Content)
 					toolResultCount++
@@ -325,7 +334,9 @@ func (a *App) handleUsageCommand() {
 			if convCacheRead > 0 {
 				b.WriteString(fmt.Sprintf("  Cache read:    %s\n", formatTokenCount(convCacheRead)))
 			}
-			b.WriteString(fmt.Sprintf("  Cost:          %s\n", formatCost(convCost)))
+			if convCost, ok := a.aggregateDisplayedNodeCosts(ancestors); ok && shouldDisplayAggregateCost(convCost) {
+				b.WriteString(fmt.Sprintf("  Cost:          %s\n", formatCostResult(convCost)))
+			}
 			if toolResultCount > 0 {
 				b.WriteString(fmt.Sprintf("  Tool results:  %d (%s stored)\n", toolResultCount, formatBytes(toolResultBytes)))
 			}

@@ -12,20 +12,159 @@ import (
 	"langdag.com/langdag/types"
 )
 
-// nodeCost computes the USD cost for a single node using its stored token
-// counts and the app's model catalog. This mirrors computeCost but takes
-// token counts directly from a types.Node instead of types.Usage.
+// nodeCost computes the USD cost for a single node using structured metadata
+// when present, with an explicit legacy fallback for old nodes.
 func (a *App) nodeCost(n *types.Node) float64 {
+	return a.nodeCostResult(n).Total
+}
+
+func (a *App) nodeCostResult(n *types.Node) types.CostResult {
 	if n.Model == "" {
-		return 0
+		return types.CostResult{Status: types.CostStatusUnknown, Source: types.CostSourceHistorical, MissingDimensions: []string{"model"}}
+	}
+	if metadata, ok := nodeAssistantMetadata(n); ok {
+		var usage types.NormalizedUsage
+		if metadata.NormalizedUsage != nil {
+			usage = *metadata.NormalizedUsage
+		}
+		result := types.ComputeCost(metadata.ProviderCost, metadata.PricingSnapshot, usage)
+		if metadata.ProviderCost != nil || metadata.PricingSnapshot != nil || result.Status != types.CostStatusUnknown {
+			return result
+		}
 	}
 	usage := types.Usage{
 		InputTokens:              n.TokensIn,
 		OutputTokens:             n.TokensOut,
 		CacheReadInputTokens:     n.TokensCacheRead,
 		CacheCreationInputTokens: n.TokensCacheCreation,
+		ReasoningTokens:          n.TokensReasoning,
 	}
-	return computeCost(computeCostOptions{models: a.models, modelID: n.Model, usage: usage})
+	return computeCostResult(computeCostOptions{models: a.models, modelID: n.Model, usage: usage})
+}
+
+func nodeAssistantMetadata(n *types.Node) (*types.AssistantNodeMetadata, bool) {
+	if n == nil || len(n.Metadata) == 0 {
+		return nil, false
+	}
+	metadata, err := types.ParseAssistantNodeMetadata(n.Metadata)
+	if err != nil || metadata == nil {
+		return nil, false
+	}
+	return metadata, true
+}
+
+func metadataFromNode(n *types.Node) *types.AssistantNodeMetadata {
+	metadata, ok := nodeAssistantMetadata(n)
+	if !ok {
+		return nil
+	}
+	return metadata
+}
+
+func costResultFromAssistantMetadata(metadata *types.AssistantNodeMetadata) *types.CostResult {
+	if metadata == nil {
+		return nil
+	}
+	if metadata.ProviderCost == nil && metadata.PricingSnapshot == nil {
+		return nil
+	}
+	var usage types.NormalizedUsage
+	if metadata.NormalizedUsage != nil {
+		usage = *metadata.NormalizedUsage
+	}
+	result := types.ComputeCost(metadata.ProviderCost, metadata.PricingSnapshot, usage)
+	return &result
+}
+
+type structuredCostPreference struct {
+	metadataCost types.CostResult
+	fallbackCost types.CostResult
+}
+
+func preferStructuredCost(opts structuredCostPreference) types.CostResult {
+	if opts.metadataCost.Status == "" {
+		return opts.fallbackCost
+	}
+	return opts.metadataCost
+}
+
+type costDisplayOptions struct {
+	cost types.CostResult
+	node *types.Node
+}
+
+func shouldDisplayCost(opts costDisplayOptions) bool {
+	switch opts.cost.Status {
+	case types.CostStatusKnown, types.CostStatusPartial:
+		return opts.cost.Total > 0
+	case types.CostStatusFree:
+		return opts.node != nil && (opts.node.TokensIn > 0 || opts.node.TokensOut > 0 || opts.node.TokensCacheRead > 0 || opts.node.TokensCacheCreation > 0)
+	case types.CostStatusUnknown:
+		return opts.node != nil && (opts.node.TokensIn > 0 || opts.node.TokensOut > 0)
+	default:
+		return false
+	}
+}
+
+func aggregateCostResults(results []types.CostResult) types.CostResult {
+	if len(results) == 0 {
+		return types.CostResult{Status: types.CostStatusUnknown, Source: types.CostSourceHistorical}
+	}
+	aggregate := types.CostResult{Status: types.CostStatusFree, Currency: "USD", Source: types.CostSourceHistorical}
+	missing := map[string]bool{}
+	var sawKnown, sawPartial, sawUnknown bool
+	for _, result := range results {
+		aggregate.Total += result.Total
+		if aggregate.Currency == "" && result.Currency != "" {
+			aggregate.Currency = result.Currency
+		}
+		if result.Source == types.CostSourceProviderResponse {
+			aggregate.Source = types.CostSourceProviderResponse
+		} else if aggregate.Source == "" && result.Source != "" {
+			aggregate.Source = result.Source
+		}
+		for _, dimension := range result.MissingDimensions {
+			if dimension != "" {
+				missing[dimension] = true
+			}
+		}
+		switch result.Status {
+		case types.CostStatusUnknown:
+			sawUnknown = true
+		case types.CostStatusPartial:
+			sawPartial = true
+		case types.CostStatusKnown:
+			sawKnown = true
+		}
+	}
+	switch {
+	case sawUnknown && (sawKnown || sawPartial || aggregate.Total > 0):
+		aggregate.Status = types.CostStatusPartial
+	case sawUnknown:
+		aggregate.Status = types.CostStatusUnknown
+	case sawPartial:
+		aggregate.Status = types.CostStatusPartial
+	case sawKnown:
+		aggregate.Status = types.CostStatusKnown
+	default:
+		aggregate.Status = types.CostStatusFree
+	}
+	aggregate.MissingDimensions = sortedStringSet(missing)
+	return aggregate
+}
+
+func (a *App) aggregateDisplayedNodeCosts(nodes []*types.Node) (types.CostResult, bool) {
+	var results []types.CostResult
+	for _, n := range nodes {
+		cost := a.nodeCostResult(n)
+		if shouldDisplayCost(costDisplayOptions{cost: cost, node: n}) {
+			results = append(results, cost)
+		}
+	}
+	if len(results) == 0 {
+		return types.CostResult{}, false
+	}
+	return aggregateCostResults(results), true
 }
 
 // buildConversationTree retrieves the active conversation path (root to
@@ -339,13 +478,22 @@ func formatRelativeTime(t time.Time) string {
 // compact "✓ toolname" / "✗ toolname" lines, indented under the assistant.
 func (a *App) renderTree(nodes []*types.Node) string {
 	var b strings.Builder
-	var totalCost float64
 	// pendingTools holds tool names from the last assistant's tool_use blocks,
 	// keyed by tool_use ID so we can match them with results.
 	var pendingTools []toolUseInfo
+	lastInOutputGroup := map[string]int{}
+	for i, n := range nodes {
+		if n.OutputGroupID != "" {
+			lastInOutputGroup[n.OutputGroupID] = i
+		}
+	}
 
-	for _, n := range nodes {
-		totalCost += a.nodeCost(n)
+	var displayedNodes []*types.Node
+	for i, n := range nodes {
+		if n.OutputGroupID != "" && i < lastInOutputGroup[n.OutputGroupID] {
+			continue
+		}
+		displayedNodes = append(displayedNodes, n)
 
 		switch {
 		case n.NodeType == types.NodeTypeUser && isToolResultContent(n.Content):
@@ -394,8 +542,8 @@ func (a *App) renderTree(nodes []*types.Node) string {
 			if n.Model != "" {
 				meta = append(meta, shortModel(n.Model))
 			}
-			if cost := a.nodeCost(n); cost > 0 {
-				meta = append(meta, formatCost(cost))
+			if cost := a.nodeCostResult(n); shouldDisplayCost(costDisplayOptions{cost: cost, node: n}) {
+				meta = append(meta, formatCostResult(cost))
 			}
 			if n.TokensIn > 0 || n.TokensOut > 0 {
 				meta = append(meta, fmt.Sprintf("%dtok in, %dtok out", n.TokensIn+n.TokensCacheRead, n.TokensOut))
@@ -419,11 +567,22 @@ func (a *App) renderTree(nodes []*types.Node) string {
 		}
 	}
 
-	if totalCost > 0 {
-		b.WriteString(fmt.Sprintf("\nTotal: %s", formatCost(totalCost)))
+	if totalCost, ok := a.aggregateDisplayedNodeCosts(displayedNodes); ok && shouldDisplayAggregateCost(totalCost) {
+		b.WriteString(fmt.Sprintf("\nTotal: %s", formatCostResult(totalCost)))
 	}
 
 	return b.String()
+}
+
+func shouldDisplayAggregateCost(cost types.CostResult) bool {
+	switch cost.Status {
+	case types.CostStatusKnown, types.CostStatusPartial:
+		return cost.Total > 0 || len(cost.MissingDimensions) > 0
+	case types.CostStatusFree, types.CostStatusUnknown:
+		return true
+	default:
+		return false
+	}
 }
 
 type toolUseInfo struct {

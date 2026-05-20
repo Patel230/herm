@@ -5,7 +5,6 @@ package main
 import (
 	"crypto/rand"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -25,7 +24,7 @@ var Version = "dev"
 const (
 	promptPrefix       = "▸ "
 	promptPrefixCols   = 2
-	charsPerToken      = 4 // rough estimate for context bar
+	charsPerToken      = 4        // rough estimate for context bar
 	maxAttachmentBytes = 20 << 20 // 20 MB
 )
 
@@ -46,12 +45,13 @@ const (
 )
 
 type chatMessage struct {
-	kind      chatMsgKind
-	content   string
-	isError   bool          // for tool results
-	duration  time.Duration // tool execution duration
-	leadBlank bool          // blank line before this message
-	toolName  string        // original tool name (for tool call grouping/output rules)
+	kind         chatMsgKind
+	content      string
+	inlineBlocks []inlineBlock // optional atomic one-line UI blocks for terminal layout
+	isError      bool          // for tool results
+	duration     time.Duration // tool execution duration
+	leadBlank    bool          // blank line before this message
+	toolName     string        // original tool name (for tool call grouping/output rules)
 }
 
 // ─── App modes ───
@@ -66,8 +66,6 @@ const (
 	modeBranches
 )
 
-
-
 // ─── App struct ───
 
 type App struct {
@@ -80,7 +78,7 @@ type App struct {
 	prevRowCount  int
 	sepRow        int
 	inputStartRow int
-	scrollShift int // rows scrolled off top when content > terminal height
+	scrollShift   int // rows scrolled off top when content > terminal height
 
 	// Input buffer (from simple-chat)
 	input   []rune
@@ -93,68 +91,71 @@ type App struct {
 	quit     bool
 
 	// Stdin goroutine control
-	stdinDup *os.File   // dup'd stdin fd for the reader goroutine
-	stdinCh  chan byte   // channel carrying bytes from the reader goroutine
+	stdinDup *os.File  // dup'd stdin fd for the reader goroutine
+	stdinCh  chan byte // channel carrying bytes from the reader goroutine
 	readByte func() (byte, bool)
 
 	// Chat state
-	sessionID        string
-	messages         []chatMessage
-	globalConfig     Config        // loaded from ~/.herm/config.json
-	projectConfig    ProjectConfig // loaded from <repo>/.herm/config.json
-	config           Config        // merged effective config (globalConfig + projectConfig)
-	repoRoot         string        // git repo root, for project config path
-	pasteCount       int
-	pasteStore       map[int]string
-	attachmentCount  int
-	attachments      map[int]Attachment
-	mode             appMode
-	models           []ModelDef
-	sweScores        map[string]float64
-	sweLoaded        bool
-	container        *ContainerClient
-	worktreePath     string
-	containerReady      bool
-	containerErr        error
-	containerStatusText string
-	configReady         bool // true after workspace/project config has been merged
-	shownInitialModel   bool // true after the startup model line has been displayed
-	ollamaFetched       bool // true after the initial Ollama model fetch completes (or was skipped)
-	openRouterFetched   bool // true after initial OpenRouter fetch
-	status           statusInfo
-	projectSnap      *projectSnapshot
-	modelCatalog     *langdag.ModelCatalog
-	langdagClient    *langdag.Client
-	langdagProvider  string
-	agent            *Agent
-	agentNodeID      string
-	agentRunning     bool
-	awaitingApproval bool
-	approvalDesc     string
-	approvalSummary  string
-	autocompleteIdx  int
-	streamingText    string
-	pendingToolCall  string
-	needsTextSep     bool
-	sessionCostUSD         float64
-	lastInputTokens        int // input tokens from most recent API call (context usage)
-	sessionInputTokens     int // cumulative input tokens this session (all agents)
-	sessionOutputTokens    int // cumulative output tokens this session (all agents)
-	sessionCacheRead       int // cumulative cache read tokens this session
-	sessionLLMCalls        int // number of LLM API calls this session (all agents)
-	mainAgentInputTokens   int // input tokens from main agent only
-	mainAgentOutputTokens  int // output tokens from main agent only
-	mainAgentLLMCalls      int // LLM calls from main agent only
-	mainAgentToolCount     int // tool results from main agent only
-	sessionToolResults  int            // count of tool results this session
-	sessionToolBytes    int            // cumulative tool result bytes this session
-	sessionToolStats    map[string][2]int // tool name → [count, bytes]
-	lastModelID    string                       // last model used, for detecting changes
-	subAgents              map[string]*subAgentDisplay // per-agent display state keyed by AgentID
-	subAgentGroupInserted  bool                        // true after a msgSubAgentGroup marker has been added to messages
-	suppressedToolIDs map[string]bool              // tool IDs whose UI messages should be hidden
-	containerImage string                       // runtime container image name (not persisted)
-	updateAvailable string   // version tag if update is available
+	sessionID               string
+	messages                []chatMessage
+	globalConfig            Config        // loaded from ~/.herm/config.json
+	projectConfig           ProjectConfig // loaded from <repo>/.herm/config.json
+	config                  Config        // merged effective config (globalConfig + projectConfig)
+	repoRoot                string        // git repo root, for project config path
+	pasteCount              int
+	pasteStore              map[int]string
+	attachmentCount         int
+	attachments             map[int]Attachment
+	mode                    appMode
+	models                  []ModelDef
+	sweScores               map[string]float64
+	sweLoaded               bool
+	container               *ContainerClient
+	worktreePath            string
+	containerReady          bool
+	containerErr            error
+	containerStatusText     string
+	configReady             bool // true after workspace/project config has been merged
+	shownInitialModel       bool // true after the startup model line has been displayed
+	lastModelDiagnostics    string
+	ollamaFetched           bool // true after the initial Ollama model fetch completes (or was skipped)
+	openRouterFetched       bool // true after initial OpenRouter fetch
+	status                  statusInfo
+	projectSnap             *projectSnapshot
+	modelCatalog            *langdag.ModelCatalog
+	langdagClient           *langdag.Client
+	langdagProvider         string
+	agent                   *Agent
+	agentNodeID             string
+	agentRunning            bool
+	awaitingApproval        bool
+	approvalDesc            string
+	approvalSummary         string
+	autocompleteIdx         int
+	streamingText           string
+	pendingToolCall         string
+	needsTextSep            bool
+	sessionCostUSD          float64
+	lastInputTokens         int                         // input tokens from most recent API call (context usage)
+	sessionInputTokens      int                         // cumulative input tokens this session (all agents)
+	sessionOutputTokens     int                         // cumulative output tokens this session (all agents)
+	sessionCacheRead        int                         // cumulative cache read tokens this session
+	sessionLLMCalls         int                         // number of LLM API calls this session (all agents)
+	mainAgentInputTokens    int                         // input tokens from main agent only
+	mainAgentOutputTokens   int                         // output tokens from main agent only
+	mainAgentLLMCalls       int                         // LLM calls from main agent only
+	mainAgentToolCount      int                         // tool results from main agent only
+	sessionToolResults      int                         // count of tool results this session
+	sessionToolBytes        int                         // cumulative tool result bytes this session
+	sessionToolStats        map[string][2]int           // tool name → [count, bytes]
+	lastModelID             string                      // last model used, for detecting changes
+	lastModelDisplayLine    string                      // last full model display line, including exploration model
+	lastOllamaOfflineNotice string                      // last Ollama offline warning line, for dedupe
+	subAgents               map[string]*subAgentDisplay // per-agent display state keyed by AgentID
+	subAgentGroupInserted   bool                        // true after a msgSubAgentGroup marker has been added to messages
+	suppressedToolIDs       map[string]bool             // tool IDs whose UI messages should be hidden
+	containerImage          string                      // runtime container image name (not persisted)
+	updateAvailable         string                      // version tag if update is available
 
 	// Tool timer (live elapsed display)
 	toolStartTime time.Time
@@ -168,6 +169,11 @@ type App struct {
 	agentDisplayInTok  float64       // lerped display value for input tokens
 	agentDisplayOutTok float64       // lerped display value for output tokens
 
+	// Config editor animation timer
+	configAnimationStart time.Time
+	configTicker         *time.Ticker
+	configTickerStop     chan struct{}
+
 	// Approval timer pause
 	approvalPauseStart  time.Time     // when approval wait started
 	approvalPausedTotal time.Duration // total time spent waiting for approvals
@@ -176,7 +182,7 @@ type App struct {
 	// Periodic commit info refresh
 	commitInfoTicker *time.Ticker
 
-	// Menu state (for inline menus below input - Phase 3)
+	// Menu state(for inline menus below input)
 	menuLines        []string
 	menuHeader       string // optional header row above scrollable items
 	menuCursor       int
@@ -189,15 +195,16 @@ type App struct {
 	menuActiveID     string     // active model ID for re-sorting
 
 	// Config editor state
-	cfgActive     bool
-	cfgTab        int
-	cfgCursor     int
-	cfgTabCursor  [3]int // remembered cursor per config tab (API Keys/Global/Project)
-	cfgEditing    bool
-	cfgEditBuf    []rune
-	cfgEditCursor int
-	cfgDraft        Config
-	cfgProjectDraft ProjectConfig
+	cfgActive        bool
+	cfgTab           int
+	cfgCursor        int
+	cfgTabCursor     [cfgTabCount]int // remembered cursor per config tab
+	cfgEditing       bool
+	cfgEditBuf       []rune
+	cfgEditCursor    int
+	cfgDraft         Config
+	cfgProjectDraft  ProjectConfig
+	configJSONEditor func(string) error // injectable for tests; nil uses $VISUAL/$EDITOR
 
 	// Text prompt overlay (e.g. "Enter worktree name:")
 	promptLabel    string
@@ -216,9 +223,12 @@ type App struct {
 	cancelSent bool
 
 	// CLI flags
-	cliDebug             bool   // --debug flag
-	cliPrompt            string // --prompt flag (non-interactive mode)
-	headless             bool   // true when running in --prompt mode (no TUI)
+	cliDebug           bool   // --debug flag
+	cliPrompt          string // --prompt/-p flag (non-interactive mode)
+	cliContinueID      string // --continue/--from node ID for headless continuation
+	cliConfigOverrides string // --config-overrides JSON object
+	cliCacheDir        string // --cache directory for request cache
+	headless           bool   // true when running in --prompt mode (no TUI)
 
 	// JSON trace debug file
 	traceCollector *TraceCollector
@@ -296,10 +306,9 @@ func (a *App) refreshModelMenu() {
 	// Persist sort preferences (global-only)
 	a.globalConfig.ModelSortCol = sortColNames[a.menuSortCol]
 	a.globalConfig.ModelSortDirs = sortAscToMap(a.menuSortAsc)
-	a.config = mergeConfigs(mergeConfigsOptions{global: a.globalConfig, project: a.projectConfig})
+	a.rebuildEffectiveConfig()
 	_ = saveConfig(a.globalConfig)
 }
-
 
 // ─── Main event loop ───
 
@@ -366,6 +375,7 @@ func (a *App) Run() error {
 	}()
 
 	// Start async initialization
+	a.rebuildEffectiveConfig()
 	a.startInit()
 
 	// Initial render
@@ -446,104 +456,6 @@ func (a *App) Run() error {
 done:
 
 	a.cleanup()
-	return nil
-}
-
-
-// RunHeadless runs herm in non-interactive mode: submits the --prompt text,
-// waits for the agent to finish, and exits. No TUI, no stdin, no resize handling.
-func (a *App) RunHeadless() error {
-	a.startInit()
-
-	// Wait for essential initialization: config, API client, models, and container.
-	timeout := time.After(60 * time.Second)
-	for {
-		select {
-		case result := <-a.resultCh:
-			a.handleResult(result)
-			if a.configReady && a.langdagClient != nil && a.models != nil &&
-				(a.containerReady || a.containerErr != nil) {
-				goto ready
-			}
-		case <-timeout:
-			if a.langdagClient == nil {
-				fmt.Fprintln(os.Stderr, "error: timed out waiting for initialization")
-				return fmt.Errorf("initialization timeout")
-			}
-			goto ready
-		}
-	}
-ready:
-
-	if a.langdagClient == nil {
-		fmt.Fprintln(os.Stderr, "error: no API key configured — use herm /config to add one")
-		return fmt.Errorf("no API key configured")
-	}
-
-	// Print debug file path to stderr so the calling process can locate it.
-	if a.traceFilePath != "" {
-		fmt.Fprintf(os.Stderr, "debug: %s\n", a.traceFilePath)
-	}
-
-	// Submit the prompt.
-	a.messages = append(a.messages, chatMessage{kind: msgUser, content: a.cliPrompt, leadBlank: true})
-	a.startAgent(a.cliPrompt)
-
-	if !a.agentRunning {
-		// startAgent failed (e.g. no model found).
-		for _, msg := range a.messages {
-			if msg.kind == msgError {
-				fmt.Fprintln(os.Stderr, "error: "+msg.content)
-			}
-		}
-		a.cleanup()
-		return fmt.Errorf("agent failed to start")
-	}
-
-	// Process agent events and async results until the agent is done
-	// and all sub-agents have finished.
-	for a.agentRunning || a.hasActiveSubAgents() {
-		select {
-		case event, ok := <-a.agent.Events():
-			if !ok {
-				a.agentRunning = false
-				break
-			}
-			a.handleAgentEvent(event)
-		case result := <-a.resultCh:
-			a.handleResult(result)
-			a.drainAgentEvents()
-		}
-	}
-
-	// Collect assistant text and print to stdout.
-	var out strings.Builder
-	for _, msg := range a.messages {
-		if msg.kind == msgAssistant {
-			if out.Len() > 0 {
-				out.WriteString("\n")
-			}
-			out.WriteString(msg.content)
-		}
-	}
-	if out.Len() > 0 {
-		fmt.Println(out.String())
-	}
-
-	// Print any agent errors to stderr.
-	var hasError bool
-	for _, msg := range a.messages {
-		if msg.kind == msgError {
-			fmt.Fprintln(os.Stderr, "error: "+msg.content)
-			hasError = true
-		}
-	}
-
-	a.cleanup()
-
-	if hasError {
-		return fmt.Errorf("agent encountered errors")
-	}
 	return nil
 }
 
@@ -711,6 +623,11 @@ func (a *App) handleResult(result any) {
 			a.render()
 		}
 		return
+	case configTickMsg:
+		if a.cfgActive && a.hasUnsavedConfigDrafts() {
+			a.renderInput()
+		}
+		return
 	case ctrlCExpiredMsg:
 		_ = msg
 		if a.ctrlCHint {
@@ -739,64 +656,75 @@ func (a *App) handleResult(result any) {
 
 	case catalogMsg:
 		if msg.catalog != nil {
+			if msg.source != "" {
+				log.Printf("model catalog loaded from %s", msg.source)
+			}
+			for _, diagnostic := range msg.diagnostics {
+				log.Printf("model catalog diagnostic: %s: %s", diagnostic.Code, diagnostic.Message)
+			}
 			a.modelCatalog = msg.catalog
-			a.models = modelsFromCatalog(msg.catalog)
+			a.models = modelsFromCatalogPreservingDynamic(modelsFromCatalogPreservingDynamicOptions{
+				catalog: msg.catalog,
+				current: a.models,
+			})
 			if a.sweLoaded && a.sweScores != nil {
 				matchSWEScores(matchSWEScoresOptions{models: a.models, scores: a.sweScores})
 			}
+			alreadyShown := a.shownInitialModel
 			a.maybeShowInitialModels()
-			// Fetch Ollama + OpenRouter models async
-			if a.config.OllamaBaseURL != "" && !a.ollamaFetched {
-				go func() { a.resultCh <- fetchOllamaModelsCmd(a.config.OllamaBaseURL) }()
+			if alreadyShown {
+				a.refreshResolvedModelDisplay()
 			}
-			if a.config.OpenRouterAPIKey != "" && !a.openRouterFetched {
-				go func() { a.resultCh <- fetchOpenRouterModelsCmd(a.config.OpenRouterAPIKey) }()
+			// Fetch Ollama + OpenRouter models async
+			if a.config.ollamaBaseURL() != "" && !a.ollamaFetched {
+				go func() { a.resultCh <- fetchOllamaModelsCmd(a.config.ollamaBaseURL()) }()
+			}
+			if a.config.openRouterAPIKey() != "" && !a.openRouterFetched {
+				go func() { a.resultCh <- fetchOpenRouterModelsCmd(a.config.openRouterAPIKey()) }()
 			}
 		}
 	case ollamaModelsMsg:
 		a.ollamaFetched = true
 		if len(msg.models) > 0 {
 			base := modelsFromCatalog(a.modelCatalog)
+			var dynamic []ModelDef
 			for _, m := range a.models {
 				if m.Provider == ProviderOpenRouter {
-					base = append(base, m)
+					dynamic = append(dynamic, m)
 				}
 			}
-			a.models = append(base, msg.models...)
+			dynamic = append(dynamic, msg.models...)
+			a.models = mergeDynamicModels(mergeDynamicModelsOptions{base: base, dynamic: dynamic})
 			if a.sweLoaded && a.sweScores != nil {
 				matchSWEScores(matchSWEScoresOptions{models: a.models, scores: a.sweScores})
 			}
 		}
 		alreadyShown := a.shownInitialModel
 		a.maybeShowInitialModels()
-		// Show offline warning if model was already displayed
 		if alreadyShown {
-			activeID := a.config.resolveActiveModel(a.models)
-			if a.config.OllamaBaseURL != "" && a.isOllamaOffline(activeID) {
-				msg := fmt.Sprintf("\033[33m⚠\033[34;3m Ollama unreachable at \033[36m%s\033[34;3m — run '\033[32;3mollama serve\033[34;3m' to continue", a.config.OllamaBaseURL)
-				providers := a.config.configuredProviders()
-				delete(providers, ProviderOllama)
-				if len(providers) > 0 {
-					msg = fmt.Sprintf("\033[33m⚠\033[34;3m Ollama unreachable at \033[36m%s\033[34;3m — run '\033[32;3mollama serve\033[34;3m' or switch to another provider (/config)", a.config.OllamaBaseURL)
-				}
-				a.messages = append(a.messages, chatMessage{kind: msgInfo, content: msg})
-			}
+			a.refreshResolvedModelDisplay()
 		}
 	case openRouterModelsMsg:
 		a.openRouterFetched = true
 		if len(msg.models) > 0 {
 			base := modelsFromCatalog(a.modelCatalog)
+			var dynamic []ModelDef
 			for _, m := range a.models {
 				if m.Provider == ProviderOllama {
-					base = append(base, m)
+					dynamic = append(dynamic, m)
 				}
 			}
-			a.models = append(base, msg.models...)
+			dynamic = append(dynamic, msg.models...)
+			a.models = mergeDynamicModels(mergeDynamicModelsOptions{base: base, dynamic: dynamic})
 			if a.sweLoaded && a.sweScores != nil {
 				matchSWEScores(matchSWEScoresOptions{models: a.models, scores: a.sweScores})
 			}
 		}
+		alreadyShown := a.shownInitialModel
 		a.maybeShowInitialModels()
+		if alreadyShown {
+			a.refreshResolvedModelDisplay()
+		}
 	case openPickerMsg:
 		if a.cfgActive {
 			a.doOpenConfigModelPicker(doOpenConfigModelPickerOptions{models: a.models, getCurrentID: msg.getCurrentID, onSelect: msg.onSelect})
@@ -827,11 +755,12 @@ func (a *App) handleResult(result any) {
 	case workspaceMsg:
 		a.worktreePath = msg.worktreePath
 		a.repoRoot = msg.repoRoot
-		if a.repoRoot == "" {
-			a.repoRoot = msg.worktreePath
+		if a.models != nil {
+			a.projectConfig = loadProjectConfigForModels(loadProjectConfigForModelsOptions{repoRoot: a.projectConfigRoot(), models: a.models})
+		} else {
+			a.projectConfig = loadRawProjectConfig(a.projectConfigRoot())
 		}
-		a.projectConfig = loadProjectConfig(a.repoRoot)
-		a.config = mergeConfigs(mergeConfigsOptions{global: a.globalConfig, project: a.projectConfig})
+		a.rebuildEffectiveConfig()
 		a.configReady = true
 		a.initAppDebugLog()
 		a.history = newHistory(newHistoryOptions{projectDir: msg.worktreePath, maxSize: a.config.effectiveMaxHistory()})
@@ -940,6 +869,9 @@ func (a *App) cleanup() {
 		a.toolTimer.Stop()
 		a.toolTimer = nil
 	}
+	if a.configTicker != nil {
+		a.stopConfigTicker()
+	}
 	if a.traceCollector != nil {
 		a.traceCollector.Finalize()
 		if err := a.traceCollector.FlushToFile(a.traceFilePath); err != nil {
@@ -959,42 +891,5 @@ func (a *App) cleanup() {
 	}
 	if a.worktreePath != "" {
 		_ = unlockWorktree(a.worktreePath)
-	}
-}
-
-func main() {
-	log.SetOutput(io.Discard)
-
-	for _, arg := range os.Args[1:] {
-		if arg == "--version" || arg == "-v" {
-			fmt.Println("herm " + Version + " (container: " + hermImageTag + ")")
-			os.Exit(0)
-		}
-	}
-
-	app := newApp()
-
-	for i, arg := range os.Args[1:] {
-		switch arg {
-		case "--debug":
-			app.cliDebug = true
-		case "--prompt":
-			if i+1 < len(os.Args[1:]) {
-				app.cliPrompt = os.Args[i+2] // i is 0-based in the slice, +2 to get next arg in os.Args
-			}
-		}
-	}
-
-	if app.cliPrompt != "" {
-		app.headless = true
-		if err := app.RunHeadless(); err != nil {
-			os.Exit(1)
-		}
-		return
-	}
-
-	if err := app.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
 	}
 }

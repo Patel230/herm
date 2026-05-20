@@ -39,7 +39,7 @@ func TestLoadConfigCreatesDefault(t *testing.T) {
 func TestLoadConfigRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 
-	original := Config{PasteCollapseMinChars: 10}
+	original := Config{ConfigVersion: hermConfigVersionDeploymentAware, PasteCollapseMinChars: 10}
 	if err := saveConfigTo(saveConfigToOptions{dir: dir, cfg: original}); err != nil {
 		t.Fatalf("saveConfigTo: %v", err)
 	}
@@ -226,6 +226,72 @@ func TestSaveConfigCreatesDir(t *testing.T) {
 	}
 }
 
+func TestSaveConfigWritesDeploymentAwareShape(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{
+		OpenRouterAPIKey: "sk-or-legacy",
+		Deployments: map[string]DeploymentConfig{
+			"openrouter":   {APIKey: "sk-or-v2", BaseURL: "https://openrouter.example"},
+			"openai-azure": {APIKey: "az", Endpoint: "https://example.openai.azure.com", APIVersion: "2024-08-01-preview", ModelMappings: map[string]string{"openai/gpt-4.1-2025-04-14": "prod"}},
+		},
+		Routing: &RoutingPolicy{
+			Default: []RoutingStage{{Deployments: []DeploymentChoice{{DeploymentID: "openrouter", Weight: 100}}, Retries: 1}},
+		},
+	}
+	if err := saveConfigTo(saveConfigToOptions{dir: dir, cfg: cfg}); err != nil {
+		t.Fatalf("saveConfigTo: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, configDir, configFile))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if raw["config_version"].(float64) != hermConfigVersionDeploymentAware {
+		t.Fatalf("config_version = %v", raw["config_version"])
+	}
+	if _, ok := raw["openrouter_api_key"]; ok {
+		t.Fatalf("saved config should not contain legacy openrouter_api_key: %s", data)
+	}
+	deployments := raw["deployments"].(map[string]any)
+	openrouter := deployments["openrouter"].(map[string]any)
+	if got := openrouter["api_key"]; got != "sk-or-v2" {
+		t.Fatalf("v2 deployment should win over legacy flat key, got %v", got)
+	}
+
+	loaded, err := loadConfigFrom(dir)
+	if err != nil {
+		t.Fatalf("loadConfigFrom: %v", err)
+	}
+	if loaded.OpenRouterAPIKey != "sk-or-v2" || loaded.Deployments["openrouter"].BaseURL != "https://openrouter.example" {
+		t.Fatalf("loaded config did not preserve v2 deployment and backfill runtime field: %+v", loaded)
+	}
+}
+
+func TestSaveConfigPreservesUnknownCanonicalModels(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{
+		ActiveModel:      "openai/newly-refreshed-model",
+		ExplorationModel: "z-ai/new-openrouter-only:free",
+		Deployments: map[string]DeploymentConfig{
+			"openrouter": {APIKey: "sk-or"},
+		},
+	}
+	if err := saveConfigTo(saveConfigToOptions{dir: dir, cfg: cfg}); err != nil {
+		t.Fatalf("saveConfigTo: %v", err)
+	}
+	loaded, err := loadConfigFrom(dir)
+	if err != nil {
+		t.Fatalf("loadConfigFrom: %v", err)
+	}
+	if loaded.ActiveModel != cfg.ActiveModel || loaded.ExplorationModel != cfg.ExplorationModel {
+		t.Fatalf("canonical model IDs should survive save/load, got active=%q exploration=%q", loaded.ActiveModel, loaded.ExplorationModel)
+	}
+}
+
 // ─── Project config tests ───
 
 func TestLoadProjectConfigMissingFile(t *testing.T) {
@@ -261,7 +327,7 @@ func TestLoadProjectConfigMalformedJSON(t *testing.T) {
 func TestProjectConfigRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	original := ProjectConfig{
-		ActiveModel:      "gpt-4",
+		ActiveModel:      "openai/gpt-4",
 		Personality:      "concise",
 		SubAgentMaxTurns: 10,
 	}
@@ -360,7 +426,7 @@ func TestMergeConfigsAllOverridden(t *testing.T) {
 // ─── Config UI tests ───
 
 func TestCfgTabNamesStructure(t *testing.T) {
-	want := []string{"API Keys", "Global", "Project"}
+	want := []string{"Deployments", "Global", "Project", "Routing"}
 	if !reflect.DeepEqual(cfgTabNames, want) {
 		t.Errorf("cfgTabNames = %v, want %v", cfgTabNames, want)
 	}
@@ -427,6 +493,252 @@ func TestProjectTabFieldGetSet(t *testing.T) {
 	}
 }
 
+func TestDeploymentTabFieldsWriteDeploymentConfig(t *testing.T) {
+	var cfg Config
+	deploymentFieldByLabel(t, cfgAPIKeyFields, "OpenAI API Key").set(&cfg, "sk-openai")
+	deploymentFieldByLabel(t, cfgAPIKeyFields, "OpenAI Base URL").set(&cfg, "api.openai.example")
+	deploymentFieldByLabel(t, cfgAPIKeyFields, "Azure Model Mappings").set(&cfg, "openai/gpt-4.1-2025-04-14=my-gpt-4-1-prod")
+
+	if got := cfg.Deployments["openai-direct"].APIKey; got != "sk-openai" {
+		t.Fatalf("openai-direct api_key = %q", got)
+	}
+	if got := cfg.Deployments["openai-direct"].BaseURL; got != "http://api.openai.example" {
+		t.Fatalf("openai-direct base_url = %q", got)
+	}
+	if got := cfg.Deployments["openai-azure"].ModelMappings["openai/gpt-4.1-2025-04-14"]; got != "my-gpt-4-1-prod" {
+		t.Fatalf("azure mapping = %q", got)
+	}
+	if cfg.OpenAIAPIKey != "sk-openai" {
+		t.Fatalf("deployment tab should update runtime legacy mirror, got %q", cfg.OpenAIAPIKey)
+	}
+}
+
+func TestDeploymentTabLabelsRemoveDirectFromAnthropicOpenAI(t *testing.T) {
+	labels := deploymentFieldLabels(cfgAPIKeyFields)
+	for _, label := range []string{"Anthropic API Key", "OpenAI API Key", "Grok API Key", "Gemini API Key", "OpenAI Base URL"} {
+		if !stringSliceContains(labels, label) {
+			t.Fatalf("deployment fields missing %q in labels: %v", label, labels)
+		}
+	}
+	for _, label := range labels {
+		if strings.Contains(label, "Direct") {
+			t.Fatalf("deployment field label should not contain Direct: %q in %v", label, labels)
+		}
+	}
+}
+
+func TestDeploymentTabOptionalFieldsGateByCredentials(t *testing.T) {
+	clearDeploymentCloudContextEnv(t)
+
+	labels := deploymentFieldLabels(deploymentTabFields(Config{}))
+	for _, label := range []string{
+		"OpenAI Base URL",
+		"Azure OpenAI Endpoint",
+		"Azure OpenAI API Version",
+		"Azure Model Mappings",
+		"Grok Base URL",
+		"OpenRouter Base URL",
+		"Anthropic Bedrock Region",
+		"Anthropic Vertex Project",
+		"Anthropic Vertex Region",
+		"Gemini Vertex Project",
+		"Gemini Vertex Region",
+	} {
+		if stringSliceContains(labels, label) {
+			t.Fatalf("deploymentTabFields without cloud context should hide %q in labels: %v", label, labels)
+		}
+	}
+
+	openAILabels := deploymentFieldLabels(deploymentTabFields(Config{Deployments: map[string]DeploymentConfig{
+		"openai-direct": {APIKey: "sk-openai"},
+	}}))
+	if !stringSliceContains(openAILabels, "OpenAI Base URL") {
+		t.Fatalf("OpenAI API key should show OpenAI Base URL: %v", openAILabels)
+	}
+	if got, want := labelIndex(openAILabels, "OpenAI Base URL"), labelIndex(openAILabels, "OpenAI API Key")+1; got != want {
+		t.Fatalf("OpenAI Base URL should sit below OpenAI API Key, labels: %v", openAILabels)
+	}
+
+	grokLabels := deploymentFieldLabels(deploymentTabFields(Config{Deployments: map[string]DeploymentConfig{
+		"grok-direct": {APIKey: "xai-key"},
+	}}))
+	if got, want := labelIndex(grokLabels, "Grok Base URL"), labelIndex(grokLabels, "Grok API Key")+1; got != want {
+		t.Fatalf("Grok Base URL should sit below Grok API Key, labels: %v", grokLabels)
+	}
+
+	azureLabels := deploymentFieldLabels(deploymentTabFields(Config{Deployments: map[string]DeploymentConfig{
+		"openai-azure": {APIKey: "sk-azure"},
+	}}))
+	for _, label := range []string{"Azure OpenAI Endpoint", "Azure OpenAI API Version", "Azure Model Mappings"} {
+		if !stringSliceContains(azureLabels, label) {
+			t.Fatalf("Azure API key should show %q in labels: %v", label, azureLabels)
+		}
+	}
+
+	cloudOnlyConfigLabels := deploymentFieldLabels(deploymentTabFields(Config{Deployments: map[string]DeploymentConfig{
+		"anthropic-bedrock": {Region: "us-east-1"},
+		"gemini-vertex":     {ProjectID: "project", Region: "us-central1"},
+	}}))
+	for _, label := range []string{"Anthropic Bedrock Region", "Gemini Vertex Project"} {
+		if stringSliceContains(cloudOnlyConfigLabels, label) {
+			t.Fatalf("cloud settings without ambient credentials should hide %q in labels: %v", label, cloudOnlyConfigLabels)
+		}
+	}
+}
+
+func TestDeploymentTabCloudFieldsGateByEnvironment(t *testing.T) {
+	clearDeploymentCloudContextEnv(t)
+	t.Setenv("AWS_PROFILE", "dev")
+	bedrockLabels := deploymentFieldLabels(deploymentTabFields(Config{}))
+	if !stringSliceContains(bedrockLabels, "Anthropic Bedrock Region") {
+		t.Fatalf("AWS credential environment should show Bedrock region: %v", bedrockLabels)
+	}
+	if stringSliceContains(bedrockLabels, "Anthropic Vertex Project") {
+		t.Fatalf("AWS credential environment should not show Vertex fields: %v", bedrockLabels)
+	}
+
+	clearDeploymentCloudContextEnv(t)
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/google-creds.json")
+	vertexLabels := deploymentFieldLabels(deploymentTabFields(Config{}))
+	if !stringSliceContains(vertexLabels, "Gemini Vertex Region") {
+		t.Fatalf("Google credential environment should show Vertex fields: %v", vertexLabels)
+	}
+	if stringSliceContains(vertexLabels, "Anthropic Bedrock Region") {
+		t.Fatalf("Google credential environment should not show Bedrock fields: %v", vertexLabels)
+	}
+}
+
+func TestDeploymentTabClearsBackfilledLegacyCredential(t *testing.T) {
+	cfg := normalizeLoadedConfig(Config{Deployments: map[string]DeploymentConfig{
+		"openai-direct": {APIKey: "sk-openai"},
+	}})
+	if cfg.OpenAIAPIKey == "" {
+		t.Fatalf("expected runtime legacy mirror to be backfilled")
+	}
+
+	deploymentFieldByLabel(t, cfgAPIKeyFields, "OpenAI API Key").set(&cfg, "")
+	if cfg.OpenAIAPIKey != "" {
+		t.Fatalf("clearing deployment field should clear legacy runtime mirror")
+	}
+	if cfg.deploymentConfigs()["openai-direct"].APIKey != "" {
+		t.Fatalf("cleared deployment should not be rehydrated from legacy field")
+	}
+	if _, ok := deploymentConfigsForStorage(cfg)["openai-direct"]; ok {
+		t.Fatalf("cleared deployment should not be written to storage")
+	}
+}
+
+func deploymentFieldByLabel(t *testing.T, fields []cfgField, label string) cfgField {
+	t.Helper()
+	for _, field := range fields {
+		if field.label == label {
+			return field
+		}
+	}
+	t.Fatalf("deployment field %q not found in labels: %v", label, deploymentFieldLabels(fields))
+	return cfgField{}
+}
+
+func deploymentFieldLabels(fields []cfgField) []string {
+	labels := make([]string, 0, len(fields))
+	for _, field := range fields {
+		labels = append(labels, field.label)
+	}
+	return labels
+}
+
+func stringSliceContains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func labelIndex(values []string, target string) int {
+	for i, value := range values {
+		if value == target {
+			return i
+		}
+	}
+	return -1
+}
+
+func clearDeploymentCloudContextEnv(t *testing.T) {
+	t.Helper()
+	names := []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "VERTEX_PROJECT_ID", "VERTEX_REGION"}
+	names = append(names, deploymentBedrockCredentialEnv...)
+	names = append(names, deploymentVertexCredentialEnv...)
+	for _, name := range names {
+		t.Setenv(name, "")
+	}
+}
+
+func TestRoutingTabHasSelectableActions(t *testing.T) {
+	models := []ModelDef{{
+		Provider:      ProviderOpenAI,
+		OwnerProvider: ProviderOpenAI,
+		ID:            "openai/gpt-4.1-2025-04-14",
+		Deployments: []ModelDeploymentDef{
+			{DeploymentID: "openai-direct"},
+			{DeploymentID: "openrouter"},
+		},
+	}}
+	one := &App{
+		cfgTab: cfgTabRouting,
+		cfgDraft: Config{Deployments: map[string]DeploymentConfig{
+			"openai-direct": {APIKey: "sk"},
+		}},
+		models: models,
+	}
+	fields := one.routingTabFields()
+	if len(fields) != 1 || fields[0].label != "Add rule" || fields[0].action == nil {
+		t.Fatalf("routing tab should expose only Add rule for empty routing: %+v", fields)
+	}
+	rows := one.buildConfigRows()
+	if !rowsContain(rows, "Set custom routing, per provider or model (advanced).") {
+		t.Fatalf("routing intro missing: %v", rows)
+	}
+	if rowsContain(rows, "Route syntax:") {
+		t.Fatalf("routing mini-language help should not be shown: %v", rows)
+	}
+
+	two := &App{
+		cfgTab: cfgTabRouting,
+		cfgDraft: Config{
+			ActiveModel: "openai/gpt-4.1-2025-04-14",
+			Deployments: map[string]DeploymentConfig{
+				"openai-direct": {APIKey: "sk"},
+				"openrouter":    {APIKey: "sk-or"},
+			},
+		},
+		models: models,
+	}
+	fields = two.routingTabFields()
+	if len(fields) != 1 || fields[0].label != "Add rule" {
+		t.Fatalf("two deployments should expose Add rule action, got fields: %+v", fields)
+	}
+
+	two.cfgDraft.Routing = &RoutingPolicy{Models: map[string][]RoutingStage{
+		"anthropic/claude-sonnet-4-20250514": {{Deployments: []DeploymentChoice{{DeploymentID: "openrouter", Weight: 100}}}},
+	}}
+	if !two.routingControlsVisible(two.cfgDraft) {
+		t.Fatalf("existing routing should still be recognized as routing-aware")
+	}
+	fields = two.routingTabFields()
+	if len(fields) != 2 || fields[1].label != "Model anthropic/claude-sonnet-4-20250514" || fields[1].action == nil {
+		t.Fatalf("existing model route should be selectable, got fields: %+v", fields)
+	}
+	rows = two.buildConfigRows()
+	if !rowsContain(rows, "Model anthropic/claude-sonnet-4-20250514") {
+		t.Fatalf("existing model route should be summarized: %v", rows)
+	}
+	if rowsContain(rows, "Delete rule") {
+		t.Fatalf("delete should be contextual to selected rules, not shown on main routing page: %v", rows)
+	}
+}
+
 func TestProjectTabSubAgentClearsOnEmpty(t *testing.T) {
 	a := &App{cfgProjectDraft: ProjectConfig{SubAgentMaxTurns: 10}}
 	fields := a.projectTabFields()
@@ -438,10 +750,11 @@ func TestProjectTabSubAgentClearsOnEmpty(t *testing.T) {
 
 func TestBuildConfigRowsNoProject(t *testing.T) {
 	a := &App{
-		cfgTab:   2, // Project tab
-		repoRoot: "", // no repo
+		cfgTab:   cfgTabProject,
+		repoRoot: "",
 	}
 	rows := a.buildConfigRows()
+	joined := strings.Join(rows, "\n")
 	found := false
 	for _, row := range rows {
 		if strings.Contains(row, "No project detected") {
@@ -452,11 +765,17 @@ func TestBuildConfigRowsNoProject(t *testing.T) {
 	if !found {
 		t.Errorf("buildConfigRows on Project tab with no repo should contain 'No project detected', got %v", rows)
 	}
+	if strings.Contains(joined, "↑/↓=select") || strings.Contains(joined, "Enter=") || strings.Contains(joined, "Ctrl+S=save") {
+		t.Errorf("no-project footer should only expose tab/close actions, got %v", rows)
+	}
+	if strings.Contains(joined, "Overriding global config for current project") {
+		t.Errorf("no-project rows should not show project override copy, got %v", rows)
+	}
 }
 
 func TestBuildConfigRowsGlobalHint(t *testing.T) {
 	a := &App{
-		cfgTab:          2, // Project tab
+		cfgTab:          cfgTabProject,
 		repoRoot:        "/some/repo",
 		cfgDraft:        Config{ActiveModel: "global-model", Personality: "friendly"},
 		cfgProjectDraft: ProjectConfig{}, // no overrides
@@ -478,11 +797,14 @@ func TestBuildConfigRowsGlobalHint(t *testing.T) {
 	if !foundPersonality {
 		t.Error("expected '(global: friendly)' hint for unoverridden Personality")
 	}
+	if !rowsContain(rows, "Overriding global config for current project (/some/repo).") {
+		t.Fatalf("project rows missing project path intro: %v", rows)
+	}
 }
 
 func TestBuildConfigRowsProjectOverrideShown(t *testing.T) {
 	a := &App{
-		cfgTab:          2,
+		cfgTab:          cfgTabProject,
 		repoRoot:        "/some/repo",
 		cfgDraft:        Config{ActiveModel: "global-model"},
 		cfgProjectDraft: ProjectConfig{ActiveModel: "project-model"},
@@ -500,49 +822,59 @@ func TestBuildConfigRowsProjectOverrideShown(t *testing.T) {
 	}
 }
 
-func TestBuildConfigRowsAPIKeysShowsEffectiveProviderFromMergedActiveModel(t *testing.T) {
-	cases := []struct {
-		name         string
-		provider     string
-		globalModel  string
-		projectModel string
-		configure    func(*Config)
-	}{
-		{name: "anthropic", provider: ProviderAnthropic, globalModel: "anthropic-global", projectModel: "anthropic-project", configure: func(c *Config) { c.AnthropicAPIKey = "k" }},
-		{name: "openai", provider: ProviderOpenAI, globalModel: "openai-global", projectModel: "openai-project", configure: func(c *Config) { c.OpenAIAPIKey = "k" }},
-		{name: "grok", provider: ProviderGrok, globalModel: "grok-global", projectModel: "grok-project", configure: func(c *Config) { c.GrokAPIKey = "k" }},
-		{name: "gemini", provider: ProviderGemini, globalModel: "gemini-global", projectModel: "gemini-project", configure: func(c *Config) { c.GeminiAPIKey = "k" }},
-		{name: "ollama", provider: ProviderOllama, globalModel: "ollama-global", projectModel: "ollama-project", configure: func(c *Config) { c.OllamaBaseURL = "http://localhost:11434" }},
+func TestBuildConfigRowsDeploymentsOmitsEffectiveProvider(t *testing.T) {
+	a := &App{
+		cfgTab:          cfgTabDeployments,
+		cfgDraft:        Config{ActiveModel: "openai-global", OpenAIAPIKey: "sk-openai"},
+		cfgProjectDraft: ProjectConfig{ActiveModel: "openai-project"},
+		models: []ModelDef{
+			{Provider: ProviderOpenAI, ID: "openai-global"},
+			{Provider: ProviderOpenAI, ID: "openai-project"},
+		},
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := Config{ActiveModel: tc.globalModel}
-			tc.configure(&cfg)
-
-			a := &App{
-				cfgTab:          0, // API Keys tab
-				cfgDraft:        cfg,
-				cfgProjectDraft: ProjectConfig{ActiveModel: tc.projectModel},
-				models: []ModelDef{
-					{Provider: tc.provider, ID: tc.globalModel},
-					{Provider: tc.provider, ID: tc.projectModel},
-				},
-			}
-
-			rows := a.buildConfigRows()
-			found := false
-			for _, row := range rows {
-				if strings.Contains(row, "Effective provider: "+tc.provider) && strings.Contains(row, "active model: "+tc.projectModel) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				t.Fatalf("expected effective provider row for merged project active model, got: %v", rows)
-			}
-		})
+	rows := a.buildConfigRows()
+	for _, row := range rows {
+		if strings.Contains(row, "Effective provider:") {
+			t.Fatalf("deployments tab should not show effective provider row, got: %v", rows)
+		}
 	}
+}
+
+func TestBuildConfigRowsDeploymentValueStyling(t *testing.T) {
+	a := &App{
+		cfgTab: cfgTabDeployments,
+		cfgDraft: Config{Deployments: map[string]DeploymentConfig{
+			"openai-direct": {APIKey: "sk-openai-secret"},
+		}},
+		cfgCursor: 0,
+	}
+
+	rows := a.buildConfigRows()
+	joined := strings.Join(rows, "\n")
+	if !strings.Contains(joined, "\033[2m(not set)\033[0m") {
+		t.Fatalf("unset deployment values should be dimmed, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "OpenAI API Key: \033[1;33msk-o...cret\033[0m") {
+		t.Fatalf("configured secret values should be emphasized more than labels, got:\n%s", joined)
+	}
+	if strings.Contains(joined, "\033[2mOpenAI API Key:") {
+		t.Fatalf("configured field labels should not be dimmed, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "\033[2m(optional)\033[0m") {
+		t.Fatalf("optional deployment values should render as optional, got:\n%s", joined)
+	}
+
+	for _, row := range rows {
+		plain := ansiEscRe.ReplaceAllString(row, "")
+		if strings.Contains(plain, "OpenAI Base URL:") {
+			if !strings.HasPrefix(plain, "  OpenAI Base URL:") {
+				t.Fatalf("optional deployment setting should be indented, got %q", plain)
+			}
+			return
+		}
+	}
+	t.Fatalf("OpenAI Base URL row not found: %v", rows)
 }
 
 func TestEnterConfigModeSetsPreferredAPIKeyCursorFromEffectiveProvider(t *testing.T) {
@@ -577,8 +909,8 @@ func TestEnterConfigModeSetsPreferredAPIKeyCursorFromEffectiveProvider(t *testin
 			if a.cfgCursor != want {
 				t.Fatalf("cfgCursor = %d, want %d", a.cfgCursor, want)
 			}
-			if a.cfgTabCursor[0] != want {
-				t.Fatalf("cfgTabCursor[0] = %d, want %d", a.cfgTabCursor[0], want)
+			if a.cfgTabCursor[cfgTabDeployments] != want {
+				t.Fatalf("cfgTabCursor[cfgTabDeployments] = %d, want %d", a.cfgTabCursor[cfgTabDeployments], want)
 			}
 		})
 	}
@@ -813,8 +1145,8 @@ func TestResolveActiveModel_OllamaOfflineTrustsSaved(t *testing.T) {
 		ActiveModel:   testOllamaActiveModel,
 	}
 	got := cfg.resolveActiveModel(nil) // no live models
-	if got != testOllamaActiveModel {
-		t.Errorf("resolveActiveModel = %q, want %q (Ollama offline should trust saved model)", got, testOllamaActiveModel)
+	if got != ollamaCanonicalModelID(testOllamaActiveModel) {
+		t.Errorf("resolveActiveModel = %q, want canonical Ollama model for %q", got, testOllamaActiveModel)
 	}
 }
 
@@ -826,8 +1158,8 @@ func TestResolveActiveModel_OllamaOfflineWithOtherProviders(t *testing.T) {
 		ActiveModel:     testOllamaActiveModel,
 	}
 	got := cfg.resolveActiveModel(nil) // Ollama offline, no live models
-	if got != testOllamaActiveModel {
-		t.Errorf("resolveActiveModel = %q, want %q (saved Ollama model should persist when offline)", got, testOllamaActiveModel)
+	if got != ollamaCanonicalModelID(testOllamaActiveModel) {
+		t.Errorf("resolveActiveModel = %q, want canonical Ollama model for %q", got, testOllamaActiveModel)
 	}
 }
 
@@ -866,8 +1198,8 @@ func TestResolveExplorationModel_OllamaOfflineTrustsSaved(t *testing.T) {
 		ExplorationModel: testOllamaExploreModel,
 	}
 	got := cfg.resolveExplorationModel(nil)
-	if got != testOllamaExploreModel {
-		t.Errorf("resolveExplorationModel = %q, want %q (Ollama offline should trust saved exploration model)", got, testOllamaExploreModel)
+	if got != ollamaCanonicalModelID(testOllamaExploreModel) {
+		t.Errorf("resolveExplorationModel = %q, want canonical Ollama model for %q", got, testOllamaExploreModel)
 	}
 }
 
@@ -991,25 +1323,25 @@ func TestPickerStubHasCleanID(t *testing.T) {
 // --- Ollama URL normalization tests ---
 
 func TestOllamaURLNormalization(t *testing.T) {
-	field := cfgAPIKeyFields[len(cfgAPIKeyFields)-1] // Ollama URL is the last field
+	field := deploymentFieldByLabel(t, cfgAPIKeyFields, "Ollama Base URL")
 
 	cases := []struct {
 		input string
 		want  string
 	}{
-		{"http://localhost:11434", "http://localhost:11434"},   // already correct
+		{"http://localhost:11434", "http://localhost:11434"},         // already correct
 		{"https://ollama.example.com", "https://ollama.example.com"}, // https preserved
-		{"localhost:11434", "http://localhost:11434"},          // bare host gets http://
-		{"  localhost:11434  ", "http://localhost:11434"},      // whitespace trimmed
-		{"", ""},                                               // empty cleared
-		{"  ", ""},                                             // whitespace-only cleared
+		{"localhost:11434", "http://localhost:11434"},                // bare host gets http://
+		{"  localhost:11434  ", "http://localhost:11434"},            // whitespace trimmed
+		{"", ""},   // empty cleared
+		{"  ", ""}, // whitespace-only cleared
 	}
 
 	for _, tc := range cases {
 		var cfg Config
 		field.set(&cfg, tc.input)
-		if cfg.OllamaBaseURL != tc.want {
-			t.Errorf("set(%q): OllamaBaseURL = %q, want %q", tc.input, cfg.OllamaBaseURL, tc.want)
+		if got := cfg.deploymentConfigs()["ollama-local"].BaseURL; got != tc.want {
+			t.Errorf("set(%q): Ollama BaseURL = %q, want %q", tc.input, got, tc.want)
 		}
 	}
 }
@@ -1058,6 +1390,15 @@ func TestEffectiveThinking(t *testing.T) {
 	if c.effectiveThinking() {
 		t.Error("Thinking=false should return false")
 	}
+}
+
+func rowsContain(rows []string, needle string) bool {
+	for _, row := range rows {
+		if strings.Contains(row, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestConfigThinkingRoundTrip(t *testing.T) {

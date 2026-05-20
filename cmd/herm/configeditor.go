@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"langdag.com/langdag/types"
 )
 
 // isOllamaOffline reports whether modelID is an Ollama model that is not
@@ -20,75 +22,49 @@ func (a *App) isOllamaOffline(modelID string) bool {
 	}
 	// Check if it's in the live list as an Ollama model.
 	for _, m := range a.models {
-		if m.ID == modelID && m.Provider == ProviderOllama {
+		if modelMatchesID(modelMatchesIDOptions{model: m, id: modelID}) && m.Provider == ProviderOllama {
 			return false // online and present
 		}
 	}
 	// Not in live list — treat as offline if it's not a known catalog model either.
 	for _, m := range a.models {
-		if m.ID == modelID {
+		if modelMatchesID(modelMatchesIDOptions{model: m, id: modelID}) {
 			return false // it's a different provider's model
 		}
 	}
 	return true // unknown to catalog → assume offline Ollama model
 }
 
-func maskKey(key string) string {
-	if key == "" {
-		return "(not set)"
-	}
-	if len(key) <= 8 {
-		return "****"
-	}
-	return key[:4] + "..." + key[len(key)-4:]
-}
-
 // ─── Config editor ───
 
-var cfgTabNames = []string{"API Keys", "Global", "Project"}
+const (
+	cfgTabDeployments = iota
+	cfgTabGlobal
+	cfgTabProject
+	cfgTabRouting
+	cfgTabCount
+)
+
+var cfgTabNames = []string{
+	cfgTabDeployments: "Deployments",
+	cfgTabGlobal:      "Global",
+	cfgTabProject:     "Project",
+	cfgTabRouting:     "Routing",
+}
 
 type cfgField struct {
 	label      string
+	indent     int
 	get        func(Config) string
-	display    func(Config) string    // masked display; nil means use get
+	display    func(Config) string // masked display; nil means use get
 	set        func(*Config, string)
-	toggle     func(*Config)          // if non-nil, Enter toggles instead of opening editor
-	globalHint func(Config) string    // if set, shows "(global: X)" when field value is empty
-	picker     func(*App)             // if non-nil, Enter opens a picker (e.g. model selector) instead of editor
-}
-
-var cfgAPIKeyFields = []cfgField{
-	{label: "Anthropic", get: func(c Config) string { return c.AnthropicAPIKey }, display: func(c Config) string { return maskKey(c.AnthropicAPIKey) }, set: func(c *Config, v string) { c.AnthropicAPIKey = v }},
-	{label: "OpenAI", get: func(c Config) string { return c.OpenAIAPIKey }, display: func(c Config) string { return maskKey(c.OpenAIAPIKey) }, set: func(c *Config, v string) { c.OpenAIAPIKey = v }},
-	{label: "Grok", get: func(c Config) string { return c.GrokAPIKey }, display: func(c Config) string { return maskKey(c.GrokAPIKey) }, set: func(c *Config, v string) { c.GrokAPIKey = v }},
-	{label: "OpenRouter", get: func(c Config) string { return c.OpenRouterAPIKey }, display: func(c Config) string { return maskKey(c.OpenRouterAPIKey) }, set: func(c *Config, v string) { c.OpenRouterAPIKey = v }},
-	{label: "Gemini", get: func(c Config) string { return c.GeminiAPIKey }, display: func(c Config) string { return maskKey(c.GeminiAPIKey) }, set: func(c *Config, v string) { c.GeminiAPIKey = v }},
-	{label: "Ollama URL", get: func(c Config) string { return c.OllamaBaseURL }, set: func(c *Config, v string) {
-		v = strings.TrimSpace(v)
-		if v != "" && !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
-			v = "http://" + v
-		}
-		c.OllamaBaseURL = v
-	}},
-}
-
-func apiKeyRowForProvider(provider string) int {
-	switch provider {
-	case ProviderAnthropic:
-		return 0
-	case ProviderOpenAI:
-		return 1
-	case ProviderGrok:
-		return 2
-	case ProviderOpenRouter:
-		return 3
-	case ProviderGemini:
-		return 4
-	case ProviderOllama:
-		return 5
-	default:
-		return 0
-	}
+	toggle     func(*Config)       // if non-nil, Enter toggles instead of opening editor
+	action     func(*App)          // if non-nil, Enter invokes an action instead of editing
+	valueless  bool                // if true, render as a selectable row without ": value"
+	optional   bool                // if true, empty values render as "(optional)"
+	secret     bool                // if true, render displayed values with secret emphasis
+	globalHint func(Config) string // if set, shows "(global: X)" when field value is empty
+	picker     func(*App)          // if non-nil, Enter opens a picker (e.g. model selector) instead of editor
 }
 
 // effectiveProviderForConfig returns the provider implied by the effective
@@ -98,10 +74,14 @@ func (a *App) effectiveProviderForConfig(cfg Config) (provider string, modelID s
 	modelID = cfg.resolveActiveModel(a.models)
 	if modelID != "" {
 		if model := findModelByID(findModelByIDOptions{models: a.models, id: modelID}); model != nil {
-			return model.Provider, modelID
+			return configuredProviderForModel(configuredProviderForModelOptions{cfg: cfg, model: *model}), modelID
 		}
 		// For unknown model IDs, keep the existing offline-Ollama assumption.
-		return ollamaModelProvider(ollamaModelProviderOptions{modelID: modelID, models: a.models, ollamaURL: cfg.OllamaBaseURL}), modelID
+		return configuredProviderForModelID(configuredProviderForModelIDOptions{
+			cfg:     cfg,
+			models:  a.models,
+			modelID: modelID,
+		}), modelID
 	}
 	return cfg.defaultLangdagProvider(), ""
 }
@@ -110,13 +90,13 @@ func (a *App) effectiveProviderForConfig(cfg Config) (provider string, modelID s
 // 1) active model provider, 2) first configured provider, 3) Anthropic.
 func (a *App) preferredAPIKeyCursor(cfg Config) int {
 	if p, _ := a.effectiveProviderForConfig(cfg); p != "" {
-		return apiKeyRowForProvider(p)
+		return apiKeyRowForProviderInFields(apiKeyRowForProviderInFieldsOptions{provider: p, fields: deploymentTabFields(cfg)})
 	}
 	ordered := []string{ProviderAnthropic, ProviderOpenAI, ProviderGrok, ProviderOpenRouter, ProviderGemini, ProviderOllama}
 	configured := cfg.configuredProviders()
 	for _, p := range ordered {
 		if configured[p] {
-			return apiKeyRowForProvider(p)
+			return apiKeyRowForProviderInFields(apiKeyRowForProviderInFieldsOptions{provider: p, fields: deploymentTabFields(cfg)})
 		}
 	}
 	return 0
@@ -124,22 +104,33 @@ func (a *App) preferredAPIKeyCursor(cfg Config) int {
 
 func (a *App) enterConfigMode() {
 	a.cfgActive = true
-	a.cfgTab = 0
-	a.cfgTabCursor = [3]int{a.preferredAPIKeyCursor(a.config), 0, 0}
+	a.cfgTab = cfgTabDeployments
+	a.cfgTabCursor = [cfgTabCount]int{cfgTabDeployments: a.preferredAPIKeyCursor(a.config)}
 	a.cfgCursor = a.cfgTabCursor[a.cfgTab]
 	a.cfgEditing = false
 	a.cfgEditBuf = nil
 	a.cfgEditCursor = 0
 	a.cfgDraft = a.globalConfig
 	a.cfgProjectDraft = a.projectConfig
+	a.startConfigTicker()
 	a.renderInput()
 }
 
+func (a *App) projectConfigRoot() string {
+	if projectConfigScopeAvailable(a.repoRoot) {
+		return a.repoRoot
+	}
+	return ""
+}
+
 func (a *App) exitConfigMode(save bool) {
+	a.stopConfigTicker()
 	if save {
-		a.globalConfig = a.cfgDraft
-		a.projectConfig = a.cfgProjectDraft
-		a.config = mergeConfigs(mergeConfigsOptions{global: a.globalConfig, project: a.projectConfig})
+		a.globalConfig = normalizeConfigForModels(configModelsOptions{cfg: a.cfgDraft, models: a.models})
+		a.cfgDraft = a.globalConfig
+		a.projectConfig = normalizeProjectConfigForModels(normalizeProjectConfigForModelsOptions{pc: a.cfgProjectDraft, models: a.models})
+		a.cfgProjectDraft = a.projectConfig
+		a.rebuildEffectiveConfig()
 		// Re-initialize debug log if debug mode changed
 		if a.debugActive() && a.traceCollector == nil {
 			a.initAppDebugLog()
@@ -156,8 +147,8 @@ func (a *App) exitConfigMode(save bool) {
 			a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error saving global config: %v", err)})
 			saveErr = true
 		}
-		if a.repoRoot != "" {
-			if err := saveProjectConfig(saveProjectConfigOptions{repoRoot: a.repoRoot, pc: a.projectConfig}); err != nil {
+		if projectRoot := a.projectConfigRoot(); projectRoot != "" {
+			if err := saveProjectConfig(saveProjectConfigOptions{repoRoot: projectRoot, pc: a.projectConfig, models: a.models}); err != nil {
 				a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error saving project config: %v", err)})
 				saveErr = true
 			}
@@ -166,20 +157,20 @@ func (a *App) exitConfigMode(save bool) {
 			a.messages = append(a.messages, chatMessage{kind: msgSuccess, content: "Config saved."})
 		}
 		// Refresh models including Ollama and OpenRouter if configured
-		if a.config.OllamaBaseURL != "" {
-			go func() { a.resultCh <- fetchOllamaModelsCmd(a.config.OllamaBaseURL) }()
+		if a.config.ollamaBaseURL() != "" {
+			go func() { a.resultCh <- fetchOllamaModelsCmd(a.config.ollamaBaseURL()) }()
 		}
-		if a.config.OpenRouterAPIKey != "" {
+		if a.config.openRouterAPIKey() != "" {
 			a.openRouterFetched = false // allow re-fetch with new key
-			go func() { a.resultCh <- fetchOpenRouterModelsCmd(a.config.OpenRouterAPIKey) }()
+			go func() { a.resultCh <- fetchOpenRouterModelsCmd(a.config.openRouterAPIKey()) }()
 		}
-		// Show updated model if it changed
+		// Show updated model resolution and project diagnostics.
 		if a.models != nil {
-			a.showModelChange(a.config.resolveActiveModel(a.models))
+			a.refreshResolvedModelDisplay()
 		}
 		// Reinitialize langdag client with updated config
 		go func() {
-			client, err := newLangdagClient(a.config)
+			client, err := newLangdagClientWithCatalog(a.config, a.modelCatalog)
 			a.resultCh <- langdagReadyMsg{client: client, provider: a.config.defaultLangdagProvider(), err: err}
 		}()
 	}
@@ -207,9 +198,9 @@ func (a *App) openConfigModelPicker(opts openConfigModelPickerOptions) {
 	}
 	// If the draft URL differs from the saved URL, fetch Ollama models async
 	// before opening the picker so we don't block the UI.
-	if a.cfgDraft.OllamaBaseURL != "" && a.config.OllamaBaseURL != a.cfgDraft.OllamaBaseURL {
+	if a.cfgDraft.ollamaBaseURL() != "" && a.config.ollamaBaseURL() != a.cfgDraft.ollamaBaseURL() {
 		go func() {
-			msg := fetchOllamaModelsCmd(a.cfgDraft.OllamaBaseURL)
+			msg := fetchOllamaModelsCmd(a.cfgDraft.ollamaBaseURL())
 			a.resultCh <- msg
 			// Open the picker after the result is handled; send a follow-up
 			// signal via a dedicated picker-open message.
@@ -219,9 +210,9 @@ func (a *App) openConfigModelPicker(opts openConfigModelPickerOptions) {
 	}
 	// If the draft OpenRouter key differs from the saved key, fetch fresh models
 	// async before opening the picker.
-	if a.cfgDraft.OpenRouterAPIKey != "" && a.config.OpenRouterAPIKey != a.cfgDraft.OpenRouterAPIKey {
+	if a.cfgDraft.openRouterAPIKey() != "" && a.config.openRouterAPIKey() != a.cfgDraft.openRouterAPIKey() {
 		go func() {
-			msg := fetchOpenRouterModelsCmd(a.cfgDraft.OpenRouterAPIKey)
+			msg := fetchOpenRouterModelsCmd(a.cfgDraft.openRouterAPIKey())
 			a.resultCh <- msg
 			a.resultCh <- openPickerMsg{getCurrentID: getCurrentID, onSelect: onSelect}
 		}()
@@ -244,7 +235,7 @@ func (a *App) doOpenConfigModelPicker(opts doOpenConfigModelPickerOptions) {
 
 	// If Ollama is configured but offline, inject a stub for the saved model
 	// so the picker still opens and the user can see their current selection.
-	if a.cfgDraft.OllamaBaseURL != "" {
+	if a.cfgDraft.ollamaBaseURL() != "" {
 		ollamaInList := false
 		for _, m := range available {
 			if m.Provider == ProviderOllama {
@@ -269,26 +260,19 @@ func (a *App) doOpenConfigModelPicker(opts doOpenConfigModelPickerOptions) {
 
 	// If OpenRouter is configured but models haven't loaded yet (e.g. bad key or
 	// network error), inject a stub so the picker still shows the saved selection.
-	if a.cfgDraft.OpenRouterAPIKey != "" {
-		orInList := false
-		for _, m := range available {
-			if m.Provider == ProviderOpenRouter {
-				orInList = true
-				break
-			}
+	if a.cfgDraft.openRouterAPIKey() != "" {
+		savedID := getCurrentID()
+		if savedID == "" {
+			savedID = a.cfgDraft.ActiveModel
 		}
-		if !orInList {
-			savedID := getCurrentID()
-			if savedID == "" {
-				savedID = a.cfgDraft.ActiveModel
-			}
-			if savedID != "" {
-				available = append(available, ModelDef{
-					Provider: ProviderOpenRouter,
-					ID:       savedID,
-					Label:    savedID + " \033[33m(unavailable)\033[0m",
-				})
-			}
+		if savedID != "" && !modelListContainsID(modelListContainsIDOptions{models: available, id: savedID}) {
+			available = append(available, ModelDef{
+				Provider:      ProviderOpenRouter,
+				ID:            savedID,
+				Label:         savedID + " \033[33m(unavailable)\033[0m",
+				PricingStatus: types.CostStatusUnknown,
+				PriceLabel:    "unknown",
+			})
 		}
 	}
 
@@ -307,7 +291,7 @@ func (a *App) doOpenConfigModelPicker(opts doOpenConfigModelPickerOptions) {
 
 	activeIdx := 0
 	for i, m := range a.menuModels {
-		if m.ID == activeID {
+		if modelMatchesID(modelMatchesIDOptions{model: m, id: activeID}) {
 			activeIdx = i
 			break
 		}
@@ -344,14 +328,42 @@ func (a *App) doOpenConfigModelPicker(opts doOpenConfigModelPickerOptions) {
 
 func (a *App) cfgCurrentFields() []cfgField {
 	switch a.cfgTab {
-	case 0:
-		return cfgAPIKeyFields
-	case 1:
+	case cfgTabDeployments:
+		return deploymentTabFields(a.cfgDraft)
+	case cfgTabGlobal:
 		return a.settingsTabFields()
-	case 2:
+	case cfgTabProject:
+		if a.projectConfigRoot() == "" {
+			return nil
+		}
 		return a.projectTabFields()
+	case cfgTabRouting:
+		return a.routingTabFields()
 	}
 	return nil
+}
+
+func (a *App) clampConfigCursor() {
+	fields := a.cfgCurrentFields()
+	if len(fields) == 0 {
+		a.cfgCursor = 0
+		a.cfgTabCursor[a.cfgTab] = 0
+		return
+	}
+	if a.cfgCursor < 0 {
+		a.cfgCursor = 0
+	} else if a.cfgCursor >= len(fields) {
+		a.cfgCursor = len(fields) - 1
+	}
+	a.cfgTabCursor[a.cfgTab] = a.cfgCursor
+}
+
+func (a *App) configSelectedField() (cfgField, bool) {
+	fields := a.cfgCurrentFields()
+	if len(fields) == 0 || a.cfgCursor < 0 || a.cfgCursor >= len(fields) {
+		return cfgField{}, false
+	}
+	return fields[a.cfgCursor], true
 }
 
 func (a *App) resolvedExplorationDisplay(c Config) string {
@@ -366,32 +378,93 @@ func (a *App) resolvedExplorationDisplay(c Config) string {
 
 func (a *App) settingsTabFields() []cfgField {
 	return []cfgField{
-		{label: "Active Model", get: func(c Config) string { return c.ActiveModel }, set: func(c *Config, v string) { c.ActiveModel = v }, picker: func(a *App) { a.openConfigModelPicker(openConfigModelPickerOptions{getCurrentID: func() string { return a.cfgDraft.ActiveModel }, onSelect: func(id string) { a.cfgDraft.ActiveModel = id }}) }},
-		{label: "Exploration Model", get: func(c Config) string { return c.ExplorationModel }, display: func(c Config) string { return a.resolvedExplorationDisplay(c) }, set: func(c *Config, v string) { c.ExplorationModel = v }, picker: func(a *App) { a.openConfigModelPicker(openConfigModelPickerOptions{getCurrentID: func() string { return a.cfgDraft.ExplorationModel }, onSelect: func(id string) { a.cfgDraft.ExplorationModel = id }}) }},
-		{label: "Paste Collapse", get: func(c Config) string { return strconv.Itoa(c.PasteCollapseMinChars) }, set: func(c *Config, v string) { if n, err := strconv.Atoi(v); err == nil { c.PasteCollapseMinChars = n } }},
-		{label: "Debug Mode", get: func(c Config) string { if c.DebugMode { return "on" }; return "off" }, toggle: func(c *Config) { c.DebugMode = !c.DebugMode }},
-		{label: "Thinking", get: func(c Config) string { if c.effectiveThinking() { return "on" }; return "off" }, toggle: func(c *Config) { if c.Thinking == nil { t := true; c.Thinking = &t } else { v := !*c.Thinking; c.Thinking = &v } }},
-		{label: "Sub-Agent Max Turns", get: func(c Config) string { n := c.SubAgentMaxTurns; if n <= 0 { n = defaultGeneralMaxTurns }; return strconv.Itoa(n) }, set: func(c *Config, v string) { if n, err := strconv.Atoi(v); err == nil && n > 0 { c.SubAgentMaxTurns = n } }},
+		{label: "Active Model", get: func(c Config) string { return c.ActiveModel }, set: func(c *Config, v string) {
+			c.ActiveModel = normalizeConfigModelIDForModels(normalizeConfigModelIDForModelsOptions{cfg: *c, modelID: v, smartDefault: defaultCanonicalActiveModel, models: a.models})
+		}, picker: func(a *App) {
+			a.openConfigModelPicker(openConfigModelPickerOptions{getCurrentID: func() string { return a.cfgDraft.ActiveModel }, onSelect: func(id string) { a.cfgDraft.ActiveModel = id }})
+		}},
+		{label: "Exploration Model", get: func(c Config) string { return c.ExplorationModel }, display: func(c Config) string { return a.resolvedExplorationDisplay(c) }, set: func(c *Config, v string) {
+			c.ExplorationModel = normalizeConfigModelIDForModels(normalizeConfigModelIDForModelsOptions{cfg: *c, modelID: v, smartDefault: defaultCanonicalExplorationModel, models: a.models})
+		}, picker: func(a *App) {
+			a.openConfigModelPicker(openConfigModelPickerOptions{getCurrentID: func() string { return a.cfgDraft.ExplorationModel }, onSelect: func(id string) { a.cfgDraft.ExplorationModel = id }})
+		}},
+		{label: "Paste Collapse", get: func(c Config) string { return strconv.Itoa(c.PasteCollapseMinChars) }, set: func(c *Config, v string) {
+			if n, err := strconv.Atoi(v); err == nil {
+				c.PasteCollapseMinChars = n
+			}
+		}},
+		{label: "Debug Mode", get: func(c Config) string {
+			if c.DebugMode {
+				return "on"
+			}
+			return "off"
+		}, toggle: func(c *Config) { c.DebugMode = !c.DebugMode }},
+		{label: "Thinking", get: func(c Config) string {
+			if c.effectiveThinking() {
+				return "on"
+			}
+			return "off"
+		}, toggle: func(c *Config) {
+			if c.Thinking == nil {
+				t := true
+				c.Thinking = &t
+			} else {
+				v := !*c.Thinking
+				c.Thinking = &v
+			}
+		}},
+		{label: "Sub-Agent Max Turns", get: func(c Config) string {
+			n := c.SubAgentMaxTurns
+			if n <= 0 {
+				n = defaultGeneralMaxTurns
+			}
+			return strconv.Itoa(n)
+		}, set: func(c *Config, v string) {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				c.SubAgentMaxTurns = n
+			}
+		}},
 		{label: "Personality", get: func(c Config) string { return c.Personality }, set: func(c *Config, v string) { c.Personality = v }},
-		{label: "Git Co-Author", get: func(c Config) string { if c.effectiveGitCoAuthor() { return "on" }; return "off" }, toggle: func(c *Config) { if c.GitCoAuthor == nil { f := false; c.GitCoAuthor = &f } else { v := !*c.GitCoAuthor; c.GitCoAuthor = &v } }},
+		{label: "Git Co-Author", get: func(c Config) string {
+			if c.effectiveGitCoAuthor() {
+				return "on"
+			}
+			return "off"
+		}, toggle: func(c *Config) {
+			if c.GitCoAuthor == nil {
+				f := false
+				c.GitCoAuthor = &f
+			} else {
+				v := !*c.GitCoAuthor
+				c.GitCoAuthor = &v
+			}
+		}},
 	}
 }
 
 func (a *App) projectTabFields() []cfgField {
 	return []cfgField{
 		{
-			label:      "Active Model",
-			get:        func(_ Config) string { return a.cfgProjectDraft.ActiveModel },
-			set:        func(_ *Config, v string) { a.cfgProjectDraft.ActiveModel = v },
+			label: "Active Model",
+			get:   func(_ Config) string { return a.cfgProjectDraft.ActiveModel },
+			set: func(_ *Config, v string) {
+				a.cfgProjectDraft.ActiveModel = normalizeProjectModelIDForModels(normalizeProjectModelIDForModelsOptions{modelID: v, smartDefault: defaultCanonicalActiveModel, models: a.models})
+			},
 			globalHint: func(c Config) string { return c.ActiveModel },
-			picker:     func(a *App) { a.openConfigModelPicker(openConfigModelPickerOptions{getCurrentID: func() string { return a.cfgProjectDraft.ActiveModel }, onSelect: func(id string) { a.cfgProjectDraft.ActiveModel = id }}) },
+			picker: func(a *App) {
+				a.openConfigModelPicker(openConfigModelPickerOptions{getCurrentID: func() string { return a.cfgProjectDraft.ActiveModel }, onSelect: func(id string) { a.cfgProjectDraft.ActiveModel = id }})
+			},
 		},
 		{
-			label:      "Exploration Model",
-			get:        func(_ Config) string { return a.cfgProjectDraft.ExplorationModel },
-			set:        func(_ *Config, v string) { a.cfgProjectDraft.ExplorationModel = v },
+			label: "Exploration Model",
+			get:   func(_ Config) string { return a.cfgProjectDraft.ExplorationModel },
+			set: func(_ *Config, v string) {
+				a.cfgProjectDraft.ExplorationModel = normalizeProjectModelIDForModels(normalizeProjectModelIDForModelsOptions{modelID: v, smartDefault: defaultCanonicalExplorationModel, models: a.models})
+			},
 			globalHint: func(c Config) string { return a.resolvedExplorationDisplay(c) },
-			picker:     func(a *App) { a.openConfigModelPicker(openConfigModelPickerOptions{getCurrentID: func() string { return a.cfgProjectDraft.ExplorationModel }, onSelect: func(id string) { a.cfgProjectDraft.ExplorationModel = id }}) },
+			picker: func(a *App) {
+				a.openConfigModelPicker(openConfigModelPickerOptions{getCurrentID: func() string { return a.cfgProjectDraft.ExplorationModel }, onSelect: func(id string) { a.cfgProjectDraft.ExplorationModel = id }})
+			},
 		},
 		{
 			label:      "Personality",
@@ -452,11 +525,27 @@ func (a *App) projectTabFields() []cfgField {
 	}
 }
 
+func (a *App) configRowsBeforeFields() int {
+	switch a.cfgTab {
+	case cfgTabProject:
+		if a.projectConfigRoot() != "" {
+			return 1
+		}
+	case cfgTabRouting:
+		return len(a.routingTabReadOnlyRows())
+	}
+	return 0
+}
+
 func (a *App) buildConfigRows() []string {
 	var rows []string
 	configured := a.cfgDraft.configuredProviders()
 	hasProvider := len(configured) > 0
-	isProjectTab := a.cfgTab == 2
+	isProjectTab := a.cfgTab == cfgTabProject
+	projectRoot := ""
+	if isProjectTab {
+		projectRoot = a.projectConfigRoot()
+	}
 
 	// Tab bar
 	var tabParts []string
@@ -469,23 +558,13 @@ func (a *App) buildConfigRows() []string {
 	}
 	rows = append(rows, strings.Join(tabParts, " "))
 
-	if a.cfgTab == 0 {
-		effective := mergeConfigs(mergeConfigsOptions{global: a.cfgDraft, project: a.cfgProjectDraft})
-		provider, modelID := a.effectiveProviderForConfig(effective)
-		if provider == "" {
-			rows = append(rows, "\033[2mEffective provider: (none)\033[0m")
-		} else if modelID != "" {
-			rows = append(rows, fmt.Sprintf("\033[2mEffective provider: %s  (active model: %s)\033[0m", provider, modelID))
-		} else {
-			rows = append(rows, fmt.Sprintf("\033[2mEffective provider: %s\033[0m", provider))
+	if isProjectTab {
+		if projectRoot == "" {
+			rows = append(rows, "\033[2mNo project detected (not in a git repository)\033[0m")
+			rows = append(rows, a.configHelpRows()...)
+			return rows
 		}
-	}
-
-	// No-project message for Project tab
-	if a.cfgTab == 2 && a.repoRoot == "" {
-		rows = append(rows, "\033[2mNo project detected (not in a git repository)\033[0m")
-		rows = append(rows, "\033[2m←/→=tab  Esc=close  Ctrl+S=save & close\033[0m")
-		return rows
+		rows = append(rows, fmt.Sprintf("\033[2mOverriding global config for current project (%s).\033[0m", projectRoot))
 	}
 
 	// When a model picker menu is active, render it inline below the tab bar
@@ -514,26 +593,47 @@ func (a *App) buildConfigRows() []string {
 		first := a.menuScrollOffset + 1
 		last := end
 		rows = append(rows, fmt.Sprintf("\033[2m(%d->%d / %d)\033[0m", first, last, total))
-		rows = append(rows, "\033[2m←/→ sort column  Tab flip order  Enter select  Esc close\033[0m")
+		if a.menuModels != nil {
+			rows = append(rows, layoutDimInlineBlocks(w, "Enter=choose", "Esc=close")...)
+		} else {
+			rows = append(rows, layoutDimInlineBlocks(w, "↑/↓=select", "Enter=choose", "Esc=close")...)
+		}
 		return rows
+	}
+
+	if a.cfgTab == cfgTabRouting {
+		rows = append(rows, a.routingTabReadOnlyRows()...)
 	}
 
 	// Fields
 	fields := a.cfgCurrentFields()
 	for i, f := range fields {
+		label := configFieldLabel(f)
+		if f.valueless {
+			if i == a.cfgCursor {
+				rows = append(rows, fmt.Sprintf("%s %s", styledConfigFieldLabel(styledConfigFieldLabelOptions{label: label, selected: true}), styledConfigCursor("◆")))
+			} else {
+				rows = append(rows, styledConfigFieldLabel(styledConfigFieldLabelOptions{label: label}))
+			}
+			continue
+		}
 		if a.cfgEditing && i == a.cfgCursor {
 			// Show editable text input with underline
 			editStr := string(a.cfgEditBuf)
-			rows = append(rows, fmt.Sprintf("\033[36;1m%s: \033[4m%s\033[0m \033[36;1m◆\033[0m", f.label, editStr))
+			rows = append(rows, fmt.Sprintf("%s \033[4;1m%s\033[0m %s", styledConfigFieldLabel(styledConfigFieldLabelOptions{label: label + ":", selected: true}), editStr, styledConfigCursor("◆")))
 		} else {
 			val := ""
 			if f.display != nil {
 				val = f.display(a.cfgDraft)
-			} else {
+			} else if f.get != nil {
 				val = f.get(a.cfgDraft)
 			}
 			if f.picker != nil && val != "" {
-				p := ollamaModelProvider(ollamaModelProviderOptions{modelID: val, models: a.models, ollamaURL: a.cfgDraft.OllamaBaseURL})
+				p := configuredProviderForModelID(configuredProviderForModelIDOptions{
+					cfg:     a.cfgDraft,
+					models:  a.models,
+					modelID: val,
+				})
 				// Hide model values when no providers are configured, or when this
 				// model's provider is not currently configured.
 				if !isProjectTab && (!hasProvider || p == "" || !configured[p]) {
@@ -542,16 +642,22 @@ func (a *App) buildConfigRows() []string {
 			}
 			// If the value is an Ollama model and Ollama is offline, show indicator.
 			// Only applies to model picker fields, not API key or other fields.
-			if val != "" && f.picker != nil && a.cfgDraft.OllamaBaseURL != "" && a.isOllamaOffline(val) {
+			if val != "" && f.picker != nil && a.cfgDraft.ollamaBaseURL() != "" && a.isOllamaOffline(val) {
 				val = val + " \033[33m(offline)\033[0m"
 			}
 			if val == "" {
 				if f.picker != nil && !hasProvider && !isProjectTab {
 					val = "(not set)"
+				} else if f.optional {
+					val = "(optional)"
 				} else if f.globalHint != nil {
 					hint := f.globalHint(a.cfgDraft)
 					if f.picker != nil && !isProjectTab {
-						p := ollamaModelProvider(ollamaModelProviderOptions{modelID: hint, models: a.models, ollamaURL: a.cfgDraft.OllamaBaseURL})
+						p := configuredProviderForModelID(configuredProviderForModelIDOptions{
+							cfg:     a.cfgDraft,
+							models:  a.models,
+							modelID: hint,
+						})
 						if hint == "" || p == "" || !configured[p] {
 							hint = "not set"
 						}
@@ -564,22 +670,27 @@ func (a *App) buildConfigRows() []string {
 					val = "(not set)"
 				}
 			}
+			styledValue := styledConfigFieldValue(styledConfigFieldValueOptions{value: val, secret: f.secret})
 			if i == a.cfgCursor {
-				rows = append(rows, fmt.Sprintf("\033[36;1m%s: %s\033[36;1m ◆\033[0m", f.label, val))
+				rows = append(rows, fmt.Sprintf("%s %s %s", styledConfigFieldLabel(styledConfigFieldLabelOptions{label: label + ":", selected: true}), styledValue, styledConfigCursor("◆")))
 			} else {
-				rows = append(rows, fmt.Sprintf("%s: %s", f.label, val))
+				rows = append(rows, fmt.Sprintf("%s %s", styledConfigFieldLabel(styledConfigFieldLabelOptions{label: label + ":"}), styledValue))
 			}
 		}
 	}
 
-	// Help line
-	if a.cfgEditing {
-		rows = append(rows, "\033[2mEnter=confirm  Esc=cancel\033[0m")
-	} else if a.cfgTab == 2 {
-		rows = append(rows, "\033[2m←/→=tab  ↑/↓=select  Enter=edit  Backspace=unset  Esc=close  Ctrl+S=save & close\033[0m")
-	} else {
-		rows = append(rows, "\033[2m←/→=tab  ↑/↓=select  Enter=edit  Esc=close  Ctrl+S=save & close\033[0m")
+	if a.cfgTab == cfgTabRouting && a.cfgDraft.Routing != nil {
+		diagnostics := routingDiagnosticsForConfigModels(configModelsOptions{cfg: a.cfgDraft, models: a.models})
+		for i, diagnostic := range diagnostics {
+			if i >= routingDiagnosticsMaxRows {
+				rows = append(rows, fmt.Sprintf("\033[33m%d more routing diagnostics\033[0m", len(diagnostics)-i))
+				break
+			}
+			rows = append(rows, fmt.Sprintf("\033[33m%s: %s\033[0m", diagnostic.Path, diagnostic.Message))
+		}
 	}
+
+	rows = append(rows, a.configHelpRows()...)
 
 	return rows
 }
@@ -644,16 +755,10 @@ func (a *App) handleConfigByte(opts handleConfigByteOptions) {
 			a.cfgTabCursor[a.cfgTab] = a.cfgCursor
 			a.cfgTab++
 			if a.cfgTab >= len(cfgTabNames) {
-				a.cfgTab = 0
+				a.cfgTab = cfgTabDeployments
 			}
-			fields := a.cfgCurrentFields()
-			if len(fields) == 0 {
-				a.cfgCursor = 0
-			} else if a.cfgTabCursor[a.cfgTab] < len(fields) {
-				a.cfgCursor = a.cfgTabCursor[a.cfgTab]
-			} else {
-				a.cfgCursor = len(fields) - 1
-			}
+			a.cfgCursor = a.cfgTabCursor[a.cfgTab]
+			a.clampConfigCursor()
 			a.renderInput()
 		case 'D': // Left - prev tab
 			a.cfgTabCursor[a.cfgTab] = a.cfgCursor
@@ -661,14 +766,8 @@ func (a *App) handleConfigByte(opts handleConfigByteOptions) {
 			if a.cfgTab < 0 {
 				a.cfgTab = len(cfgTabNames) - 1
 			}
-			fields := a.cfgCurrentFields()
-			if len(fields) == 0 {
-				a.cfgCursor = 0
-			} else if a.cfgTabCursor[a.cfgTab] < len(fields) {
-				a.cfgCursor = a.cfgTabCursor[a.cfgTab]
-			} else {
-				a.cfgCursor = len(fields) - 1
-			}
+			a.cfgCursor = a.cfgTabCursor[a.cfgTab]
+			a.clampConfigCursor()
 			a.renderInput()
 		case '2': // modifyOtherKeys (Ctrl+S, Ctrl+C, etc.)
 			a.handleCSIDigit2(handleCSIDigit2Options{readByte: readByte, onPaste: func(string) {}})
@@ -682,17 +781,19 @@ func (a *App) handleConfigByte(opts handleConfigByteOptions) {
 		}
 
 	case ch == '\r': // Enter - toggle, picker, or start editing current field
-		if a.cfgTab == 2 && a.repoRoot == "" {
+		if a.cfgTab == cfgTabProject && a.projectConfigRoot() == "" {
 			break // Project tab non-editable without a repo
 		}
 		fields := a.cfgCurrentFields()
 		if len(fields) > 0 && a.cfgCursor < len(fields) {
 			f := fields[a.cfgCursor]
-			if f.picker != nil {
+			if f.action != nil {
+				f.action(a)
+			} else if f.picker != nil {
 				f.picker(a)
 			} else if f.toggle != nil {
 				f.toggle(&a.cfgDraft)
-			} else {
+			} else if f.get != nil && f.set != nil {
 				a.cfgEditing = true
 				val := f.get(a.cfgDraft)
 				a.cfgEditBuf = []rune(val)
@@ -702,11 +803,11 @@ func (a *App) handleConfigByte(opts handleConfigByteOptions) {
 		a.renderInput()
 
 	case ch == 127 || ch == 0x08: // Backspace - clear current project field (unset → fall back to global)
-		if a.cfgTab == 2 && a.repoRoot != "" {
+		if a.cfgTab == cfgTabProject && a.projectConfigRoot() != "" {
 			fields := a.cfgCurrentFields()
 			if len(fields) > 0 && a.cfgCursor < len(fields) {
 				f := fields[a.cfgCursor]
-				if f.set != nil && f.get(a.cfgDraft) != "" {
+				if f.set != nil && f.get != nil && f.get(a.cfgDraft) != "" {
 					f.set(&a.cfgDraft, "")
 					a.renderInput()
 				}
@@ -805,6 +906,7 @@ func (a *App) handleConfigEditByte(opts handleConfigEditByteOptions) {
 		}
 		a.cfgEditing = false
 		a.cfgEditBuf = nil
+		a.clampConfigCursor()
 		a.renderInput()
 
 	case ch == 127 || ch == 0x08: // Backspace

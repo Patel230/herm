@@ -195,23 +195,37 @@ func (a *App) startInit() {
 	go func() { a.resultCh <- fetchSWEScoresCmd() }()
 	go func() { a.resultCh <- resolveWorkspaceCmd(cfg) }()
 	go func() {
-		client, err := newLangdagClient(cfg)
-		a.resultCh <- langdagReadyMsg{client: client, provider: cfg.defaultLangdagProvider(), err: err}
-	}()
-	go func() {
-		cachePath := catalogCachePath()
-		catalog, err := langdag.LoadModelCatalog(cachePath)
+		var catalog *langdag.ModelCatalog
+		loaded, err := loadStartupModelCatalog()
 		if err != nil {
 			log.Printf("warning: loading model catalog: %v", err)
+		} else if loaded != nil {
+			catalog = loaded.Catalog
+			a.resultCh <- catalogMsg{catalog: loaded.Catalog, source: loaded.Source, diagnostics: loaded.Diagnostics}
 		}
-		a.resultCh <- catalogMsg{catalog: catalog}
+		client, err := newLangdagClientWithCatalog(cfg, catalog)
+		a.resultCh <- langdagReadyMsg{client: client, provider: cfg.defaultLangdagProvider(), err: err}
 
-		// Best-effort background refresh of the cache
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if updated, err := langdag.FetchModelCatalog(ctx, cachePath); err == nil {
-			a.resultCh <- catalogMsg{catalog: updated}
+		// Best-effort background refresh. Startup never waits for this remote
+		// fetch; invalid remote data cannot replace the embedded startup catalog.
+		updated, err := refreshStartupModelCatalog(context.Background())
+		if err != nil {
+			log.Printf("warning: refreshing model catalog: %v", err)
+			return
+		}
+		if updated != nil && updated.Catalog != nil {
+			a.resultCh <- catalogMsg{catalog: updated.Catalog, source: updated.Source, diagnostics: updated.Diagnostics}
+			client, err := newLangdagClientWithCatalog(cfg, updated.Catalog)
+			a.resultCh <- langdagReadyMsg{client: client, provider: cfg.defaultLangdagProvider(), err: err}
 		}
 	}()
 	go func() { a.resultCh <- checkForUpdate(Version) }()
+}
+
+func loadStartupModelCatalog() (*langdag.CatalogLoadResult, error) {
+	return langdag.LoadRuntimeModelCatalog()
+}
+
+func refreshStartupModelCatalog(ctx context.Context) (*langdag.CatalogRefreshResult, error) {
+	return langdag.LoadRemoteModelCatalog(ctx, langdag.CatalogRefreshOptionsFromEnv(""))
 }

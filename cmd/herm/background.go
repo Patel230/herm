@@ -104,7 +104,9 @@ type langdagReadyMsg struct {
 }
 
 type catalogMsg struct {
-	catalog *langdag.ModelCatalog
+	catalog     *langdag.ModelCatalog
+	source      langdag.CatalogSource
+	diagnostics []langdag.CatalogDiagnosticV1
 }
 
 type resizeMsg struct{}
@@ -112,6 +114,8 @@ type resizeMsg struct{}
 type toolTimerTickMsg struct{}
 
 type agentTickMsg struct{}
+
+type configTickMsg struct{}
 
 // projectSnapshot holds a lightweight project context gathered at startup.
 type projectSnapshot struct {

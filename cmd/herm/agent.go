@@ -40,67 +40,197 @@ func langdagStoragePath() string {
 // newLangdagClient creates a langdag client configured from the app config.
 // Returns nil if no API keys are configured.
 func newLangdagClient(cfg Config) (*langdag.Client, error) {
-	// Use the first available provider as default.
-	if cfg.AnthropicAPIKey != "" {
-		return newLangdagClientForProvider(newLangdagClientForProviderOptions{cfg: cfg, provider: ProviderAnthropic})
+	return newLangdagClientWithCatalog(cfg, nil)
+}
+
+func newLangdagClientWithCatalog(cfg Config, catalogs ...*langdag.ModelCatalog) (*langdag.Client, error) {
+	var catalog *langdag.ModelCatalog
+	if len(catalogs) > 0 {
+		catalog = catalogs[0]
 	}
-	if cfg.OpenAIAPIKey != "" {
-		return newLangdagClientForProvider(newLangdagClientForProviderOptions{cfg: cfg, provider: ProviderOpenAI})
+	provider := cfg.defaultLangdagProvider()
+	if provider == "" {
+		return nil, nil
 	}
-	if cfg.GrokAPIKey != "" {
-		return newLangdagClientForProvider(newLangdagClientForProviderOptions{cfg: cfg, provider: ProviderGrok})
-	}
-	if cfg.OpenRouterAPIKey != "" {
-		return newLangdagClientForProvider(newLangdagClientForProviderOptions{cfg: cfg, provider: ProviderOpenRouter})
-	}
-	if cfg.GeminiAPIKey != "" {
-		return newLangdagClientForProvider(newLangdagClientForProviderOptions{cfg: cfg, provider: ProviderGemini})
-	}
-	if cfg.OllamaBaseURL != "" {
-		return newLangdagClientForProvider(newLangdagClientForProviderOptions{cfg: cfg, provider: ProviderOllama})
-	}
-	return nil, nil
+	return newLangdagClientForProvider(newLangdagClientForProviderOptions{cfg: cfg, provider: provider, catalog: catalog})
 }
 
 // newLangdagClientForProviderOptions is the parameter bundle for newLangdagClientForProvider.
 type newLangdagClientForProviderOptions struct {
 	cfg      Config
 	provider string
+	catalog  *langdag.ModelCatalog
 }
 
 // newLangdagClientForProvider creates a langdag client configured for a specific provider.
 func newLangdagClientForProvider(opts newLangdagClientForProviderOptions) (*langdag.Client, error) {
+	if opts.provider == "" {
+		opts.provider = opts.cfg.defaultLangdagProvider()
+	}
+	if !supportedHermProvider(opts.provider) {
+		return nil, fmt.Errorf("unsupported provider: %s", opts.provider)
+	}
 	langdagCfg := langdag.Config{
-		StoragePath: langdagStoragePath(),
+		StoragePath:   langdagStoragePath(),
+		ModelCatalog:  opts.catalog,
+		Deployments:   langdagDeploymentsFromConfig(opts.cfg),
+		RoutingPolicy: langdagRoutingPolicyFromConfig(opts.cfg.Routing),
 		RetryConfig: &langdag.RetryConfig{
 			BaseDelay: 2 * time.Second,
 		},
+		APIKeys: map[string]string{},
 	}
 
 	switch opts.provider {
 	case ProviderAnthropic:
 		langdagCfg.Provider = "anthropic"
-		langdagCfg.APIKeys = map[string]string{"anthropic": opts.cfg.AnthropicAPIKey}
 	case ProviderOpenAI:
 		langdagCfg.Provider = "openai"
-		langdagCfg.APIKeys = map[string]string{"openai": opts.cfg.OpenAIAPIKey}
 	case ProviderGrok:
 		langdagCfg.Provider = "grok"
-		langdagCfg.APIKeys = map[string]string{"grok": opts.cfg.GrokAPIKey}
 	case ProviderOpenRouter:
 		langdagCfg.Provider = "openrouter"
-		langdagCfg.APIKeys = map[string]string{"openrouter": opts.cfg.OpenRouterAPIKey}
 	case ProviderGemini:
 		langdagCfg.Provider = "gemini"
-		langdagCfg.APIKeys = map[string]string{"gemini": opts.cfg.GeminiAPIKey}
 	case ProviderOllama:
 		langdagCfg.Provider = "ollama"
-		langdagCfg.OllamaConfig = &langdag.OllamaConfig{BaseURL: opts.cfg.OllamaBaseURL}
-	default:
-		return nil, fmt.Errorf("unsupported provider: %s", opts.provider)
 	}
+	applyLegacyLangdagFields(applyLegacyLangdagFieldsOptions{langdagCfg: &langdagCfg, cfg: opts.cfg})
 
-	return langdag.New(langdagCfg)
+	client, err := langdag.New(langdagCfg)
+	if err != nil {
+		return nil, err
+	}
+	if opts.cfg.RequestCacheDir == "" {
+		return client, nil
+	}
+	cachedProvider, err := newRequestCacheProvider(newRequestCacheProviderOptions{inner: client.Provider(), dir: opts.cfg.RequestCacheDir, cfg: opts.cfg})
+	if err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	return langdag.NewWithDeps(client.Storage(), cachedProvider), nil
+}
+
+func supportedHermProvider(provider string) bool {
+	for _, supported := range supportedProviders {
+		if supported == provider {
+			return true
+		}
+	}
+	return false
+}
+
+func langdagDeploymentsFromConfig(cfg Config) map[string]langdag.DeploymentConfig {
+	deployments := map[string]langdag.DeploymentConfig{}
+	for deploymentID, deployment := range cfg.deploymentConfigs() {
+		deploymentOpts := deploymentConfigOptions{deploymentID: deploymentID, deployment: deployment}
+		if !deploymentHasRequiredConfig(deploymentOpts) {
+			continue
+		}
+		deployment = deploymentWithEnvFallbacks(deploymentOpts)
+		deployments[deploymentID] = langdag.DeploymentConfig{
+			APIKey:        deployment.APIKey,
+			BaseURL:       deployment.BaseURL,
+			Endpoint:      deployment.Endpoint,
+			APIVersion:    deployment.APIVersion,
+			ProjectID:     deployment.ProjectID,
+			Region:        deployment.Region,
+			ModelMappings: cloneStringMap(deployment.ModelMappings),
+		}
+	}
+	return deployments
+}
+
+func langdagRoutingPolicyFromConfig(policy *RoutingPolicy) *langdag.RoutingPolicy {
+	if policy == nil {
+		return nil
+	}
+	converted := &langdag.RoutingPolicy{
+		Default:   langdagRoutingStagesFromConfig(policy.Default),
+		Providers: map[string][]langdag.RoutingStage{},
+		Models:    map[string][]langdag.RoutingStage{},
+	}
+	for providerID, stages := range policy.Providers {
+		converted.Providers[providerID] = langdagRoutingStagesFromConfig(stages)
+	}
+	for modelID, stages := range policy.Models {
+		converted.Models[modelID] = langdagRoutingStagesFromConfig(stages)
+	}
+	if len(converted.Providers) == 0 {
+		converted.Providers = nil
+	}
+	if len(converted.Models) == 0 {
+		converted.Models = nil
+	}
+	return converted
+}
+
+func langdagRoutingStagesFromConfig(stages []RoutingStage) []langdag.RoutingStage {
+	if stages == nil {
+		return nil
+	}
+	converted := make([]langdag.RoutingStage, 0, len(stages))
+	for _, stage := range stages {
+		next := langdag.RoutingStage{Retries: stage.Retries}
+		for _, choice := range stage.Deployments {
+			next.Deployments = append(next.Deployments, langdag.DeploymentChoice{
+				DeploymentID: choice.DeploymentID,
+				Weight:       choice.Weight,
+			})
+		}
+		converted = append(converted, next)
+	}
+	return converted
+}
+
+type applyLegacyLangdagFieldsOptions struct {
+	langdagCfg *langdag.Config
+	cfg        Config
+}
+
+func applyLegacyLangdagFields(opts applyLegacyLangdagFieldsOptions) {
+	langdagCfg := opts.langdagCfg
+	cfg := opts.cfg
+	if cfg.AnthropicAPIKey != "" {
+		langdagCfg.APIKeys["anthropic"] = cfg.AnthropicAPIKey
+	}
+	if cfg.OpenAIAPIKey != "" {
+		langdagCfg.APIKeys["openai"] = cfg.OpenAIAPIKey
+	}
+	if cfg.GeminiAPIKey != "" {
+		langdagCfg.APIKeys["gemini"] = cfg.GeminiAPIKey
+	}
+	if cfg.GrokAPIKey != "" {
+		langdagCfg.APIKeys["grok"] = cfg.GrokAPIKey
+	}
+	if cfg.OpenRouterAPIKey != "" {
+		langdagCfg.APIKeys["openrouter"] = cfg.OpenRouterAPIKey
+	}
+	deployments := cfg.deploymentConfigs()
+	if deployment := deployments["openai-direct"]; deployment.BaseURL != "" {
+		langdagCfg.OpenAIConfig = &langdag.OpenAIConfig{BaseURL: deployment.BaseURL}
+	}
+	if deployment := deployments["grok-direct"]; deployment.BaseURL != "" {
+		langdagCfg.GrokConfig = &langdag.GrokConfig{BaseURL: deployment.BaseURL}
+	}
+	if deployment := deployments["openrouter"]; deployment.BaseURL != "" {
+		langdagCfg.OpenRouterConfig = &langdag.OpenRouterConfig{BaseURL: deployment.BaseURL}
+	}
+	if deployment := deployments["openai-azure"]; deployment.Endpoint != "" || deployment.APIVersion != "" || deployment.APIKey != "" {
+		langdagCfg.AzureOpenAIConfig = &langdag.AzureOpenAIConfig{Endpoint: deployment.Endpoint, APIVersion: deployment.APIVersion, APIKey: deployment.APIKey}
+	}
+	if deployment := deployments["anthropic-bedrock"]; deployment.Region != "" {
+		langdagCfg.BedrockConfig = &langdag.BedrockConfig{Region: deployment.Region}
+	}
+	if deployment := deployments["anthropic-vertex"]; deployment.ProjectID != "" || deployment.Region != "" {
+		langdagCfg.VertexConfig = &langdag.VertexConfig{ProjectID: deployment.ProjectID, Region: deployment.Region}
+	} else if deployment := deployments["gemini-vertex"]; deployment.ProjectID != "" || deployment.Region != "" {
+		langdagCfg.VertexConfig = &langdag.VertexConfig{ProjectID: deployment.ProjectID, Region: deployment.Region}
+	}
+	if deployment := deployments["ollama-local"]; deployment.BaseURL != "" {
+		langdagCfg.OllamaConfig = &langdag.OllamaConfig{BaseURL: deployment.BaseURL}
+	}
 }
 
 // defaultMaxOutputTokens is the per-response output token limit sent to the
@@ -159,21 +289,21 @@ type BackgroundCanceller interface {
 type AgentEventType int
 
 const (
-	EventTextDelta       AgentEventType = iota // streaming text chunk
-	EventToolCallStart                         // tool invocation beginning
-	EventToolCallDone                          // tool execution finished
-	EventToolResult                            // tool result available
-	EventApprovalReq                           // tool needs user approval
-	EventUsage                                 // token usage from an LLM call
-	EventDone                                  // agent loop finished
-	EventError                                 // error occurred
-	EventCompacted                             // conversation was auto-compacted
-	EventSubAgentDelta                         // sub-agent streaming text
-	EventSubAgentStatus                        // sub-agent status (tool calls, completion)
-	EventSubAgentStart                         // sub-agent started (carries task label)
-	EventLLMStart                              // LLM API call starting (for trace timing)
-	EventRetry                                 // API call being retried
-	EventStreamClear                           // TUI should discard in-progress streaming text (before stream retry)
+	EventTextDelta      AgentEventType = iota // streaming text chunk
+	EventToolCallStart                        // tool invocation beginning
+	EventToolCallDone                         // tool execution finished
+	EventToolResult                           // tool result available
+	EventApprovalReq                          // tool needs user approval
+	EventUsage                                // token usage from an LLM call
+	EventDone                                 // agent loop finished
+	EventError                                // error occurred
+	EventCompacted                            // conversation was auto-compacted
+	EventSubAgentDelta                        // sub-agent streaming text
+	EventSubAgentStatus                       // sub-agent status (tool calls, completion)
+	EventSubAgentStart                        // sub-agent started (carries task label)
+	EventLLMStart                             // LLM API call starting (for trace timing)
+	EventRetry                                // API call being retried
+	EventStreamClear                          // TUI should discard in-progress streaming text (before stream retry)
 )
 
 // AgentEvent carries a single event from the agent loop to the TUI.
@@ -203,6 +333,8 @@ type AgentEvent struct {
 	Usage      *types.Usage
 	Model      string
 	StopReason string // API stop_reason (e.g. "end_turn", "tool_use")
+	CostResult *types.CostResult
+	Metadata   *types.AssistantNodeMetadata
 
 	// EventToolCallDone / EventToolResult
 	Duration time.Duration
@@ -230,12 +362,12 @@ type ApprovalResponse struct {
 
 // Agent orchestrates LLM calls and tool execution.
 type Agent struct {
-	id               string
-	client           *langdag.Client
-	tools            map[string]Tool
-	toolDefs         []types.ToolDefinition
-	systemPrompt     string
-	model            string
+	id                string
+	client            *langdag.Client
+	tools             map[string]Tool
+	toolDefs          []types.ToolDefinition
+	systemPrompt      string
+	model             string
 	contextWindow     int    // model's context window in tokens; 0 = unknown (no clearing)
 	explorationModel  string // cheap model for compaction summaries; empty = use main model
 	maxToolIterations int    // tool-call loop cap; 0 = use defaultMaxToolIterations
@@ -244,7 +376,7 @@ type Agent struct {
 	events   chan AgentEvent
 	approval chan ApprovalResponse
 	doneCh   chan struct{} // closed when EventDone is emitted; backup signal for TUI
-	doneOnce sync.Once    // prevents double-close of doneCh
+	doneOnce sync.Once     // prevents double-close of doneCh
 
 	streamChunkTimeout time.Duration // max time to wait for the next stream chunk; 0 = use default
 
@@ -264,10 +396,10 @@ type Agent struct {
 
 	// Turn budget tracking for sub-agent budget consciousness.
 	// Updated by the drain loop in SubAgentTool via SetTurnProgress.
-	turnMu       sync.Mutex
-	maxTurns     int // 0 = no turn budget (main agent); >0 = sub-agent turn limit
-	turnsUsed    int
-	turnTokensIn int // cumulative input tokens reported via SetTokenProgress
+	turnMu        sync.Mutex
+	maxTurns      int // 0 = no turn budget (main agent); >0 = sub-agent turn limit
+	turnsUsed     int
+	turnTokensIn  int // cumulative input tokens reported via SetTokenProgress
 	turnTokensOut int // cumulative output tokens reported via SetTokenProgress
 
 	// Background sub-agent completions, injected into the next LLM call.
@@ -442,7 +574,6 @@ func (a *Agent) findBackgroundWaiter() BackgroundWaiter {
 	return nil
 }
 
-
 // Cancel stops the running agent loop and signals every background sub-agent
 // to stop. Background sub-agents run on detached contexts, so their cancel
 // funcs must be invoked explicitly here — otherwise ESC-twice would only stop
@@ -577,18 +708,25 @@ func (a *Agent) emitUsage(ctx context.Context, opts emitUsageOptions) int {
 	if err != nil || node == nil {
 		return 0
 	}
+	metadata := metadataFromNode(node)
+	usage := types.Usage{
+		InputTokens:              node.TokensIn,
+		OutputTokens:             node.TokensOut,
+		CacheReadInputTokens:     node.TokensCacheRead,
+		CacheCreationInputTokens: node.TokensCacheCreation,
+		ReasoningTokens:          node.TokensReasoning,
+	}
+	if metadata != nil && metadata.NormalizedUsage != nil {
+		usage = types.UsageFromNormalizedUsage(*metadata.NormalizedUsage)
+	}
 	a.emit(AgentEvent{
 		Type:       EventUsage,
 		Model:      node.Model,
 		NodeID:     opts.nodeID,
 		StopReason: opts.stopReason,
-		Usage: &types.Usage{
-			InputTokens:              node.TokensIn,
-			OutputTokens:             node.TokensOut,
-			CacheReadInputTokens:     node.TokensCacheRead,
-			CacheCreationInputTokens: node.TokensCacheCreation,
-			ReasoningTokens:          node.TokensReasoning,
-		},
+		Usage:      &usage,
+		Metadata:   metadata,
+		CostResult: costResultFromAssistantMetadata(metadata),
 	})
 	// Accumulate session-level stats for budget awareness.
 	inputTokens := node.TokensIn + node.TokensCacheRead

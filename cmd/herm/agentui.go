@@ -63,29 +63,107 @@ func formatToolDefinitions(opts formatToolDefinitionsOptions) string {
 
 // showModelChange displays an info message when the active model changes.
 func (a *App) showModelChange(modelID string) {
-	if modelID == "" || modelID == a.lastModelID {
+	if modelID == "" {
 		return
 	}
 	explorationID := a.config.resolveExplorationModel(a.models)
-	line := "Using " + modelID
-	offline := a.ollamaFetched && a.config.OllamaBaseURL != "" && a.isOllamaOffline(modelID)
-	if offline {
-		line += " \033[33m(offline)\033[34;3m"
+	offline := a.ollamaFetched && a.config.ollamaBaseURL() != "" && a.isOllamaOffline(modelID)
+	line, blocks := modelDisplayLine(modelDisplayLineOptions{modelID: modelID, explorationID: explorationID, offline: offline})
+	if line == a.lastModelDisplayLine {
+		return
 	}
-	if explorationID != "" && explorationID != modelID {
-		line += "  exploration: " + explorationID
-	}
-	a.messages = append(a.messages, chatMessage{kind: msgInfo, content: line})
+	a.messages = append(a.messages, chatMessage{kind: msgInfo, content: line, inlineBlocks: blocks})
 	if offline {
-		msg := fmt.Sprintf("\033[33m⚠\033[34;3m Ollama unreachable at \033[36m%s\033[34;3m — run '\033[32;3mollama serve\033[34;3m' to continue", a.config.OllamaBaseURL)
-		providers := a.config.configuredProviders()
-		delete(providers, ProviderOllama)
-		if len(providers) > 0 {
-			msg = fmt.Sprintf("\033[33m⚠\033[34;3m Ollama unreachable at \033[36m%s\033[34;3m — run '\033[32;3mollama serve\033[34;3m' or switch to another provider (/config)", a.config.OllamaBaseURL)
-		}
-		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: msg})
+		a.showOllamaOfflineNotice()
+	} else {
+		a.lastOllamaOfflineNotice = ""
 	}
 	a.lastModelID = modelID
+	a.lastModelDisplayLine = line
+}
+
+type modelDisplayLineOptions struct {
+	modelID       string
+	explorationID string
+	offline       bool
+}
+
+func modelDisplayLine(opts modelDisplayLineOptions) (string, []inlineBlock) {
+	modelID, explorationID, offline := opts.modelID, opts.explorationID, opts.offline
+	content := "Using " + modelID
+	activeText := "\033[34;3mUsing " + modelID
+	if offline {
+		content += " (offline)"
+		activeText += " \033[33m(offline)"
+	}
+	blocks := []inlineBlock{newInlineBlock(activeText)}
+	if explorationID != "" && explorationID != modelID {
+		content += " exploration: " + explorationID
+		blocks = append(blocks, styledInlineBlock(styledInlineBlockOptions{style: "\033[34;3m", text: "exploration: " + explorationID}))
+	}
+	return content, blocks
+}
+
+func (a *App) showOllamaOfflineNotice() {
+	msg := fmt.Sprintf("\033[33m⚠\033[34;3m Ollama unreachable at \033[36m%s\033[34;3m — run '\033[32;3mollama serve\033[34;3m' to continue", a.config.ollamaBaseURL())
+	providers := a.config.configuredProviders()
+	delete(providers, ProviderOllama)
+	if len(providers) > 0 {
+		msg = fmt.Sprintf("\033[33m⚠\033[34;3m Ollama unreachable at \033[36m%s\033[34;3m — run '\033[32;3mollama serve\033[34;3m' or switch to another provider (/config)", a.config.ollamaBaseURL())
+	}
+	if msg == a.lastOllamaOfflineNotice {
+		return
+	}
+	a.messages = append(a.messages, chatMessage{kind: msgInfo, content: msg})
+	a.lastOllamaOfflineNotice = msg
+}
+
+func (a *App) normalizeProjectConfigWithCurrentModels() {
+	if a.models == nil {
+		return
+	}
+	normalized := normalizeProjectConfigForModels(normalizeProjectConfigForModelsOptions{pc: a.projectConfig, models: a.models})
+	if normalized == a.projectConfig {
+		return
+	}
+	a.projectConfig = normalized
+	a.rebuildEffectiveConfig()
+}
+
+func (a *App) showProjectModelDiagnostics() {
+	diagnostics := a.projectModelDiagnostics()
+	signature := strings.Join(diagnostics, "\n")
+	if signature == "" {
+		a.lastModelDiagnostics = ""
+		return
+	}
+	if signature == a.lastModelDiagnostics {
+		return
+	}
+	a.lastModelDiagnostics = signature
+	for _, diagnostic := range diagnostics {
+		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "\033[33m⚠\033[34;3m " + diagnostic})
+	}
+}
+
+func (a *App) projectModelDiagnostics() []string {
+	if !a.configReady || a.models == nil {
+		return nil
+	}
+	var diagnostics []string
+	if a.projectConfig.ActiveModel != "" {
+		result := a.config.resolveActiveModelResult(a.models)
+		if result.Fallback && result.Diagnostic != "" {
+			diagnostics = append(diagnostics, result.Diagnostic)
+		}
+	}
+	if a.projectConfig.ExplorationModel != "" {
+		result := a.config.resolveExplorationModelResult(a.models)
+		if result.Fallback && result.Diagnostic != "" {
+			diagnostics = append(diagnostics, result.Diagnostic)
+		}
+	}
+	return diagnostics
 }
 
 // maybeShowInitialModels shows the startup model line once both the model
@@ -94,12 +172,37 @@ func (a *App) maybeShowInitialModels() {
 	if a.shownInitialModel || !a.configReady || a.models == nil {
 		return
 	}
+	a.normalizeProjectConfigWithCurrentModels()
 	a.shownInitialModel = true
-	a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "v" + Version + " (container: " + hermImageTag + ")"})
+	a.messages = append(a.messages, versionDisplayMessage())
+	a.showProjectModelDiagnostics()
+	a.showModelChange(a.config.resolveActiveModel(a.models))
+}
+
+func versionDisplayMessage() chatMessage {
+	content := "v" + Version + " (container: " + hermImageTag + ")"
+	return chatMessage{
+		kind:    msgInfo,
+		content: content,
+		inlineBlocks: []inlineBlock{
+			styledInlineBlock(styledInlineBlockOptions{style: "\033[34;3m", text: "v" + Version}),
+			styledInlineBlock(styledInlineBlockOptions{style: "\033[34;3m", text: "(container: " + hermImageTag + ")"}),
+		},
+	}
+}
+
+func (a *App) refreshResolvedModelDisplay() {
+	if !a.configReady || a.models == nil {
+		return
+	}
+	a.normalizeProjectConfigWithCurrentModels()
+	a.showProjectModelDiagnostics()
 	a.showModelChange(a.config.resolveActiveModel(a.models))
 }
 
 func (a *App) startAgent(userMessage string) {
+	a.normalizeProjectConfigWithCurrentModels()
+	a.showProjectModelDiagnostics()
 	// Move previous attachment files to past/ so /attachments only has current-message files.
 	if dir := a.attachmentDir(); dir != "" {
 		if entries, err := os.ReadDir(dir); err == nil {
@@ -169,29 +272,17 @@ func (a *App) startAgent(userMessage string) {
 		return
 	}
 
+	availableModels := a.config.availableModels(a.models)
 	var modelProvider string
-	if modelDef := findModelByID(findModelByIDOptions{models: a.models, id: modelID}); modelDef != nil {
-		modelProvider = modelDef.Provider
+	if modelDef := findModelByID(findModelByIDOptions{models: availableModels, id: modelID}); modelDef != nil {
+		modelProvider = configuredProviderForModel(configuredProviderForModelOptions{cfg: a.config, model: *modelDef})
 	}
 
 	// Server-side tools (e.g. web search) are handled by the LLM provider.
 	// Some models don't support them, so we check before including them.
 	var serverTools []types.ToolDefinition
-	if supportsServerTools(supportsServerToolsOptions{provider: modelProvider, modelID: modelID, models: a.models}) {
+	if supportsServerTools(supportsServerToolsOptions{provider: modelProvider, modelID: modelID, models: availableModels}) {
 		serverTools = []types.ToolDefinition{WebSearchToolDef()}
-	}
-
-	if modelProvider != "" && modelProvider != a.langdagProvider {
-		if a.langdagClient != nil {
-			a.langdagClient.Close()
-		}
-		client, err := newLangdagClientForProvider(newLangdagClientForProviderOptions{cfg: a.config, provider: modelProvider})
-		if err != nil {
-			a.messages = append(a.messages, chatMessage{kind: msgError, content: fmt.Sprintf("Error initializing %s provider: %v", modelProvider, err)})
-			return
-		}
-		a.langdagClient = client
-		a.langdagProvider = modelProvider
 	}
 
 	// Load project-local skills from .herm/skills/
@@ -231,7 +322,7 @@ func (a *App) startAgent(userMessage string) {
 	}
 	explorationModelID := a.config.resolveExplorationModel(a.models)
 	subAgentServerTools := serverTools
-	if !supportsServerTools(supportsServerToolsOptions{provider: modelProvider, modelID: explorationModelID, models: a.models}) {
+	if !supportsServerTools(supportsServerToolsOptions{provider: modelProvider, modelID: explorationModelID, models: availableModels}) {
 		subAgentServerTools = nil
 	}
 	subAgentTool := NewSubAgentTool(SubAgentConfig{
@@ -486,16 +577,16 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 		if a.hasPendingBackgroundAgents() {
 			break
 		}
-			a.streamingText += event.Text
-			if idx := strings.LastIndex(a.streamingText, "\n"); idx >= 0 {
-				a.messages = append(a.messages, chatMessage{
-					kind:      msgAssistant,
-					content:   a.streamingText[:idx+1],
-					leadBlank: a.needsTextSep,
-				})
-				a.needsTextSep = false
-				a.streamingText = a.streamingText[idx+1:]
-			}
+		a.streamingText += event.Text
+		if idx := strings.LastIndex(a.streamingText, "\n"); idx >= 0 {
+			a.messages = append(a.messages, chatMessage{
+				kind:      msgAssistant,
+				content:   a.streamingText[:idx+1],
+				leadBlank: a.needsTextSep,
+			})
+			a.needsTextSep = false
+			a.streamingText = a.streamingText[idx+1:]
+		}
 		a.render()
 
 	case EventToolCallStart:
@@ -578,7 +669,12 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 			a.traceUsageSeen = false
 		}
 		if event.Usage != nil {
-			cost := computeCost(computeCostOptions{models: a.models, modelID: event.Model, usage: *event.Usage})
+			fallbackCost := computeCostResult(computeCostOptions{models: a.models, modelID: event.Model, usage: *event.Usage})
+			costResult := fallbackCost
+			if event.CostResult != nil {
+				costResult = preferStructuredCost(structuredCostPreference{metadataCost: *event.CostResult, fallbackCost: fallbackCost})
+			}
+			cost := costResult.Total
 			a.sessionCostUSD += cost
 			a.lastInputTokens = event.Usage.InputTokens + event.Usage.CacheReadInputTokens + event.Usage.CacheCreationInputTokens
 			// Propagate cost to the main agent for system prompt budget display.
@@ -607,6 +703,8 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 					nodeID:     event.NodeID,
 					usage:      traceUsageFromTypes(event.Usage),
 					costUSD:    cost,
+					cost:       &costResult,
+					metadata:   event.Metadata,
 					stopReason: event.StopReason,
 				})
 				a.traceCollector.FlushToFile(a.traceFilePath)
@@ -622,6 +720,16 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 
 	case EventApprovalReq:
 		debugLog("approval_req: %s", event.ApprovalDesc)
+		if a.headless {
+			if a.traceCollector != nil {
+				a.traceCollector.AddApproval(AddApprovalOptions{toolID: event.ToolID, desc: event.ApprovalDesc, approved: false})
+			}
+			if a.agent != nil {
+				a.agent.Approve(ApprovalResponse{Approved: false})
+			}
+			a.messages = append(a.messages, chatMessage{kind: msgError, content: "Tool approval is unavailable in headless mode; denied " + approvalShortDesc(approvalShortDescOptions{toolName: event.ToolName, input: event.ToolInput})})
+			return
+		}
 		a.awaitingApproval = true
 		a.approvalPauseStart = time.Now()
 		a.approvalToolID = event.ToolID
