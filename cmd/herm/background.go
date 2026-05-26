@@ -46,6 +46,22 @@ type containerErrMsg struct {
 	err error
 }
 
+type containerRetryMsg struct {
+	err            error
+	retryInSeconds int
+}
+
+type containerRetryRecoveredMsg struct{}
+
+const dockerRetryInterval = 5 * time.Second
+
+func dockerStatusText(err error) string {
+	if cerr, ok := err.(*ContainerError); ok && cerr.Code == ErrDockerNotFound {
+		return "docker not installed"
+	}
+	return "docker not running"
+}
+
 type containerStatusMsg struct {
 	text string
 }
@@ -168,23 +184,44 @@ type bootContainerCmdOptions struct {
 	workspace string
 	sessionID string
 	ch        chan<- any
+	stop      <-chan struct{}
 }
 
 func bootContainerCmd(opts bootContainerCmdOptions) {
-	workspace, sessionID, ch := opts.workspace, opts.sessionID, opts.ch
+	workspace, sessionID, ch, stop := opts.workspace, opts.sessionID, opts.ch, opts.stop
 	ch <- containerStatusMsg{text: "checking docker…"}
 
 	client := NewContainerClient(ContainerConfig{Image: defaultContainerImage})
 
 	if err := client.CheckDocker(); err != nil {
-		if cerr, ok := err.(*ContainerError); ok && cerr.Code == ErrDockerNotFound {
-			ch <- containerStatusMsg{text: "docker not installed"}
-		} else {
-			ch <- containerStatusMsg{text: "docker not running"}
+		ch <- containerStatusMsg{text: dockerStatusText(err)}
+		retryInSeconds := int(dockerRetryInterval / time.Second)
+		ch <- containerRetryMsg{err: err, retryInSeconds: retryInSeconds}
+
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				retryInSeconds--
+				if retryInSeconds <= 0 {
+					if err = client.CheckDocker(); err == nil {
+						ch <- containerRetryRecoveredMsg{}
+						ch <- containerStatusMsg{text: "docker available"}
+						goto dockerOK
+					}
+					ch <- containerStatusMsg{text: dockerStatusText(err)}
+					retryInSeconds = int(dockerRetryInterval / time.Second)
+				}
+				if retryInSeconds > 0 {
+					ch <- containerRetryMsg{err: err, retryInSeconds: retryInSeconds}
+				}
+			}
 		}
-		ch <- containerErrMsg{err: err}
-		return
 	}
+dockerOK:
 
 	// Build from .herm/Dockerfile (write base template if none exists).
 	imageName := buildContainerImage(buildContainerImageOptions{workspace: workspace, ch: ch})
