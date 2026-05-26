@@ -618,9 +618,11 @@ func (a *App) buildConfigRows() []string {
 			continue
 		}
 		if a.cfgEditing && i == a.cfgCursor {
-			// Show editable text input with underline
 			editStr := string(a.cfgEditBuf)
-			rows = append(rows, fmt.Sprintf("%s \033[4;1m%s\033[0m %s", styledConfigFieldLabel(styledConfigFieldLabelOptions{label: label + ":", selected: true}), editStr, styledConfigCursor("◆")))
+			if f.secret {
+				editStr = secretEditDisplay(editStr)
+			}
+			rows = append(rows, fmt.Sprintf("%s \033[1m%s\033[0m %s", styledConfigFieldLabel(styledConfigFieldLabelOptions{label: label + ":", selected: true}), editStr, styledConfigCursor("◆")))
 		} else {
 			val := ""
 			if f.display != nil {
@@ -822,11 +824,15 @@ func (a *App) handleConfigEditByte(opts handleConfigEditByteOptions) {
 		a.renderInput()
 
 	case ch == 127 || ch == 0x08: // Backspace
-		if a.cfgEditCursor > 0 {
+		fields := a.cfgCurrentFields()
+		if a.cfgCursor < len(fields) && fields[a.cfgCursor].secret {
+			a.cfgEditBuf = nil
+			a.cfgEditCursor = 0
+		} else if a.cfgEditCursor > 0 {
 			a.cfgEditCursor--
 			a.cfgEditBuf = append(a.cfgEditBuf[:a.cfgEditCursor], a.cfgEditBuf[a.cfgEditCursor+1:]...)
-			a.renderInput()
 		}
+		a.renderInput()
 
 	case ch == 0x01: // Ctrl+A
 		a.cfgEditCursor = 0
@@ -837,16 +843,33 @@ func (a *App) handleConfigEditByte(opts handleConfigEditByteOptions) {
 		a.renderInput()
 
 	case ch == 0x15: // Ctrl+U - kill to start
-		a.cfgEditBuf = a.cfgEditBuf[a.cfgEditCursor:]
-		a.cfgEditCursor = 0
+		fields := a.cfgCurrentFields()
+		if a.cfgCursor < len(fields) && fields[a.cfgCursor].secret {
+			a.cfgEditBuf = nil
+			a.cfgEditCursor = 0
+		} else {
+			a.cfgEditBuf = a.cfgEditBuf[a.cfgEditCursor:]
+			a.cfgEditCursor = 0
+		}
 		a.renderInput()
 
 	case ch == 0x0b: // Ctrl+K - kill to end
-		a.cfgEditBuf = a.cfgEditBuf[:a.cfgEditCursor]
+		fields := a.cfgCurrentFields()
+		if a.cfgCursor < len(fields) && fields[a.cfgCursor].secret {
+			a.cfgEditBuf = nil
+			a.cfgEditCursor = 0
+		} else {
+			a.cfgEditBuf = a.cfgEditBuf[:a.cfgEditCursor]
+		}
 		a.renderInput()
 
 	case ch == 0x17: // Ctrl+W - delete word backward
-		if a.cfgEditCursor > 0 {
+		fields := a.cfgCurrentFields()
+		if a.cfgCursor < len(fields) && fields[a.cfgCursor].secret {
+			a.cfgEditBuf = nil
+			a.cfgEditCursor = 0
+			a.renderInput()
+		} else if a.cfgEditCursor > 0 {
 			a.deleteConfigEditWordBackward()
 			a.renderInput()
 		}
