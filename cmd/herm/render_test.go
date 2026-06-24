@@ -547,6 +547,79 @@ func TestBuildInputRows(t *testing.T) {
 	}
 }
 
+func TestBuildInputRowsApprovalUsesCodeBlockAndOptions(t *testing.T) {
+	app := &App{
+		width:              80,
+		awaitingApproval:   true,
+		approvalPauseStart: time.Now(),
+		approvalSummary:    "bash",
+		approvalDesc:       "git status && go test ./...",
+		approvalSelected:   1,
+	}
+
+	rows := app.buildInputRows()
+	joined := strings.Join(rows, "\n")
+	plain := ansiEscRe.ReplaceAllString(joined, "")
+	for _, want := range []string{"Allow bash?", "git status && go test ./...", "Accept once [y]", "Always accept [cmd+y]", "Deny [n]"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("approval rows missing %q:\n%s", want, plain)
+		}
+	}
+	if strings.Contains(joined, codeBackgroundStyle) {
+		t.Fatalf("approval detail should not use a second background: %#v", rows)
+	}
+	if !strings.Contains(joined, approvalDetailStyle) {
+		t.Fatalf("approval detail should use dimmed panel text style: %#v", rows)
+	}
+	if !strings.Contains(joined, inputBgStyle) {
+		t.Fatalf("approval panel should use input background style: %#v", rows)
+	}
+	if strings.Contains(plain, "─") {
+		t.Fatalf("approval panel should not render separator rules: %#v", rows)
+	}
+	if !strings.Contains(joined, "\033[7m Always accept [cmd+y] \033[27m") {
+		t.Fatalf("selected option not highlighted: %#v", rows)
+	}
+	detailRow := -1
+	for i, row := range rows {
+		if strings.Contains(ansiEscRe.ReplaceAllString(row, ""), "git status && go test ./...") {
+			detailRow = i
+			break
+		}
+	}
+	if detailRow < 0 {
+		t.Fatalf("approval detail row missing in %#v", rows)
+	}
+	detailPlain := ansiEscRe.ReplaceAllString(rows[detailRow], "")
+	if strings.TrimSpace(detailPlain) != "git status && go test ./..." {
+		t.Fatalf("approval detail row = %q, want centered command detail", detailPlain)
+	}
+	if strings.HasPrefix(detailPlain, "git status") {
+		t.Fatalf("approval detail should be centered, got %q", detailPlain)
+	}
+	if len(rows) < 7 {
+		t.Fatalf("approval rows = %#v, want title, spacing, detail, spacing, options, spacing", rows)
+	}
+	if rowPlain := strings.TrimSpace(ansiEscRe.ReplaceAllString(rows[2], "")); rowPlain != "" {
+		t.Fatalf("row after approval title = %q, want empty spacer", rowPlain)
+	}
+	optionRow := -1
+	for i, row := range rows {
+		if strings.Contains(ansiEscRe.ReplaceAllString(row, ""), "Always accept") {
+			optionRow = i
+			break
+		}
+	}
+	if optionRow <= 0 || optionRow+1 >= len(rows) {
+		t.Fatalf("option row index = %d in %#v", optionRow, rows)
+	}
+	for _, idx := range []int{optionRow - 1, optionRow + 1} {
+		if rowPlain := strings.TrimSpace(ansiEscRe.ReplaceAllString(rows[idx], "")); rowPlain != "" {
+			t.Fatalf("row %d around approval choices = %q, want empty spacer", idx, rowPlain)
+		}
+	}
+}
+
 func TestBuildInputRowsCPSLStatusUsesSandboxLabel(t *testing.T) {
 	app := &App{
 		width:          80,
@@ -2288,9 +2361,25 @@ func TestRenderFullClearSequence(t *testing.T) {
 		t.Errorf("renderFull should emit hide-cursor + home + clear-screen + clear-scrollback sequence")
 	}
 
-	// Should contain clear-to-end-of-screen after rows
-	if !strings.Contains(output, "\033[0m\033[J") {
-		t.Errorf("render should emit clear-to-end-of-screen (\\033[J) after rows")
+	if strings.Contains(output, "\033[999C\033[0m\033[J") {
+		t.Errorf("render should not clear from the final row's rightmost cell")
+	}
+	if !strings.Contains(output, "\033[J") {
+		t.Errorf("render should clear stale rows below written content")
+	}
+}
+
+func TestClearRowsBelowWrittenRowsDoesNotTouchFinalRow(t *testing.T) {
+	var buf strings.Builder
+	clearRowsBelowWrittenRows(clearRowsBelowWrittenRowsOptions{buf: &buf, lastRow: 6, terminalHeight: 20})
+	if got, want := buf.String(), "\033[7;1H\033[0m\033[J"; got != want {
+		t.Fatalf("clearRowsBelowWrittenRows = %q, want %q", got, want)
+	}
+
+	buf.Reset()
+	clearRowsBelowWrittenRows(clearRowsBelowWrittenRowsOptions{buf: &buf, lastRow: 20, terminalHeight: 20})
+	if got := buf.String(); got != "" {
+		t.Fatalf("clearRowsBelowWrittenRows on bottom row = %q, want no clear", got)
 	}
 }
 

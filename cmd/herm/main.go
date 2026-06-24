@@ -113,6 +113,9 @@ type App struct {
 	cpslReady               bool
 	cpslErr                 error
 	cpslStatusText          string
+	nakedReady              bool
+	nakedErr                error
+	nakedStatusText         string
 	containerRetryMsgIdx    int
 	containerRetryMsgActive bool
 	configReady             bool // true after workspace/project config has been merged
@@ -133,6 +136,7 @@ type App struct {
 	awaitingApproval        bool
 	approvalDesc            string
 	approvalSummary         string
+	approvalSelected        int
 	autocompleteIdx         int
 	streamingText           string
 	pendingToolCall         string
@@ -439,55 +443,6 @@ func (a *App) handleInputByte(ch byte) bool {
 
 // Attachment, clipboard, tmp-dir, and startup-fanout helpers live in wiring.go.
 
-func (a *App) handleApprovalByte(ch byte) {
-	switch ch {
-	case 'y', 'Y':
-		a.awaitingApproval = false
-		var waitDur time.Duration
-		if !a.approvalPauseStart.IsZero() {
-			waitDur = time.Since(a.approvalPauseStart)
-			a.approvalPausedTotal += waitDur
-			a.approvalPauseStart = time.Time{}
-		}
-		if a.traceCollector != nil && a.approvalToolID != "" {
-			a.traceCollector.AddApproval(AddApprovalOptions{toolID: a.approvalToolID, desc: a.approvalDesc, approved: true, waitDur: waitDur})
-		}
-		// Restart tool timer ticker (frozen during approval).
-		if !a.toolStartTime.IsZero() && a.toolTimer == nil {
-			a.toolTimer = time.NewTicker(100 * time.Millisecond)
-			go func(ticker *time.Ticker, ch chan any) {
-				for range ticker.C {
-					select {
-					case ch <- toolTimerTickMsg{}:
-					default:
-					}
-				}
-			}(a.toolTimer, a.resultCh)
-		}
-		if a.agent != nil {
-			a.agent.Approve(ApprovalResponse{Approved: true})
-		}
-		a.messages = append(a.messages, chatMessage{kind: msgSuccess, content: "Approved"})
-		a.render()
-	case 'n', 'N':
-		a.awaitingApproval = false
-		var waitDur time.Duration
-		if !a.approvalPauseStart.IsZero() {
-			waitDur = time.Since(a.approvalPauseStart)
-			a.approvalPausedTotal += waitDur
-			a.approvalPauseStart = time.Time{}
-		}
-		if a.traceCollector != nil && a.approvalToolID != "" {
-			a.traceCollector.AddApproval(AddApprovalOptions{toolID: a.approvalToolID, desc: a.approvalDesc, approved: false, waitDur: waitDur})
-		}
-		if a.agent != nil {
-			a.agent.Approve(ApprovalResponse{Approved: false})
-		}
-		a.messages = append(a.messages, chatMessage{kind: msgError, content: "Denied"})
-		a.render()
-	}
-}
-
 func (a *App) handleEnter() {
 	// Text prompt active — submit to callback.
 	if a.promptCallback != nil {
@@ -575,6 +530,15 @@ func (a *App) handleEnter() {
 	}
 	if a.backend == backendCPSL && !a.cpslReady {
 		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Local sandbox is still starting — the agent won't have Luau tools until it's ready."})
+		a.render()
+		return
+	}
+	if a.backend == backendNaked && !a.nakedReady {
+		msg := "Naked sandbox is unavailable."
+		if a.nakedErr != nil {
+			msg += " " + a.nakedErr.Error()
+		}
+		a.messages = append(a.messages, chatMessage{kind: msgError, content: msg})
 		a.render()
 		return
 	}

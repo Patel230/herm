@@ -124,6 +124,15 @@ func (a *App) startAgent(userMessage string) {
 		a.render()
 		return
 	}
+	if a.backend == backendNaked && !a.nakedReady {
+		msg := "Naked sandbox is unavailable."
+		if a.nakedErr != nil {
+			msg += " " + a.nakedErr.Error()
+		}
+		a.messages = append(a.messages, chatMessage{kind: msgError, content: msg})
+		a.render()
+		return
+	}
 
 	modelResult := a.resolveMainAgentModelResult()
 	modelID := modelResult.ResolvedModelID
@@ -312,6 +321,19 @@ func (a *App) runtimeTools() []Tool {
 		}
 		return []Tool{
 			NewCPSLLuauTool(NewCPSLLuauToolOptions{Worker: a.cpslWorker, Timeout: 120}),
+		}
+	}
+	if a.backend == backendNaked {
+		if !a.nakedReady || a.worktreePath == "" {
+			return nil
+		}
+		permissions := newNakedPermissionStore(newNakedPermissionStoreOptions{
+			path:      nakedPermissionsPath(a.worktreePath),
+			workspace: a.worktreePath,
+		})
+		return []Tool{
+			NewNakedBashTool(NewNakedBashToolOptions{WorkDir: a.worktreePath, PermissionStore: permissions, Timeout: 120}),
+			NewNakedRequestPermissionsToolWithStore(newNakedRequestPermissionsToolWithStoreOptions{workDir: a.worktreePath, store: permissions}),
 		}
 	}
 
@@ -667,6 +689,7 @@ func (a *App) handleAgentEvent(event AgentEvent) {
 		a.approvalToolID = event.ToolID
 		a.approvalSummary = approvalShortDesc(approvalShortDescOptions{toolName: event.ToolName, input: event.ToolInput})
 		a.approvalDesc = event.ApprovalDesc
+		a.approvalSelected = 0
 		// Stop tool timer ticker so the tool box timer freezes during approval.
 		if a.toolTimer != nil {
 			a.toolTimer.Stop()

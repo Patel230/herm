@@ -31,10 +31,40 @@ const (
 	toolBash                 = "bash"
 	toolLocalSandboxExec     = "local_sandbox_exec"
 	toolLocalSandboxExecBash = "local_sandbox_exec_bash"
+	toolRequestPermissions   = "request_permissions"
+)
+
+const (
+	bashSandboxPermissionsUseDefault       = "use_default"
+	bashSandboxPermissionsWithAdditional   = "with_additional_permissions"
+	bashSandboxPermissionsRequireEscalated = "require_escalated"
+	nakedEscalatedApprovalPrefix           = "require_escalated: "
+	nakedAdditionalApprovalPrefix          = "with_additional_permissions: "
 )
 
 type bashRunner interface {
 	RunBash(ctx context.Context, opts bashRunOptions) (CommandResult, error)
+}
+
+type commandApprovalPolicy interface {
+	RequiresApproval(command string) bool
+	RecordApproval(opts recordCommandApprovalOptions) error
+	FinishApproval(command string)
+}
+
+type toolApprovalRecorder interface {
+	RecordApproval(opts recordToolApprovalOptions) error
+}
+
+type recordCommandApprovalOptions struct {
+	command         string
+	commandPrefixes [][]string
+	remember        bool
+}
+
+type recordToolApprovalOptions struct {
+	input    json.RawMessage
+	remember bool
 }
 
 type containerBashRunner struct {
@@ -42,8 +72,14 @@ type containerBashRunner struct {
 }
 
 type bashRunOptions struct {
-	command string
-	timeout int
+	command               string
+	timeout               int
+	sandboxPermissions    string
+	additionalPermissions bashAdditionalPermissions
+}
+
+type requestPermissionsInput struct {
+	Permissions bashAdditionalPermissions `json:"permissions"`
 }
 
 func (r containerBashRunner) RunBash(ctx context.Context, opts bashRunOptions) (CommandResult, error) {
@@ -94,6 +130,8 @@ type BashTool struct {
 	timeout             int // default timeout in seconds
 	descriptionFallback string
 	commandDescription  string
+	approvalPolicy      commandApprovalPolicy
+	hostTool            bool
 }
 
 // NewBashToolOptions holds the parameters for NewBashTool.
@@ -127,6 +165,49 @@ func (t *BashTool) Definition() types.ToolDefinition {
 		commandDescription = "The bash command to execute"
 	}
 	commandDescriptionJSON, _ := json.Marshal(commandDescription)
+	approvalProperties := ""
+	if t.hostTool {
+		approvalProperties = `,
+				"sandbox_permissions": {
+					"type": "string",
+					"enum": ["use_default", "with_additional_permissions", "require_escalated"],
+					"description": "Per-command sandbox override. Defaults to use_default; use with_additional_permissions with additional_permissions for sandboxed extra access, or require_escalated for unsandboxed execution."
+				},
+				"additional_permissions": {
+					"type": "object",
+					"description": "Sandboxed filesystem or network access for this command; only with sandbox_permissions set to with_additional_permissions.",
+					"properties": {
+						"network": {
+							"type": "object",
+							"properties": {
+								"enabled": {"type": "boolean"}
+							}
+						},
+						"file_system": {
+							"type": "object",
+							"properties": {
+								"read": {
+									"type": "array",
+									"items": {"type": "string"}
+								},
+								"write": {
+									"type": "array",
+									"items": {"type": "string"}
+								}
+							}
+						}
+					}
+				},
+				"prefix_rule": {
+					"type": "array",
+					"items": {"type": "string"},
+					"description": "Optional argv prefix rule to suggest for reusable approval, such as [\"npm\", \"run\", \"dev\"]. Used only if the user chooses always approve."
+				},
+				"justification": {
+					"type": "string",
+					"description": "User-facing approval question for require_escalated; omit otherwise."
+				}`
+	}
 	return types.ToolDefinition{
 		Name:        name,
 		Description: getToolDescription(getToolDescriptionOptions{name: name, fallback: t.descriptionFallback}),
@@ -140,16 +221,34 @@ func (t *BashTool) Definition() types.ToolDefinition {
 				"timeout": {
 					"type": "integer",
 					"description": "Timeout in seconds (default: 120, max: 600)"
-				}
+				}%s
 			},
 			"required": ["command"]
-		}`, commandDescriptionJSON)),
+		}`, commandDescriptionJSON, approvalProperties)),
 	}
 }
 
 type bashInput struct {
-	Command string `json:"command"`
-	Timeout int    `json:"timeout,omitempty"`
+	Command               string                    `json:"command"`
+	Timeout               int                       `json:"timeout,omitempty"`
+	SandboxPermissions    string                    `json:"sandbox_permissions,omitempty"`
+	AdditionalPermissions bashAdditionalPermissions `json:"additional_permissions,omitempty"`
+	PrefixRule            []string                  `json:"prefix_rule,omitempty"`
+	Justification         string                    `json:"justification,omitempty"`
+}
+
+type bashAdditionalPermissions struct {
+	Network    bashNetworkPermissions    `json:"network,omitempty"`
+	FileSystem bashFileSystemPermissions `json:"file_system,omitempty"`
+}
+
+type bashNetworkPermissions struct {
+	Enabled bool `json:"enabled,omitempty"`
+}
+
+type bashFileSystemPermissions struct {
+	Read  []string `json:"read,omitempty"`
+	Write []string `json:"write,omitempty"`
 }
 
 func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
@@ -172,11 +271,40 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 	// LLMs (notably Gemini) sometimes HTML-encode characters in tool args
 	// (e.g. && → &amp;&amp;). Unescape before execution.
 	command := html.UnescapeString(in.Command)
+	sandboxPermissions, err := normalizeBashSandboxPermissions(in.SandboxPermissions)
+	if err != nil {
+		return "", err
+	}
+	additionalPermissions, err := validateBashAdditionalPermissions(validateBashAdditionalPermissionsOptions{
+		sandboxPermissions: sandboxPermissions,
+		permissions:        in.AdditionalPermissions,
+	})
+	if err != nil {
+		return "", err
+	}
+	if sandboxPermissions == bashSandboxPermissionsRequireEscalated && !t.hostTool {
+		return "", fmt.Errorf("sandbox_permissions require_escalated is only supported for host bash")
+	}
+	if sandboxPermissions == bashSandboxPermissionsWithAdditional && !t.hostTool {
+		return "", fmt.Errorf("sandbox_permissions with_additional_permissions is only supported for host bash")
+	}
 
 	if t.runner == nil {
 		return "", fmt.Errorf("bash runner not configured")
 	}
-	result, err := t.runner.RunBash(ctx, bashRunOptions{command: command, timeout: timeout})
+	if t.approvalPolicy != nil {
+		defer t.approvalPolicy.FinishApproval(bashApprovalCommand(bashApprovalCommandOptions{
+			command:               command,
+			sandboxPermissions:    sandboxPermissions,
+			additionalPermissions: additionalPermissions,
+		}))
+	}
+	result, err := t.runner.RunBash(ctx, bashRunOptions{
+		command:               command,
+		timeout:               timeout,
+		sandboxPermissions:    sandboxPermissions,
+		additionalPermissions: additionalPermissions,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -190,11 +318,107 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 	return output, nil
 }
 
-func (t *BashTool) RequiresApproval(_ json.RawMessage) bool {
-	return false
+func (t *BashTool) RequiresApproval(input json.RawMessage) bool {
+	if t.approvalPolicy == nil {
+		return false
+	}
+	var in bashInput
+	if err := json.Unmarshal(sanitizeToolJSON(input), &in); err != nil {
+		return false
+	}
+	if in.Command == "" {
+		return false
+	}
+	sandboxPermissions, err := normalizeBashSandboxPermissions(in.SandboxPermissions)
+	if err != nil {
+		return false
+	}
+	additionalPermissions, err := validateBashAdditionalPermissions(validateBashAdditionalPermissionsOptions{
+		sandboxPermissions: sandboxPermissions,
+		permissions:        in.AdditionalPermissions,
+	})
+	if err != nil {
+		return false
+	}
+	return t.approvalPolicy.RequiresApproval(bashApprovalCommand(bashApprovalCommandOptions{
+		command:               html.UnescapeString(in.Command),
+		sandboxPermissions:    sandboxPermissions,
+		additionalPermissions: additionalPermissions,
+	}))
 }
 
-func (t *BashTool) HostTool() bool { return false }
+func (t *BashTool) HostTool() bool { return t.hostTool }
+
+func (t *BashTool) RecordApproval(opts recordToolApprovalOptions) error {
+	if t.approvalPolicy == nil {
+		return nil
+	}
+	var in bashInput
+	if err := json.Unmarshal(sanitizeToolJSON(opts.input), &in); err != nil {
+		return fmt.Errorf("invalid bash input: %w", err)
+	}
+	if in.Command == "" {
+		return nil
+	}
+	sandboxPermissions, err := normalizeBashSandboxPermissions(in.SandboxPermissions)
+	if err != nil {
+		return err
+	}
+	additionalPermissions, err := validateBashAdditionalPermissions(validateBashAdditionalPermissionsOptions{
+		sandboxPermissions: sandboxPermissions,
+		permissions:        in.AdditionalPermissions,
+	})
+	if err != nil {
+		return err
+	}
+	return t.approvalPolicy.RecordApproval(recordCommandApprovalOptions{
+		command: bashApprovalCommand(bashApprovalCommandOptions{
+			command:               html.UnescapeString(in.Command),
+			sandboxPermissions:    sandboxPermissions,
+			additionalPermissions: additionalPermissions,
+		}),
+		commandPrefixes: bashApprovalPrefixRules(bashApprovalPrefixRulesOptions{
+			prefixRule:            in.PrefixRule,
+			sandboxPermissions:    sandboxPermissions,
+			additionalPermissions: additionalPermissions,
+		}),
+		remember: opts.remember,
+	})
+}
+
+// NewNakedBashToolOptions holds the parameters for NewNakedBashTool.
+type NewNakedBashToolOptions struct {
+	WorkDir         string
+	ApprovalPath    string
+	PermissionStore *nakedPermissionStore
+	Timeout         int
+}
+
+// NewNakedBashTool creates a host bash tool for naked mode.
+func NewNakedBashTool(opts NewNakedBashToolOptions) *BashTool {
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = 120
+	}
+	workDir := opts.WorkDir
+	approvalPath := opts.ApprovalPath
+	if approvalPath == "" && workDir != "" {
+		approvalPath = nakedPermissionsPath(workDir)
+	}
+	approvalPolicy := opts.PermissionStore
+	if approvalPolicy == nil {
+		approvalPolicy = newNakedPermissionStore(newNakedPermissionStoreOptions{path: approvalPath, workspace: workDir})
+	}
+	return &BashTool{
+		name:                toolBash,
+		runner:              hostSandboxBashRunner{workspace: workDir, permissions: approvalPolicy},
+		timeout:             timeout,
+		descriptionFallback: "Run a host shell command in the workspace sandbox. Output is truncated to 80 lines / 12KB (head+tail).",
+		commandDescription:  "The host shell command to execute in the workspace sandbox",
+		approvalPolicy:      approvalPolicy,
+		hostTool:            true,
+	}
+}
 
 // NewCPSLLuauToolOptions holds the parameters for NewCPSLLuauTool.
 type NewCPSLLuauToolOptions struct {

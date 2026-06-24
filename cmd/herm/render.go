@@ -160,6 +160,10 @@ func inputTextRow(content string) string {
 	return fillStyledRow(fillStyledRowOptions{row: inputTextStyle + content, fillStyle: inputBgStyle})
 }
 
+func approvalTextRow(content string) string {
+	return fillStyledRow(fillStyledRowOptions{row: inputTextStyle + content, fillStyle: inputBgStyle})
+}
+
 type wrapStringOptions struct {
 	s        string
 	startCol int
@@ -604,11 +608,11 @@ const toolGroupShowEdge = 3
 func (a *App) buildInputRows() []string {
 	sep := strings.Repeat("─", a.width)
 
-	// Approval mode: animated yellow gradient borders + centered message
+	// Approval mode uses the same background-filled panel as the prompt area.
 	if a.awaitingApproval {
 		t := time.Since(a.approvalPauseStart)
 		color := approvalGradientColor(t)
-		shortMsg := fmt.Sprintf("Allow %s? [y/n]", a.approvalSummary)
+		shortMsg := fmt.Sprintf("Allow %s?", a.approvalSummary)
 		if visibleWidth(shortMsg) > a.width {
 			shortMsg = truncateVisual(truncateVisualOptions{s: shortMsg, maxCols: a.width})
 		}
@@ -620,19 +624,15 @@ func (a *App) buildInputRows() []string {
 		if detail == a.approvalSummary {
 			detail = ""
 		}
-		approvalRows := []string{sep}
-		approvalRows = append(approvalRows, fmt.Sprintf("%s%s%s[0m", color, strings.Repeat(" ", shortPad), shortMsg))
+		approvalRows := []string{inputBackgroundRow()}
+		approvalRows = append(approvalRows, approvalTextRow(fmt.Sprintf("%s%s%s\033[0m", color, strings.Repeat(" ", shortPad), shortMsg)))
+		approvalRows = append(approvalRows, inputBackgroundRow())
 		if detail != "" {
-			if visibleWidth(detail) > a.width {
-				detail = truncateVisual(truncateVisualOptions{s: detail, maxCols: a.width})
-			}
-			detailPad := (a.width - visibleWidth(detail)) / 2
-			if detailPad < 0 {
-				detailPad = 0
-			}
-			approvalRows = append(approvalRows, fmt.Sprintf("[2m%s%s[0m", strings.Repeat(" ", detailPad), detail))
+			approvalRows = append(approvalRows, renderApprovalCodeRows(renderApprovalCodeRowsOptions{text: detail, width: a.width})...)
+			approvalRows = append(approvalRows, inputBackgroundRow())
 		}
-		approvalRows = append(approvalRows, sep)
+		approvalRows = append(approvalRows, renderApprovalOptionsRow(renderApprovalOptionsRowOptions{selected: a.approvalSelected, width: a.width}))
+		approvalRows = append(approvalRows, inputBackgroundRow())
 		return approvalRows
 	}
 
@@ -803,7 +803,23 @@ func (a *App) backendStatusDisplay() (label, text string, err error) {
 	if a.backend == backendCPSL {
 		return "sandbox", a.cpslStatusText, a.cpslErr
 	}
+	if a.backend == backendNaked {
+		return "host", a.nakedStatusText, a.nakedErr
+	}
 	return "container", a.containerStatusText, a.containerErr
+}
+
+type clearRowsBelowWrittenRowsOptions struct {
+	buf            *strings.Builder
+	lastRow        int
+	terminalHeight int
+}
+
+func clearRowsBelowWrittenRows(opts clearRowsBelowWrittenRowsOptions) {
+	if opts.buf == nil || opts.lastRow <= 0 || opts.terminalHeight <= 0 || opts.lastRow >= opts.terminalHeight {
+		return
+	}
+	opts.buf.WriteString(fmt.Sprintf("\033[%d;1H\033[0m\033[J", opts.lastRow+1))
 }
 
 func (a *App) positionCursor(buf *strings.Builder) {
@@ -868,6 +884,7 @@ func (a *App) render() {
 
 	var buf strings.Builder
 	buf.WriteString("\033[?2026h") // begin synchronized update (atomic frame)
+	lastWrittenRow := totalRows - newScrollShift
 
 	if newScrollShift > 0 && a.scrollShift > 0 && newScrollShift >= a.scrollShift {
 		// Content overflows and grew or stayed same: write only visible portion.
@@ -879,6 +896,7 @@ func (a *App) render() {
 			}
 		}
 		visibleRows := allRows[newScrollShift:]
+		lastWrittenRow = len(visibleRows)
 		writeRows(writeRowsOptions{buf: &buf, rows: visibleRows, from: 1})
 	} else {
 		// No overflow, or content shrank: write from top.
@@ -888,7 +906,7 @@ func (a *App) render() {
 		writeRows(writeRowsOptions{buf: &buf, rows: allRows, from: 1})
 	}
 
-	buf.WriteString("\033[0m\033[J") // clear from cursor to end of screen
+	clearRowsBelowWrittenRows(clearRowsBelowWrittenRowsOptions{buf: &buf, lastRow: lastWrittenRow, terminalHeight: th})
 
 	a.prevRowCount = totalRows
 	a.scrollShift = newScrollShift
@@ -940,7 +958,7 @@ func (a *App) renderInput() {
 	var buf strings.Builder
 	buf.WriteString("\033[?2026h") // begin synchronized update (atomic frame)
 	writeRows(writeRowsOptions{buf: &buf, rows: inputRows, from: screenSepRow})
-	buf.WriteString("\033[0m\033[J") // clear remaining lines
+	clearRowsBelowWrittenRows(clearRowsBelowWrittenRowsOptions{buf: &buf, lastRow: screenSepRow + len(inputRows) - 1, terminalHeight: th})
 
 	a.scrollShift = newScrollShift
 	a.prevRowCount = totalRows
