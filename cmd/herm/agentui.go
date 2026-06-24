@@ -1,5 +1,5 @@
 // agentui.go bridges the App and Agent types, handling agent lifecycle
-// (start, event dispatch, drain) and model-change display.
+// (start, event dispatch, drain). Model status display lives in agentui_model_display.go.
 package main
 
 import (
@@ -90,156 +90,13 @@ func cpslAllowsProviderServerTools(config cpslConfig) bool {
 	}
 	return false
 }
-
-// showModelChange displays an info message when the active model changes.
-func (a *App) showModelChange(modelID string) {
-	if modelID == "" {
-		return
-	}
-	explorationID := a.config.resolveExplorationModel(a.models)
-	offline := a.ollamaFetched && a.config.ollamaBaseURL() != "" && a.isOllamaOffline(modelID)
-	line, blocks := modelDisplayLine(modelDisplayLineOptions{modelID: modelID, explorationID: explorationID, offline: offline})
-	if line == a.lastModelDisplayLine {
-		return
-	}
-	a.messages = append(a.messages, chatMessage{kind: msgInfo, content: line, inlineBlocks: blocks})
-	if offline {
-		a.showOllamaOfflineNotice()
-	} else {
-		a.lastOllamaOfflineNotice = ""
-	}
-	a.lastModelID = modelID
-	a.lastModelDisplayLine = line
-}
-
-type modelDisplayLineOptions struct {
-	modelID       string
-	explorationID string
-	offline       bool
-}
-
-func modelDisplayLine(opts modelDisplayLineOptions) (string, []inlineBlock) {
-	modelID, explorationID, offline := opts.modelID, opts.explorationID, opts.offline
-	content := "Using " + modelID
-	activeText := "\033[34;3mUsing " + modelID
-	if offline {
-		content += " (offline)"
-		activeText += " \033[33m(offline)"
-	}
-	blocks := []inlineBlock{newInlineBlock(activeText)}
-	if explorationID != "" && explorationID != modelID {
-		content += " exploration: " + explorationID
-		blocks = append(blocks, styledInlineBlock(styledInlineBlockOptions{style: "\033[34;3m", text: "exploration: " + explorationID}))
-	}
-	return content, blocks
-}
-
-func (a *App) showOllamaOfflineNotice() {
-	msg := fmt.Sprintf("\033[33m⚠\033[34;3m Ollama unreachable at \033[36m%s\033[34;3m — run '\033[32;3mollama serve\033[34;3m' to continue", a.config.ollamaBaseURL())
-	providers := a.config.configuredProviders()
-	delete(providers, ProviderOllama)
-	if len(providers) > 0 {
-		msg = fmt.Sprintf("\033[33m⚠\033[34;3m Ollama unreachable at \033[36m%s\033[34;3m — run '\033[32;3mollama serve\033[34;3m' or switch to another provider (/config)", a.config.ollamaBaseURL())
-	}
-	if msg == a.lastOllamaOfflineNotice {
-		return
-	}
-	a.messages = append(a.messages, chatMessage{kind: msgInfo, content: msg})
-	a.lastOllamaOfflineNotice = msg
-}
-
-func (a *App) normalizeProjectConfigWithCurrentModels() {
-	if a.models == nil {
-		return
-	}
-	normalized := normalizeProjectConfigForModels(normalizeProjectConfigForModelsOptions{pc: a.projectConfig, models: a.models})
-	if normalized == a.projectConfig {
-		return
-	}
-	a.projectConfig = normalized
-	a.rebuildEffectiveConfig()
-}
-
-func (a *App) showProjectModelDiagnostics() {
-	diagnostics := a.projectModelDiagnostics()
-	signature := strings.Join(diagnostics, "\n")
-	if signature == "" {
-		a.lastModelDiagnostics = ""
-		return
-	}
-	if signature == a.lastModelDiagnostics {
-		return
-	}
-	a.lastModelDiagnostics = signature
-	for _, diagnostic := range diagnostics {
-		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "\033[33m⚠\033[34;3m " + diagnostic})
-	}
-}
-
-func (a *App) projectModelDiagnostics() []string {
-	if !a.configReady || a.models == nil {
-		return nil
-	}
-	var diagnostics []string
-	if a.projectConfig.ActiveModel != "" {
-		result := a.config.resolveActiveModelResult(a.models)
-		if result.Fallback && result.Diagnostic != "" {
-			diagnostics = append(diagnostics, result.Diagnostic)
-		}
-	}
-	if a.projectConfig.ExplorationModel != "" {
-		result := a.config.resolveExplorationModelResult(a.models)
-		if result.Fallback && result.Diagnostic != "" {
-			diagnostics = append(diagnostics, result.Diagnostic)
-		}
-	}
-	return diagnostics
-}
-
-// maybeShowInitialModels shows the startup model line once both the model
-// catalog and the project config have loaded, preventing a double display.
-func (a *App) maybeShowInitialModels() {
-	if a.shownInitialModel || !a.configReady || a.models == nil {
-		return
-	}
-	a.normalizeProjectConfigWithCurrentModels()
-	a.shownInitialModel = true
-	a.messages = append(a.messages, versionDisplayMessage(a.backend))
-	a.showProjectModelDiagnostics()
-	a.showModelChange(a.config.resolveActiveModel(a.models))
-}
-
-func versionDisplayMessage(backend backendKind) chatMessage {
-	suffix := backendVersionSuffix(backend)
-	content := "v" + Version + " " + suffix
-	return chatMessage{
-		kind:    msgInfo,
-		content: content,
-		inlineBlocks: []inlineBlock{
-			styledInlineBlock(styledInlineBlockOptions{style: "\033[34;3m", text: "v" + Version}),
-			styledInlineBlock(styledInlineBlockOptions{style: "\033[34;3m", text: suffix}),
-		},
-	}
-}
-
-func backendVersionSuffix(backend backendKind) string {
-	if backend == backendCPSL {
-		return "(sandbox: CPSL)"
-	}
-	return "(container: " + hermImageTag + ")"
-}
-
-func (a *App) refreshResolvedModelDisplay() {
-	if !a.configReady || a.models == nil {
-		return
-	}
-	a.normalizeProjectConfigWithCurrentModels()
-	a.showProjectModelDiagnostics()
-	a.showModelChange(a.config.resolveActiveModel(a.models))
-}
-
 func (a *App) startAgent(userMessage string) {
 	a.normalizeProjectConfigWithCurrentModels()
+	if !modelsReadyForAgent(a.effectiveModelConfig()) {
+		a.messages = appendMissingModelMessageIfNeeded(a.messages)
+		a.render()
+		return
+	}
 	a.showProjectModelDiagnostics()
 	// Move previous attachment files to past/ so /attachments only has current-message files.
 	if dir := a.attachmentDir(); dir != "" {
@@ -268,7 +125,8 @@ func (a *App) startAgent(userMessage string) {
 		return
 	}
 
-	modelID := a.config.resolveActiveModel(a.models)
+	modelResult := a.resolveMainAgentModelResult()
+	modelID := modelResult.ResolvedModelID
 	if modelID == "" {
 		a.messages = append(a.messages, chatMessage{kind: msgError, content: "model not found, `/model` to pick a valid one"})
 		a.render()
@@ -392,7 +250,9 @@ func (a *App) startAgent(userMessage string) {
 		a.traceCollector.AddUserMessage(userMessage)
 	}
 
-	a.showModelChange(modelID)
+	if !modelResult.Fallback && modelsReadyForAgent(a.effectiveModelConfig()) {
+		a.showResolvedModelDisplay()
+	}
 
 	ctxWindow := 0
 	if m := findModelByID(findModelByIDOptions{models: a.models, id: modelID}); m != nil {

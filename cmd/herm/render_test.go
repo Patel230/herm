@@ -574,8 +574,8 @@ func TestLayoutInlineBlocks(t *testing.T) {
 	}
 
 	t.Run("wraps only between blocks", func(t *testing.T) {
-		first := "Using openai/gpt-5.5-2026-04-23"
-		second := "exploration: anthropic/claude-haiku-4-5"
+		first := "Using active: openai/gpt-5.5-2026-04-23"
+		second := ", exploration: anthropic/claude-haiku-4-5"
 		width := max(visibleWidth(first), visibleWidth(second))
 		rows := layoutInlineBlocks(layoutInlineBlocksOptions{
 			blocks: []inlineBlock{
@@ -609,7 +609,7 @@ func TestLayoutInlineBlocks(t *testing.T) {
 
 	t.Run("ellipsizes overwide block on its own row", func(t *testing.T) {
 		rows := layoutInlineBlocks(layoutInlineBlocksOptions{
-			blocks: []inlineBlock{newInlineBlock("ok"), newInlineBlock("exploration: anthropic/claude-haiku-4-5")},
+			blocks: []inlineBlock{newInlineBlock("ok"), newInlineBlock(", exploration: anthropic/claude-haiku-4-5")},
 			width:  18,
 		})
 		plain := strip(rows)
@@ -647,13 +647,17 @@ func TestLayoutInlineBlocks(t *testing.T) {
 func TestModelDisplayLineUsesInlineBlocks(t *testing.T) {
 	model := "openai/gpt-5.5-2026-04-23"
 	exploration := "anthropic/claude-haiku-4-5"
-	content, blocks := modelDisplayLine(modelDisplayLineOptions{modelID: model, explorationID: exploration})
-	if content != "Using "+model+" exploration: "+exploration {
+	content, blocks := modelDisplayLine(modelDisplayLineOptions{activeID: model, explorationID: exploration})
+	if content != "Using active: "+model+", exploration: "+exploration {
 		t.Fatalf("content = %q", content)
 	}
 
-	first := "Using " + model
-	second := "exploration: " + exploration
+	if len(blocks) != 2 {
+		t.Fatalf("blocks = %d, want active and exploration", len(blocks))
+	}
+
+	first := "Using active: " + model
+	second := ", exploration: " + exploration
 	width := max(visibleWidth(first), visibleWidth(second))
 	rows := layoutInlineBlocks(layoutInlineBlocksOptions{blocks: blocks, width: width})
 	if len(rows) != 2 {
@@ -662,6 +666,39 @@ func TestModelDisplayLineUsesInlineBlocks(t *testing.T) {
 	plain := ansiEscRe.ReplaceAllString(strings.Join(rows, "\n"), "")
 	if plain != first+"\n"+second {
 		t.Fatalf("plain rows = %q", plain)
+	}
+	if !strings.Contains(blocks[0].text, "\033[36;3m") {
+		t.Fatalf("active block = %q, want cyan", blocks[0].text)
+	}
+	if !strings.Contains(blocks[1].text, "\033[35;3m") {
+		t.Fatalf("exploration block = %q, want magenta", blocks[1].text)
+	}
+}
+
+func TestModelDisplayLineExplorationOnly(t *testing.T) {
+	exploration := "openrouter/owl-alpha"
+	content, blocks := modelDisplayLine(modelDisplayLineOptions{explorationID: exploration, explorationScope: "project"})
+	if content != "Using exploration: "+exploration+" (project)" {
+		t.Fatalf("content = %q", content)
+	}
+	if len(blocks) != 1 {
+		t.Fatalf("blocks = %d, want exploration only", len(blocks))
+	}
+	if !strings.Contains(blocks[0].text, "\033[35;3m") {
+		t.Fatalf("exploration block = %q, want magenta", blocks[0].text)
+	}
+}
+
+func TestModelDisplayLineShowsMixedScopes(t *testing.T) {
+	content, _ := modelDisplayLine(modelDisplayLineOptions{
+		activeID:         "openai/gpt-4.1",
+		explorationID:    "openrouter/owl-alpha",
+		activeScope:      "global",
+		explorationScope: "project",
+	})
+	want := "Using active: openai/gpt-4.1 (global), exploration: openrouter/owl-alpha (project)"
+	if content != want {
+		t.Fatalf("content = %q, want %q", content, want)
 	}
 }
 
@@ -726,9 +763,9 @@ func TestContainerRetryUpdatesSingleInlineMessage(t *testing.T) {
 func TestBuildBlockRowsRendersInlineMessageBlocks(t *testing.T) {
 	model := "openai/gpt-5.5-2026-04-23"
 	exploration := "anthropic/claude-haiku-4-5"
-	content, blocks := modelDisplayLine(modelDisplayLineOptions{modelID: model, explorationID: exploration})
-	first := "Using " + model
-	second := "exploration: " + exploration
+	content, blocks := modelDisplayLine(modelDisplayLineOptions{activeID: model, explorationID: exploration})
+	first := "Using active: " + model
+	second := ", exploration: " + exploration
 	app := &App{
 		width: max(visibleWidth(first), visibleWidth(second)),
 		messages: []chatMessage{{

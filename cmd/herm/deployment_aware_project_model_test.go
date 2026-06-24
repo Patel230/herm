@@ -331,7 +331,7 @@ func TestProjectModelProjectModelFallbackDiagnosticNamesConfiguredAndFallback(t 
 		t.Fatalf("messages = %d, want one diagnostic: %+v", len(app.messages), app.messages)
 	}
 	content := app.messages[0].content
-	for _, want := range []string{`project active_model "anthropic/claude-opus-4-6"`, "unavailable", `fallback model "openai/gpt-4.1-2025-04-14"`} {
+	for _, want := range []string{`active_model "anthropic/claude-opus-4-6"`, "unavailable", `fallback model "openai/gpt-4.1-2025-04-14"`} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("diagnostic %q missing %q", content, want)
 		}
@@ -373,7 +373,7 @@ func TestProjectModelExplorationFallbackDiagnosticNamesConfiguredAndFallback(t *
 		t.Fatalf("messages = %d, want one diagnostic: %+v", len(app.messages), app.messages)
 	}
 	content := app.messages[0].content
-	for _, want := range []string{`project exploration_model "anthropic/claude-haiku-4-5"`, "unavailable", `fallback model "openai/gpt-4.1-2025-04-14"`} {
+	for _, want := range []string{`exploration_model "anthropic/claude-haiku-4-5"`, "unavailable", `fallback model "openai/gpt-4.1-2025-04-14"`} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("diagnostic %q missing %q", content, want)
 		}
@@ -581,8 +581,48 @@ func TestProjectModelClearResetsProjectModelDiagnosticDedupe(t *testing.T) {
 	app.handleCommand("/clear")
 	app.showProjectModelDiagnostics()
 	contents := strings.Join(chatMessageContents(app.messages), "\n")
-	if !strings.Contains(contents, `project active_model "missing-model" is unknown`) {
+	if !strings.Contains(contents, `active_model "missing-model" is unknown`) {
 		t.Fatalf("diagnostic was not re-emitted after clear:\n%s", contents)
+	}
+}
+
+func TestProjectModelCompactRequiresExplicitModel(t *testing.T) {
+	store := newMockStorage()
+	leafID := seedCompactableConversation(t, store)
+	provider := &mockProvider{responses: []string{"compact summary"}, model: "openai/gpt-4.1-2025-04-14"}
+	client := langdag.NewWithDeps(store, provider)
+	app := &App{
+		langdagClient: client,
+		agentNodeID:   leafID,
+		globalConfig: Config{
+			Deployments: map[string]DeploymentConfig{
+				"openai-direct": {APIKey: "sk-openai"},
+			},
+		},
+		models: []ModelDef{{
+			Provider:      ProviderOpenAI,
+			OwnerProvider: ProviderOpenAI,
+			ID:            "openai/gpt-4.1-2025-04-14",
+			CanonicalID:   "openai/gpt-4.1-2025-04-14",
+			Deployments: []ModelDeploymentDef{{
+				DeploymentID:  "openai-direct",
+				NativeModelID: "gpt-4.1-2025-04-14",
+			}},
+		}},
+		configReady: true,
+		resultCh:    make(chan any, 16),
+		headless:    true,
+	}
+	app.config = mergeConfigs(mergeConfigsOptions{global: app.globalConfig, project: app.projectConfig})
+
+	app.handleCompactCommand("/compact")
+
+	if provider.lastRequest != nil {
+		t.Fatalf("compact should not call provider without explicit model, got request for %q", provider.lastRequest.Model)
+	}
+	contents := strings.Join(chatMessageContents(app.messages), "\n")
+	if !strings.Contains(contents, configMissingModelMessage) {
+		t.Fatalf("compact should show missing-model message, got:\n%s", contents)
 	}
 }
 
@@ -629,7 +669,7 @@ func TestProjectModelCompactShowsExplorationFallbackDiagnosticAndUsesResolvedMod
 		t.Fatalf("compact model = %q, want resolved active fallback openai/gpt-4.1-2025-04-14", provider.lastRequest.Model)
 	}
 	contents := strings.Join(chatMessageContents(app.messages), "\n")
-	if !strings.Contains(contents, `project exploration_model "anthropic/claude-haiku-4-5" is unavailable`) {
+	if !strings.Contains(contents, `exploration_model "anthropic/claude-haiku-4-5" is unavailable`) {
 		t.Fatalf("compact did not show exploration fallback diagnostic:\n%s", contents)
 	}
 	if app.traceCollector != nil {
@@ -671,9 +711,11 @@ func TestProjectModelCompactPreservesAssistantMetadataAndRecordsTrace(t *testing
 	client := langdag.NewWithDeps(store, provider)
 	tracePath := filepath.Join(t.TempDir(), "trace.json")
 	app := &App{
-		langdagClient:  client,
-		agentNodeID:    leafID,
-		config:         Config{ActiveModel: "openai/gpt-4.1-2025-04-14"},
+		langdagClient: client,
+		agentNodeID:   leafID,
+		globalConfig: Config{
+			ActiveModel: "openai/gpt-4.1-2025-04-14",
+		},
 		models:         []ModelDef{},
 		configReady:    true,
 		resultCh:       make(chan any, 16),
@@ -681,6 +723,7 @@ func TestProjectModelCompactPreservesAssistantMetadataAndRecordsTrace(t *testing
 		traceFilePath:  tracePath,
 		headless:       true,
 	}
+	app.config = mergeConfigs(mergeConfigsOptions{global: app.globalConfig, project: app.projectConfig})
 
 	app.handleCompactCommand("/compact")
 
@@ -838,11 +881,11 @@ func TestProjectModelExitConfigModeShowsProjectModelDiagnostic(t *testing.T) {
 	app.exitConfigMode(true)
 
 	rows := strings.Join(chatMessageContents(app.messages), "\n")
-	if !strings.Contains(rows, `project active_model "anthropic/claude-opus-4-6" is unavailable`) {
+	if !strings.Contains(rows, `active_model "anthropic/claude-opus-4-6" is unavailable`) {
 		t.Fatalf("config save did not show project model diagnostic:\n%s", rows)
 	}
-	if !strings.Contains(rows, "Using openai/gpt-4.1-2025-04-14") {
-		t.Fatalf("config save did not refresh resolved model display:\n%s", rows)
+	if strings.Contains(rows, "Using openai/gpt-4.1-2025-04-14") {
+		t.Fatalf("config save should not show fallback model in 'Using' when diagnostic already covers it:\n%s", rows)
 	}
 }
 
@@ -867,8 +910,11 @@ func TestProjectModelCatalogRefreshUpdatesResolvedProjectModelDisplay(t *testing
 	app.handleResult(catalogMsg{catalog: catalog})
 
 	rows := strings.Join(chatMessageContents(app.messages), "\n")
-	if !strings.Contains(rows, "Using openai/canonical-refresh") {
+	if !strings.Contains(rows, "Using active: openai/canonical-refresh") {
 		t.Fatalf("catalog refresh did not update resolved project model display:\n%s", rows)
+	}
+	if strings.Contains(rows, `active_model "openai/canonical-refresh" is unknown`) {
+		t.Fatalf("catalog refresh left stale unknown diagnostic in chat:\n%s", rows)
 	}
 	if app.lastModelDiagnostics != "" {
 		t.Fatalf("catalog refresh left stale diagnostics: %q", app.lastModelDiagnostics)
@@ -932,7 +978,7 @@ func TestProjectModelOllamaOfflineWarningDedupesWhenExplorationRefreshes(t *test
 	if count := strings.Count(rows, "Ollama unreachable"); count != 1 {
 		t.Fatalf("Ollama offline warning count = %d, want 1 after exploration refresh:\n%s", count, rows)
 	}
-	if !strings.Contains(rows, "exploration: vendor/fast-model") {
+	if !strings.Contains(rows, ", exploration: vendor/fast-model") {
 		t.Fatalf("exploration refresh did not update model display:\n%s", rows)
 	}
 }
@@ -954,8 +1000,11 @@ func TestProjectModelDynamicModelsRefreshStartupModelDisplay(t *testing.T) {
 
 	app.maybeShowInitialModels()
 	startup := strings.Join(chatMessageContents(app.messages), "\n")
-	if !strings.Contains(startup, `project active_model "vendor/new-model" is unknown`) {
-		t.Fatalf("startup did not show initial unknown diagnostic:\n%s", startup)
+	if strings.Contains(startup, `active_model "vendor/new-model" is unknown`) {
+		t.Fatalf("OpenRouter should trust configured native model IDs not in embedded catalog:\n%s", startup)
+	}
+	if !strings.Contains(startup, "Using active: vendor/new-model") {
+		t.Fatalf("startup should use configured OpenRouter model:\n%s", startup)
 	}
 
 	app.handleResult(openRouterModelsMsg{models: []ModelDef{{
@@ -973,8 +1022,77 @@ func TestProjectModelDynamicModelsRefreshStartupModelDisplay(t *testing.T) {
 	}}})
 
 	rows := strings.Join(chatMessageContents(app.messages), "\n")
-	if !strings.Contains(rows, "Using vendor/new-model") {
+	if !strings.Contains(rows, "Using active: vendor/new-model") {
 		t.Fatalf("dynamic model refresh did not update model display:\n%s", rows)
+	}
+}
+
+func TestProjectModelOpenRouterTrustsUncataloguedNativeModel(t *testing.T) {
+	app := &App{
+		globalConfig: Config{
+			Deployments: map[string]DeploymentConfig{
+				"openrouter": {APIKey: "sk-or"},
+			},
+		},
+		projectConfig: ProjectConfig{ActiveModel: "vendor/missing-model"},
+		configReady:   true,
+		models:        []ModelDef{},
+		headless:      true,
+		width:         80,
+	}
+	app.config = mergeConfigs(mergeConfigsOptions{global: app.globalConfig, project: app.projectConfig})
+
+	app.maybeShowInitialModels()
+	startup := strings.Join(chatMessageContents(app.messages), "\n")
+	if strings.Contains(startup, `active_model "vendor/missing-model" is unknown`) {
+		t.Fatalf("OpenRouter should trust configured native model IDs not in embedded catalog:\n%s", startup)
+	}
+	if !strings.Contains(startup, "Using active: vendor/missing-model") {
+		t.Fatalf("startup should use configured OpenRouter model:\n%s", startup)
+	}
+
+	app.handleResult(openRouterModelsMsg{models: []ModelDef{{
+		Provider:      ProviderOpenRouter,
+		OwnerProvider: "vendor",
+		ID:            "vendor/other-model",
+		CanonicalID:   "vendor/other-model",
+		Deployments: []ModelDeploymentDef{{
+			DeploymentID:  "openrouter",
+			NativeModelID: "vendor/other-model",
+		}},
+	}}})
+
+	rows := strings.Join(chatMessageContents(app.messages), "\n")
+	if strings.Contains(rows, `active_model "vendor/missing-model" is unknown`) {
+		t.Fatalf("OpenRouter fetch should not warn for trusted native model ID:\n%s", rows)
+	}
+}
+
+func TestRefreshResolvedModelDisplayExplorationOnly(t *testing.T) {
+	app := &App{
+		globalConfig: Config{
+			Deployments: map[string]DeploymentConfig{"openrouter": {APIKey: "sk-or"}},
+		},
+		projectConfig: ProjectConfig{ExplorationModel: "openrouter/owl-alpha"},
+		configReady:   true,
+		models: []ModelDef{{
+			Provider:    ProviderOpenRouter,
+			ID:          "openrouter/owl-alpha",
+			CanonicalID: "openrouter/owl-alpha",
+			Deployments: []ModelDeploymentDef{{DeploymentID: "openrouter", NativeModelID: "openrouter/owl-alpha"}},
+		}},
+		headless: true,
+		width:    80,
+	}
+	app.config = mergeConfigs(mergeConfigsOptions{global: app.globalConfig, project: app.projectConfig})
+
+	app.refreshResolvedModelDisplay()
+	rows := strings.Join(chatMessageContents(app.messages), "\n")
+	if !strings.Contains(rows, "Using exploration: openrouter/owl-alpha (project)") {
+		t.Fatalf("refresh should show exploration-only line:\n%s", rows)
+	}
+	if strings.Contains(rows, "Using active:") {
+		t.Fatalf("exploration-only display should not include active line:\n%s", rows)
 	}
 }
 
@@ -1005,11 +1123,8 @@ func TestProjectModelDynamicModelsRefreshExplorationOnlyDisplay(t *testing.T) {
 
 	app.maybeShowInitialModels()
 	startup := strings.Join(chatMessageContents(app.messages), "\n")
-	if !strings.Contains(startup, "Using openai/gpt-4.1-2025-04-14") {
-		t.Fatalf("startup did not show active model:\n%s", startup)
-	}
-	if strings.Contains(startup, "exploration: vendor/fast-model") {
-		t.Fatalf("startup unexpectedly showed unavailable exploration model:\n%s", startup)
+	if !strings.Contains(startup, "Using active: openai/gpt-4.1-2025-04-14 (global), exploration: vendor/fast-model (project)") {
+		t.Fatalf("startup should trust configured OpenRouter exploration model:\n%s", startup)
 	}
 
 	app.models = mergeDynamicModels(mergeDynamicModelsOptions{base: app.models, dynamic: []ModelDef{{
@@ -1025,7 +1140,7 @@ func TestProjectModelDynamicModelsRefreshExplorationOnlyDisplay(t *testing.T) {
 	app.refreshResolvedModelDisplay()
 
 	rows := strings.Join(chatMessageContents(app.messages), "\n")
-	if !strings.Contains(rows, "Using openai/gpt-4.1-2025-04-14 exploration: vendor/fast-model") {
+	if !strings.Contains(rows, "Using active: openai/gpt-4.1-2025-04-14 (global), exploration: vendor/fast-model (project)") {
 		t.Fatalf("dynamic model refresh did not update exploration display:\n%s", rows)
 	}
 }

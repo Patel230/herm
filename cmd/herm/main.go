@@ -19,16 +19,12 @@ import (
 
 var Version = "dev"
 
-// ─── Constants ───
-
 const (
 	promptPrefix       = "▸ "
 	promptPrefixCols   = 2
 	charsPerToken      = 4        // rough estimate for context bar
 	maxAttachmentBytes = 20 << 20 // 20 MB
 )
-
-// ─── Block and message types ───
 
 type chatMsgKind int
 
@@ -45,16 +41,16 @@ const (
 )
 
 type chatMessage struct {
-	kind         chatMsgKind
-	content      string
-	inlineBlocks []inlineBlock // optional atomic one-line UI blocks for terminal layout
-	isError      bool          // for tool results
-	duration     time.Duration // tool execution duration
-	leadBlank    bool          // blank line before this message
-	toolName     string        // original tool name (for tool call grouping/output rules)
+	kind            chatMsgKind
+	content         string
+	inlineBlocks    []inlineBlock // optional atomic one-line UI blocks for terminal layout
+	modelDiagnostic bool          // true for active/exploration model fallback warnings
+	modelDisplay    bool          // true for the "Using active/exploration" status line
+	isError         bool          // for tool results
+	duration        time.Duration // tool execution duration
+	leadBlank       bool          // blank line before this message
+	toolName        string        // original tool name (for tool call grouping/output rules)
 }
-
-// ─── App modes ───
 
 type appMode int
 
@@ -65,8 +61,6 @@ const (
 	modeWorktrees
 	modeBranches
 )
-
-// ─── App struct ───
 
 type App struct {
 	// Terminal
@@ -210,6 +204,7 @@ type App struct {
 	cfgEditing       bool
 	cfgEditBuf       []rune
 	cfgEditCursor    int
+	cfgChangedLabels map[string]string // tracks field labels and their change direction ("saved", "removed", "updated")
 	cfgDraft         Config
 	cfgProjectDraft  ProjectConfig
 	configJSONEditor func(string) error // injectable for tests; nil uses $VISUAL/$EDITOR
@@ -564,12 +559,17 @@ func (a *App) handleEnter() {
 
 	if a.langdagClient == nil {
 		a.messages = append(a.messages, chatMessage{kind: msgUser, content: display, leadBlank: true})
-		a.messages = append(a.messages, chatMessage{kind: msgError, content: "No API keys configured. Use /config to add a key first."})
+		a.messages = append(a.messages, chatMessage{kind: msgError, content: configMissingAPIKeyMessage})
 		a.render()
 		return
 	}
 
 	a.messages = append(a.messages, chatMessage{kind: msgUser, content: display, leadBlank: true})
+	if !modelsReadyForAgent(a.effectiveModelConfig()) {
+		a.messages = appendMissingModelMessageIfNeeded(a.messages)
+		a.render()
+		return
+	}
 	if a.backend == backendContainer && !a.containerReady {
 		a.messages = append(a.messages, chatMessage{kind: msgInfo, content: "Container is still starting — the agent won't have bash or file tools until it's ready."})
 	}
@@ -581,10 +581,6 @@ func (a *App) handleEnter() {
 	a.startAgent(content)
 	a.render()
 }
-
-// ─── Commands ───
-
-// ─── Async results ───
 
 // startInit lives in wiring.go.
 

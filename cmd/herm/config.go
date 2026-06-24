@@ -718,18 +718,13 @@ func ollamaModelProvider(opts ollamaModelProviderOptions) string {
 }
 
 // resolveExplorationModel returns the model ID for sub-agents/exploration.
-// When unset, prefers a cheap/fast provider-specific default (e.g. haiku for
-// Anthropic) before falling back to resolveActiveModel.
+// When unset, follows resolveActiveModel (exploration is optional in config).
 func (c Config) resolveExplorationModel(models []ModelDef) string {
 	return c.resolveExplorationModelResult(models).ResolvedModelID
 }
 
 func (c Config) resolveExplorationModelResult(models []ModelDef) configuredModelResolution {
 	if c.ExplorationModel == "" {
-		available := c.availableModels(models)
-		if id := preferredDefault(preferredDefaultOptions{models: available, provider: c.defaultProviderForAvailableModels(available), defaults: defaultExplorationModels}); id != "" {
-			return configuredModelResolution{ResolvedModelID: id}
-		}
 		return configuredModelResolution{ResolvedModelID: c.resolveActiveModel(models)}
 	}
 	available := c.availableModels(models)
@@ -794,8 +789,8 @@ func (c Config) lookupConfiguredModelID(opts lookupConfiguredModelIDOptions) con
 		return configuredModelResolution{ConfiguredModelID: modelID, Status: configuredModelAmbiguous}
 	}
 
-	if c.trustOfflineOllamaModel(trustOfflineOllamaModelOptions{modelID: modelID, models: models}) {
-		return configuredModelResolution{ConfiguredModelID: modelID, ResolvedModelID: ollamaCanonicalModelID(modelID), Status: configuredModelUsable}
+	if resolved, ok := c.trustUncataloguedNativeModel(trustUncataloguedNativeModelOptions{modelID: modelID, models: models}); ok {
+		return configuredModelResolution{ConfiguredModelID: modelID, ResolvedModelID: resolved, Status: configuredModelUsable}
 	}
 	return configuredModelResolution{ConfiguredModelID: modelID, Status: configuredModelUnknown}
 }
@@ -872,9 +867,31 @@ func configuredModelDiagnostic(opts configuredModelDiagnosticOptions) string {
 		reason = "unknown"
 	}
 	if fallback == "" {
-		return fmt.Sprintf("project %s %q is %s; no fallback model is available", field, configured, reason)
+		return fmt.Sprintf("%s %q is %s; no fallback model is available", field, configured, reason)
 	}
-	return fmt.Sprintf("project %s %q is %s; using fallback model %q", field, configured, reason, fallback)
+	return fmt.Sprintf("%s %q is %s; using fallback model %q", field, configured, reason, fallback)
+}
+
+// trustUncataloguedNativeModelOptions is the parameter bundle for trustUncataloguedNativeModel.
+type trustUncataloguedNativeModelOptions struct {
+	modelID string
+	models  []ModelDef
+}
+
+// trustUncataloguedNativeModel returns a resolved model ID when a configured deployment
+// can route native model IDs that are not yet present in the embedded catalog.
+func (c Config) trustUncataloguedNativeModel(opts trustUncataloguedNativeModelOptions) (string, bool) {
+	modelID, models := opts.modelID, opts.models
+	if modelID == "" {
+		return "", false
+	}
+	if c.trustOfflineOllamaModel(trustOfflineOllamaModelOptions{modelID: modelID, models: models}) {
+		return ollamaCanonicalModelID(modelID), true
+	}
+	if c.configuredDeploymentIDs()["openrouter"] {
+		return modelID, true
+	}
+	return "", false
 }
 
 type trustOfflineOllamaModelOptions struct {
@@ -909,7 +926,13 @@ func configuredProviderForModelID(opts configuredProviderForModelIDOptions) stri
 	if model := findModelByID(findModelByIDOptions{models: models, id: modelID}); model != nil {
 		return configuredProviderForModel(configuredProviderForModelOptions{cfg: cfg, model: *model})
 	}
-	return ollamaModelProvider(ollamaModelProviderOptions{modelID: modelID, models: models, ollamaURL: cfg.ollamaBaseURL()})
+	if provider := ollamaModelProvider(ollamaModelProviderOptions{modelID: modelID, models: models, ollamaURL: cfg.ollamaBaseURL()}); provider != "" {
+		return provider
+	}
+	if cfg.configuredDeploymentIDs()["openrouter"] {
+		return ProviderOpenRouter
+	}
+	return ""
 }
 
 type modelIDCandidatesOptions struct {

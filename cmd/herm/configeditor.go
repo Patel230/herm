@@ -110,8 +110,33 @@ func (a *App) enterConfigMode() {
 	a.cfgEditing = false
 	a.cfgEditBuf = nil
 	a.cfgEditCursor = 0
+	a.cfgChangedLabels = make(map[string]string)
 	a.cfgDraft = a.globalConfig
+	// Clear stale model fields when no providers are configured.
+	// This prevents hidden model values from persisting when the user
+	// later adds a provider, ensuring they get the "Select Model" hint.
+	if len(a.cfgDraft.configuredProviders()) == 0 {
+		a.cfgDraft.ActiveModel = ""
+		a.cfgDraft.ExplorationModel = ""
+	}
+	if a.cfgDraft.Deployments != nil {
+		cloned := make(map[string]DeploymentConfig, len(a.cfgDraft.Deployments))
+		for id, d := range a.cfgDraft.Deployments {
+			cloned[id] = cloneDeploymentConfig(d)
+		}
+		a.cfgDraft.Deployments = cloned
+	}
+	// Deep-clone reference-typed fields so draft edits never mutate the live
+	// config before save. Routing in particular is edited in place
+	// (setRoutingStages), which would otherwise leak into a.globalConfig even
+	// if the user cancels.
+	a.cfgDraft.Routing = cloneRoutingPolicy(a.cfgDraft.Routing)
+	a.cfgDraft.ModelSortDirs = cloneBoolMap(a.cfgDraft.ModelSortDirs)
 	a.cfgProjectDraft = a.projectConfig
+	if len(a.cfgDraft.configuredProviders()) == 0 {
+		a.cfgProjectDraft.ActiveModel = ""
+		a.cfgProjectDraft.ExplorationModel = ""
+	}
 	a.startConfigTicker()
 	a.renderInput()
 }
@@ -127,8 +152,16 @@ func (a *App) exitConfigMode(save bool) {
 	a.stopConfigTicker()
 	if save {
 		a.globalConfig = normalizeConfigForModels(configModelsOptions{cfg: a.cfgDraft, models: a.models})
+		if len(a.globalConfig.configuredProviders()) == 0 {
+			a.globalConfig.ActiveModel = ""
+			a.globalConfig.ExplorationModel = ""
+		}
 		a.cfgDraft = a.globalConfig
 		a.projectConfig = normalizeProjectConfigForModels(normalizeProjectConfigForModelsOptions{pc: a.cfgProjectDraft, models: a.models})
+		if len(a.cfgDraft.configuredProviders()) == 0 {
+			a.projectConfig.ActiveModel = ""
+			a.projectConfig.ExplorationModel = ""
+		}
 		a.cfgProjectDraft = a.projectConfig
 		a.rebuildEffectiveConfig()
 		// Re-initialize debug log if debug mode changed
@@ -154,35 +187,51 @@ func (a *App) exitConfigMode(save bool) {
 			}
 		}
 		if !saveErr {
-			a.messages = append(a.messages, chatMessage{kind: msgSuccess, content: "Config saved."})
+			for _, msg := range configSavedMessagesWithHints(configSavedMessagesWithHintsOptions{
+				changed:  a.cfgChangedLabels,
+				cfg:      a.globalConfig,
+				project:  a.projectConfig,
+				existing: a.messages,
+			}) {
+				a.messages = append(a.messages, msg)
+			}
 		}
-		// Refresh models including Ollama and OpenRouter if configured
-		if a.config.ollamaBaseURL() != "" {
-			go func() { a.resultCh <- fetchOllamaModelsCmd(a.config.ollamaBaseURL()) }()
+		// Refresh models including Ollama, OpenRouter, and Apple if configured.
+		if !a.headless {
+			if a.config.ollamaBaseURL() != "" {
+				go func() { a.resultCh <- fetchOllamaModelsCmd(a.config.ollamaBaseURL()) }()
+			}
+			if a.config.openRouterAPIKey() != "" {
+				a.openRouterFetched = false // allow re-fetch with new key
+				go func() { a.resultCh <- fetchOpenRouterModelsCmd(a.config.openRouterAPIKey()) }()
+			}
+			a.appleFetched = false
+			go func() { a.resultCh <- fetchAppleModelsCmd(a.config.appleFMBaseURL()) }()
 		}
-		if a.config.openRouterAPIKey() != "" {
-			a.openRouterFetched = false // allow re-fetch with new key
-			go func() { a.resultCh <- fetchOpenRouterModelsCmd(a.config.openRouterAPIKey()) }()
-		}
-		a.appleFetched = false
-		go func() { a.resultCh <- fetchAppleModelsCmd(a.config.appleFMBaseURL()) }()
-		// Show updated model resolution and project diagnostics.
+		// Append model status after save notices; preserve earlier Using lines in chat.
+		noticeEnd := len(a.messages)
 		if a.models != nil {
-			a.refreshResolvedModelDisplay()
+			a.normalizeProjectConfigWithCurrentModels()
 		}
-		// Reinitialize langdag client with updated config
-		cfg := a.config
-		models := a.models
-		catalog := a.modelCatalog
-		provider := cfg.defaultLangdagProviderForModels(models)
-		go func() {
-			client, err := newLangdagClientForModelsWithCatalog(newLangdagClientForModelsWithCatalogOptions{
-				cfg:     cfg,
-				models:  models,
-				catalog: catalog,
-			})
-			a.resultCh <- langdagReadyMsg{client: client, provider: provider, runtimeApple: hasRuntimeAppleModels(models), err: err}
-		}()
+		a.appendModelDisplayAfterConfigSave(noticeEnd)
+		if a.models != nil {
+			a.showProjectModelDiagnostics()
+		}
+		// Reinitialize langdag client with updated config.
+		if !a.headless {
+			cfg := a.config
+			models := a.models
+			catalog := a.modelCatalog
+			provider := cfg.defaultLangdagProviderForModels(models)
+			go func() {
+				client, err := newLangdagClientForModelsWithCatalog(newLangdagClientForModelsWithCatalogOptions{
+					cfg:     cfg,
+					models:  models,
+					catalog: catalog,
+				})
+				a.resultCh <- langdagReadyMsg{client: client, provider: provider, runtimeApple: hasRuntimeAppleModels(models), err: err}
+			}()
+		}
 	}
 	a.cfgActive = false
 	a.cfgEditing = false
@@ -392,23 +441,28 @@ func (a *App) resolvedExplorationDisplay(c Config) string {
 	if c.ExplorationModel != "" {
 		return c.ExplorationModel
 	}
-	if len(c.configuredProviders()) == 0 {
-		return ""
-	}
-	return c.resolveExplorationModel(a.models)
+	return ""
 }
 
 func (a *App) settingsTabFields() []cfgField {
 	return []cfgField{
-		{label: "Active Model", get: func(c Config) string { return c.ActiveModel }, set: func(c *Config, v string) {
+		{label: uiConfigLabelActiveModel, get: func(c Config) string { return c.ActiveModel }, set: func(c *Config, v string) {
 			c.ActiveModel = normalizeConfigModelIDForModels(normalizeConfigModelIDForModelsOptions{cfg: *c, modelID: v, smartDefault: defaultCanonicalActiveModel, models: a.models})
 		}, picker: func(a *App) {
-			a.openConfigModelPicker(openConfigModelPickerOptions{getCurrentID: func() string { return a.cfgDraft.ActiveModel }, onSelect: func(id string) { a.cfgDraft.ActiveModel = id }})
+			oldVal := a.cfgDraft.ActiveModel
+			a.openConfigModelPicker(openConfigModelPickerOptions{getCurrentID: func() string { return a.cfgDraft.ActiveModel }, onSelect: func(id string) {
+				a.cfgDraft.ActiveModel = id
+				recordConfigChange(recordConfigChangeOptions{changed: a.cfgChangedLabels, label: uiConfigLabelActiveModel, oldVal: oldVal, newVal: id})
+			}})
 		}},
-		{label: "Exploration Model", get: func(c Config) string { return c.ExplorationModel }, display: func(c Config) string { return a.resolvedExplorationDisplay(c) }, set: func(c *Config, v string) {
+		{label: uiConfigLabelExplorationModel, get: func(c Config) string { return c.ExplorationModel }, display: func(c Config) string { return a.resolvedExplorationDisplay(c) }, set: func(c *Config, v string) {
 			c.ExplorationModel = normalizeConfigModelIDForModels(normalizeConfigModelIDForModelsOptions{cfg: *c, modelID: v, smartDefault: defaultCanonicalExplorationModel, models: a.models})
 		}, picker: func(a *App) {
-			a.openConfigModelPicker(openConfigModelPickerOptions{getCurrentID: func() string { return a.cfgDraft.ExplorationModel }, onSelect: func(id string) { a.cfgDraft.ExplorationModel = id }})
+			oldVal := a.cfgDraft.ExplorationModel
+			a.openConfigModelPicker(openConfigModelPickerOptions{getCurrentID: func() string { return a.cfgDraft.ExplorationModel }, onSelect: func(id string) {
+				a.cfgDraft.ExplorationModel = id
+				recordConfigChange(recordConfigChangeOptions{changed: a.cfgChangedLabels, label: uiConfigLabelExplorationModel, oldVal: oldVal, newVal: id})
+			}})
 		}},
 		{label: "Paste Collapse", get: func(c Config) string { return strconv.Itoa(c.PasteCollapseMinChars) }, set: func(c *Config, v string) {
 			if n, err := strconv.Atoi(v); err == nil {
@@ -467,25 +521,45 @@ func (a *App) settingsTabFields() []cfgField {
 func (a *App) projectTabFields() []cfgField {
 	return []cfgField{
 		{
-			label: "Active Model",
+			label: uiConfigLabelActiveModel,
 			get:   func(_ Config) string { return a.cfgProjectDraft.ActiveModel },
+			display: func(_ Config) string {
+				if a.cfgProjectDraft.ActiveModel != "" && len(a.cfgDraft.configuredProviders()) == 0 {
+					return ""
+				}
+				return a.cfgProjectDraft.ActiveModel
+			},
 			set: func(_ *Config, v string) {
 				a.cfgProjectDraft.ActiveModel = normalizeProjectModelIDForModels(normalizeProjectModelIDForModelsOptions{modelID: v, smartDefault: defaultCanonicalActiveModel, models: a.models})
 			},
 			globalHint: func(c Config) string { return c.ActiveModel },
 			picker: func(a *App) {
-				a.openConfigModelPicker(openConfigModelPickerOptions{getCurrentID: func() string { return a.cfgProjectDraft.ActiveModel }, onSelect: func(id string) { a.cfgProjectDraft.ActiveModel = id }})
+				oldVal := a.cfgProjectDraft.ActiveModel
+				a.openConfigModelPicker(openConfigModelPickerOptions{getCurrentID: func() string { return a.cfgProjectDraft.ActiveModel }, onSelect: func(id string) {
+					a.cfgProjectDraft.ActiveModel = id
+					recordConfigChange(recordConfigChangeOptions{changed: a.cfgChangedLabels, label: uiConfigLabelProjectActiveModel, oldVal: oldVal, newVal: id})
+				}})
 			},
 		},
 		{
-			label: "Exploration Model",
+			label: uiConfigLabelExplorationModel,
 			get:   func(_ Config) string { return a.cfgProjectDraft.ExplorationModel },
+			display: func(_ Config) string {
+				if a.cfgProjectDraft.ExplorationModel != "" && len(a.cfgDraft.configuredProviders()) == 0 {
+					return ""
+				}
+				return a.cfgProjectDraft.ExplorationModel
+			},
 			set: func(_ *Config, v string) {
 				a.cfgProjectDraft.ExplorationModel = normalizeProjectModelIDForModels(normalizeProjectModelIDForModelsOptions{modelID: v, smartDefault: defaultCanonicalExplorationModel, models: a.models})
 			},
 			globalHint: func(c Config) string { return a.resolvedExplorationDisplay(c) },
 			picker: func(a *App) {
-				a.openConfigModelPicker(openConfigModelPickerOptions{getCurrentID: func() string { return a.cfgProjectDraft.ExplorationModel }, onSelect: func(id string) { a.cfgProjectDraft.ExplorationModel = id }})
+				oldVal := a.cfgProjectDraft.ExplorationModel
+				a.openConfigModelPicker(openConfigModelPickerOptions{getCurrentID: func() string { return a.cfgProjectDraft.ExplorationModel }, onSelect: func(id string) {
+					a.cfgProjectDraft.ExplorationModel = id
+					recordConfigChange(recordConfigChangeOptions{changed: a.cfgChangedLabels, label: uiConfigLabelProjectExplorationModel, oldVal: oldVal, newVal: id})
+				}})
 			},
 		},
 		{
@@ -768,7 +842,9 @@ func (a *App) handleConfigByte(opts handleConfigByteOptions) {
 			} else if f.picker != nil {
 				f.picker(a)
 			} else if f.toggle != nil {
+				oldVal := f.get(a.cfgDraft)
 				f.toggle(&a.cfgDraft)
+				recordConfigChange(recordConfigChangeOptions{changed: a.cfgChangedLabels, label: configChangeLabelForField(configChangeLabelForFieldOptions{field: f, projectTab: a.cfgTab == cfgTabProject && a.projectConfigRoot() != ""}), oldVal: oldVal, newVal: f.get(a.cfgDraft)})
 			} else if f.get != nil && f.set != nil {
 				a.cfgEditing = true
 				val := f.get(a.cfgDraft)
@@ -778,15 +854,11 @@ func (a *App) handleConfigByte(opts handleConfigByteOptions) {
 		}
 		a.renderInput()
 
-	case ch == 127 || ch == 0x08: // Backspace - clear current project field (unset → fall back to global)
-		if a.cfgTab == cfgTabProject && a.projectConfigRoot() != "" {
-			fields := a.cfgCurrentFields()
-			if len(fields) > 0 && a.cfgCursor < len(fields) {
-				f := fields[a.cfgCursor]
-				if f.set != nil && f.get != nil && f.get(a.cfgDraft) != "" {
-					f.set(&a.cfgDraft, "")
-					a.renderInput()
-				}
+	case ch == 127 || ch == 0x08: // Backspace - unset current field when supported
+		if field, ok := a.configSelectedField(); ok && a.configFieldSupportsUnset(field) {
+			if field.get(a.cfgDraft) != "" {
+				a.unsetConfigSelectedField(field)
+				a.renderInput()
 			}
 		}
 
@@ -838,7 +910,11 @@ func (a *App) handleConfigEditByte(opts handleConfigEditByteOptions) {
 	case ch == '\r': // Enter - confirm edit
 		fields := a.cfgCurrentFields()
 		if a.cfgCursor < len(fields) {
-			fields[a.cfgCursor].set(&a.cfgDraft, string(a.cfgEditBuf))
+			f := fields[a.cfgCursor]
+			oldVal := f.get(a.cfgDraft)
+			newVal := string(a.cfgEditBuf)
+			f.set(&a.cfgDraft, newVal)
+			recordConfigChange(recordConfigChangeOptions{changed: a.cfgChangedLabels, label: configChangeLabelForField(configChangeLabelForFieldOptions{field: f, projectTab: a.cfgTab == cfgTabProject && a.projectConfigRoot() != ""}), oldVal: oldVal, newVal: newVal})
 		}
 		a.cfgEditing = false
 		a.cfgEditBuf = nil

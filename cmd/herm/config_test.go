@@ -822,9 +822,12 @@ func TestBuildConfigRowsGlobalHint(t *testing.T) {
 
 func TestBuildConfigRowsProjectOverrideShown(t *testing.T) {
 	a := &App{
-		cfgTab:          cfgTabProject,
-		repoRoot:        "/some/repo",
-		cfgDraft:        Config{ActiveModel: "global-model"},
+		cfgTab:   cfgTabProject,
+		repoRoot: "/some/repo",
+		cfgDraft: Config{
+			ActiveModel: "global-model",
+			Deployments: map[string]DeploymentConfig{"openrouter": {APIKey: "sk-test"}},
+		},
 		cfgProjectDraft: ProjectConfig{ActiveModel: "project-model"},
 	}
 	rows := a.buildConfigRows()
@@ -981,6 +984,100 @@ func TestCtrlWClearsSecretField(t *testing.T) {
 	}
 	if a.cfgEditCursor != 0 {
 		t.Fatalf("cursor should be 0 after Ctrl+W on secret field, got %d", a.cfgEditCursor)
+	}
+}
+
+func TestEnterConfigModeClearsStaleProjectModelsWhenNoProviders(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repoRoot := t.TempDir()
+
+	app := &App{
+		repoRoot: repoRoot,
+		globalConfig: Config{
+			ActiveModel:      "orphan/global-active",
+			ExplorationModel: "orphan/global-explore",
+		},
+		projectConfig: ProjectConfig{
+			ActiveModel:      "anthropic/claude-opus-4-6",
+			ExplorationModel: "anthropic/claude-haiku-4-5",
+			Personality:      "kept",
+		},
+		models:   defaultTestModels(),
+		resultCh: make(chan any, 8),
+		headless: true,
+	}
+
+	app.enterConfigMode()
+	app.stopConfigTicker()
+
+	if app.cfgDraft.ActiveModel != "" || app.cfgDraft.ExplorationModel != "" {
+		t.Fatalf("global draft models = %q/%q, want cleared", app.cfgDraft.ActiveModel, app.cfgDraft.ExplorationModel)
+	}
+	if app.cfgProjectDraft.ActiveModel != "" || app.cfgProjectDraft.ExplorationModel != "" {
+		t.Fatalf("project draft models = %q/%q, want cleared", app.cfgProjectDraft.ActiveModel, app.cfgProjectDraft.ExplorationModel)
+	}
+	if app.cfgProjectDraft.Personality != "kept" {
+		t.Fatalf("Personality = %q, want unrelated project fields preserved", app.cfgProjectDraft.Personality)
+	}
+
+	app.cfgDraft.Deployments = map[string]DeploymentConfig{"openrouter": {APIKey: "sk-test"}}
+	app.exitConfigMode(true)
+
+	if app.projectConfig.ActiveModel != "" || app.projectConfig.ExplorationModel != "" {
+		t.Fatalf("saved project models = %q/%q, want cleared after adding provider", app.projectConfig.ActiveModel, app.projectConfig.ExplorationModel)
+	}
+	if app.projectConfig.Personality != "kept" {
+		t.Fatalf("saved Personality = %q, want preserved", app.projectConfig.Personality)
+	}
+	if modelsReadyForAgent(app.projectModelConfig()) {
+		t.Fatal("modelsReadyForAgent should be false so user gets Select Active Model hint")
+	}
+	if !configNeedsModelSelection(app.projectModelConfig()) {
+		t.Fatal("configNeedsModelSelection should be true after adding provider without explicit model")
+	}
+}
+
+// TestEnterConfigModeDoesNotLeakRoutingEditsBeforeSave guards against the
+// config-draft aliasing issue: routing is edited in place (setRoutingStages),
+// so without deep-cloning Routing on entry, draft edits mutate the live
+// globalConfig even when the user never saves.
+func TestEnterConfigModeDoesNotLeakRoutingEditsBeforeSave(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	app := &App{
+		repoRoot: t.TempDir(),
+		globalConfig: Config{
+			AnthropicAPIKey: "sk-test",
+			Routing: &RoutingPolicy{
+				Default: []RoutingStage{{Deployments: []DeploymentChoice{{DeploymentID: "anthropic"}}}},
+			},
+		},
+		models:   defaultTestModels(),
+		resultCh: make(chan any, 8),
+		headless: true,
+	}
+
+	app.enterConfigMode()
+	app.stopConfigTicker()
+
+	// Edit routing in the draft only (no save).
+	setRoutingStages(setRoutingStagesOptions{
+		cfg:    &app.cfgDraft,
+		scope:  routingScopeModel,
+		key:    "openrouter/some-model",
+		stages: []RoutingStage{{Deployments: []DeploymentChoice{{DeploymentID: "openrouter"}}}},
+	})
+
+	// The live config must be untouched until exitConfigMode(save=true).
+	if app.globalConfig.Routing == nil {
+		t.Fatal("globalConfig.Routing became nil after a draft-only edit")
+	}
+	if len(app.globalConfig.Routing.Models) != 0 {
+		t.Fatalf("draft routing edit leaked into globalConfig.Routing.Models = %v", app.globalConfig.Routing.Models)
+	}
+	// The draft itself should reflect the edit.
+	if app.cfgDraft.Routing == nil || len(app.cfgDraft.Routing.Models["openrouter/some-model"]) == 0 {
+		t.Fatal("draft routing edit was not applied to cfgDraft")
 	}
 }
 
@@ -1180,14 +1277,14 @@ func TestResolveActiveModel_DefaultsToSonnet(t *testing.T) {
 	}
 }
 
-func TestResolveExplorationModel_DefaultsToHaiku(t *testing.T) {
+func TestResolveExplorationModel_DefaultsToActiveWhenUnset(t *testing.T) {
 	cfg := Config{
 		AnthropicAPIKey: "key",
 		// no ActiveModel, no ExplorationModel
 	}
 	got := cfg.resolveExplorationModel(defaultTestModels())
-	if got != "claude-haiku-4-5" {
-		t.Errorf("resolveExplorationModel = %q, want %q (should default to haiku, not active model)", got, "claude-haiku-4-5")
+	if got != "claude-sonnet-4-6" {
+		t.Errorf("resolveExplorationModel = %q, want %q (unset exploration uses active resolution)", got, "claude-sonnet-4-6")
 	}
 }
 
@@ -1228,8 +1325,8 @@ func TestResolveActiveModel_OpenAIDefaults(t *testing.T) {
 func TestResolveExplorationModel_OpenAIDefaults(t *testing.T) {
 	cfg := Config{OpenAIAPIKey: "key"}
 	got := cfg.resolveExplorationModel(defaultTestModels())
-	if got != "gpt-4.1-mini-2025-04-14" {
-		t.Errorf("resolveExplorationModel = %q, want %q", got, "gpt-4.1-mini-2025-04-14")
+	if got != "gpt-4.1-2025-04-14" {
+		t.Errorf("resolveExplorationModel = %q, want %q (unset exploration uses active resolution)", got, "gpt-4.1-2025-04-14")
 	}
 }
 
@@ -1295,6 +1392,22 @@ func TestResolveActiveModel_NoOllamaURLNoFallback(t *testing.T) {
 	got := cfg.resolveActiveModel(nil)
 	if got == testOllamaActiveModel {
 		t.Errorf("resolveActiveModel = %q, should not trust unknown model when no Ollama URL configured", got)
+	}
+}
+
+func TestResolveActiveModel_TrustsOpenRouterNativeModelNotInCatalog(t *testing.T) {
+	cfg := Config{
+		Deployments: map[string]DeploymentConfig{
+			"openrouter": {APIKey: "sk-or"},
+		},
+		ActiveModel: "minimax/minimax-m2.5:free",
+	}
+	result := cfg.resolveActiveModelResult(nil)
+	if result.Status != configuredModelUsable || result.Fallback {
+		t.Fatalf("resolveActiveModelResult = %+v, want usable trusted OpenRouter native model", result)
+	}
+	if result.ResolvedModelID != "minimax/minimax-m2.5:free" {
+		t.Fatalf("ResolvedModelID = %q, want configured OpenRouter model ID", result.ResolvedModelID)
 	}
 }
 
@@ -1535,5 +1648,719 @@ func TestConfigThinkingRoundTrip(t *testing.T) {
 
 	if loaded.Thinking == nil || !*loaded.Thinking {
 		t.Errorf("round-trip: Thinking = %v, want true", loaded.Thinking)
+	}
+}
+
+func TestConfigSavedMessagesUseDistinctModelAndAPIKeyNotices(t *testing.T) {
+	msgs := configSavedMessages(map[string]string{
+		"Project Active Model":      "updated",
+		"Project Exploration Model": "saved",
+		"OpenRouter API Key":        "saved",
+	})
+
+	if len(msgs) != 3 {
+		t.Fatalf("message count = %d, want 3", len(msgs))
+	}
+
+	contents := make([]string, len(msgs))
+	for i, msg := range msgs {
+		if len(msg.inlineBlocks) != 1 {
+			t.Fatalf("message %d inline blocks = %d, want 1", i, len(msg.inlineBlocks))
+		}
+		contents[i] = msg.content
+	}
+
+	if contents[0] != "OpenRouter API Key saved." {
+		t.Fatalf("first message = %q, want API key notice first (sorted)", contents[0])
+	}
+	if contents[1] != "Project Active Model updated." {
+		t.Fatalf("active model message = %q", contents[1])
+	}
+	if contents[2] != "Project Exploration Model saved." {
+		t.Fatalf("exploration model message = %q", contents[2])
+	}
+
+	activeStyle := msgs[1].inlineBlocks[0].text
+	exploreStyle := msgs[2].inlineBlocks[0].text
+	apiStyle := msgs[0].inlineBlocks[0].text
+
+	if activeStyle == exploreStyle || activeStyle == apiStyle || exploreStyle == apiStyle {
+		t.Fatalf("notices should use distinct colors:\nactive=%q\nexplore=%q\napi=%q", activeStyle, exploreStyle, apiStyle)
+	}
+	if !strings.Contains(activeStyle, styleChatDimYellow) {
+		t.Fatalf("active model updated style = %q, want dim yellow on full notice", activeStyle)
+	}
+	if !strings.Contains(exploreStyle, styleChatDimGreen) {
+		t.Fatalf("exploration model saved style = %q, want dim green on full notice", exploreStyle)
+	}
+	if !strings.Contains(apiStyle, styleChatGreen) {
+		t.Fatalf("api key style = %q, want green italic accent", apiStyle)
+	}
+}
+
+func TestConfigSavedMessagesUseProjectThemeOpacity(t *testing.T) {
+	cases := []struct {
+		label     string
+		direction string
+	}{
+		{"Active Model", "saved"},
+		{"Active Model", "updated"},
+		{"Active Model", "removed"},
+		{"Exploration Model", "saved"},
+		{"Exploration Model", "updated"},
+		{"Exploration Model", "removed"},
+		{"OpenRouter API Key", "saved"},
+		{"OpenRouter API Key", "updated"},
+		{"OpenRouter API Key", "removed"},
+		{"Personality", "saved"},
+		{"Personality", "updated"},
+		{"Personality", "removed"},
+	}
+	for _, tc := range cases {
+		style := configChangeNoticeFor(configChangeNoticeForOptions{label: tc.label, direction: tc.direction}).style
+		if !strings.HasSuffix(style, ";3m") {
+			t.Errorf("%s %s style = %q, want chat accent (;3m italic)", tc.label, tc.direction, style)
+		}
+		if strings.Contains(style, ";1") || strings.Contains(style, ";2m") {
+			t.Errorf("%s %s uses bold/dim luminosity: %q", tc.label, tc.direction, style)
+		}
+		if strings.Contains(style, "\033[9") {
+			t.Errorf("%s %s uses bright ANSI color: %q", tc.label, tc.direction, style)
+		}
+	}
+	emptyStyle := configSavedMessages(nil)[0].inlineBlocks[0].text
+	if !strings.Contains(emptyStyle, styleChatMuted) {
+		t.Fatalf("empty save style = %q, want muted italic accent", emptyStyle)
+	}
+}
+
+func TestConfigSavedMessagesGenericSettingsUseRedForRemoved(t *testing.T) {
+	msgs := configSavedMessages(map[string]string{
+		"Personality": "updated",
+		"Thinking":    "removed",
+	})
+
+	if len(msgs) != 2 {
+		t.Fatalf("message count = %d, want 2", len(msgs))
+	}
+	if msgs[0].content != "Personality updated." {
+		t.Fatalf("updated message = %q", msgs[0].content)
+	}
+	if msgs[1].content != "Thinking removed." {
+		t.Fatalf("removed message = %q", msgs[1].content)
+	}
+	if !strings.Contains(msgs[0].inlineBlocks[0].text, styleChatDimYellow) {
+		t.Fatalf("updated style = %q, want dim yellow italic accent", msgs[0].inlineBlocks[0].text)
+	}
+	if !strings.Contains(msgs[1].inlineBlocks[0].text, styleChatRed) {
+		t.Fatalf("removed style = %q, want red italic accent", msgs[1].inlineBlocks[0].text)
+	}
+}
+
+func TestConfigSavedMessagesEachPurposeUsesDistinctColors(t *testing.T) {
+	cases := []struct {
+		label     string
+		direction string
+		wantStyle string
+	}{
+		{"Active Model", "saved", styleChatDimGreen},
+		{"Active Model", "updated", styleChatDimYellow},
+		{"Exploration Model", "saved", styleChatDimGreen},
+		{"Exploration Model", "updated", styleChatDimYellow},
+		{"OpenRouter API Key", "saved", styleChatGreen},
+		{"OpenRouter API Key", "updated", styleChatDimYellow},
+		{"Personality", "saved", styleChatBlue},
+		{"Personality", "updated", styleChatDimYellow},
+	}
+	for _, tc := range cases {
+		notice := configChangeNoticeFor(configChangeNoticeForOptions{label: tc.label, direction: tc.direction})
+		if notice.style != tc.wantStyle {
+			t.Errorf("%s %s style = %q, want %q", tc.label, tc.direction, notice.style, tc.wantStyle)
+		}
+	}
+	for _, label := range []string{"Active Model", "Exploration Model"} {
+		notice := configChangeNoticeFor(configChangeNoticeForOptions{label: label, direction: "removed"})
+		if notice.style != styleChatDimRed {
+			t.Errorf("%s unset style = %q, want dim red on full notice", label, notice.style)
+		}
+	}
+	for _, label := range []string{"OpenRouter API Key", "Personality"} {
+		notice := configChangeNoticeFor(configChangeNoticeForOptions{label: label, direction: "removed"})
+		if notice.style != styleChatRed {
+			t.Errorf("%s removed style = %q, want red italic accent", label, notice.style)
+		}
+	}
+	for _, tc := range []struct {
+		label   string
+		content string
+	}{
+		{"Active Model", "Active Model unset."},
+		{"Exploration Model", "Exploration Model unset."},
+		{"Project Exploration Model", "Project Exploration Model unset."},
+	} {
+		notice := configChangeNoticeFor(configChangeNoticeForOptions{label: tc.label, direction: uiConfigChangeRemoved})
+		if notice.content != tc.content {
+			t.Errorf("%s removed content = %q, want %q", tc.label, notice.content, tc.content)
+		}
+	}
+
+	empty := configSavedMessages(nil)
+	if len(empty) != 1 || empty[0].content != "Config saved." {
+		t.Fatalf("empty save message = %#v", empty)
+	}
+	if !strings.Contains(empty[0].inlineBlocks[0].text, styleChatMuted) {
+		t.Fatalf("empty save style = %q, want muted italic accent", empty[0].inlineBlocks[0].text)
+	}
+}
+
+func assertMissingModelMessage(t *testing.T, msg chatMessage) {
+	t.Helper()
+	if msg.kind != msgError {
+		t.Fatalf("message kind = %v, want error", msg.kind)
+	}
+	if msg.content != configMissingModelMessage {
+		t.Fatalf("message content = %q, want %q", msg.content, configMissingModelMessage)
+	}
+}
+
+func assertSelectModelHintMessage(t *testing.T, msg chatMessage) {
+	t.Helper()
+	if msg.kind != msgInfo {
+		t.Fatalf("message kind = %v, want info", msg.kind)
+	}
+	if msg.content != configSelectModelHintMessage {
+		t.Fatalf("message content = %q, want %q", msg.content, configSelectModelHintMessage)
+	}
+	if !strings.Contains(msg.inlineBlocks[0].text, styleChatBlue) {
+		t.Fatalf("hint style = %q, want blue italic accent", msg.inlineBlocks[0].text)
+	}
+}
+
+func TestConfigSavedMessagesHintAfterAPIKeyWhenNoActiveModel(t *testing.T) {
+	cfg := Config{Deployments: map[string]DeploymentConfig{"openrouter": {APIKey: "sk-test"}}}
+	msgs := configSavedMessagesWithHints(configSavedMessagesWithHintsOptions{
+		changed: map[string]string{"OpenRouter API Key": "saved"},
+		cfg:     cfg,
+		project: ProjectConfig{},
+	})
+
+	if len(msgs) != 2 {
+		t.Fatalf("message count = %d, want 2", len(msgs))
+	}
+	if msgs[0].content != "OpenRouter API Key saved." {
+		t.Fatalf("first message = %q", msgs[0].content)
+	}
+	assertSelectModelHintMessage(t, msgs[1])
+}
+
+func TestConfigSavedMessagesNoHintWhenActiveModelSet(t *testing.T) {
+	cfg := Config{
+		ActiveModel: "openrouter/test",
+		Deployments: map[string]DeploymentConfig{"openrouter": {APIKey: "sk-test"}},
+	}
+	msgs := configSavedMessagesWithHints(configSavedMessagesWithHintsOptions{
+		changed: map[string]string{"OpenRouter API Key": "saved"},
+		cfg:     cfg,
+		project: ProjectConfig{},
+	})
+	if len(msgs) != 1 {
+		t.Fatalf("message count = %d, want 1", len(msgs))
+	}
+}
+
+func TestConfigSavedMessagesNoHintWhenAPIKeyUpdated(t *testing.T) {
+	cfg := Config{
+		Deployments: map[string]DeploymentConfig{"openrouter": {APIKey: "sk-test"}},
+	}
+	msgs := configSavedMessagesWithHints(configSavedMessagesWithHintsOptions{
+		changed: map[string]string{"OpenRouter API Key": "updated"},
+		cfg:     cfg,
+		project: ProjectConfig{},
+	})
+	if len(msgs) != 2 {
+		t.Fatalf("message count = %d, want save notice + hint", len(msgs))
+	}
+	if msgs[0].content != "OpenRouter API Key updated." {
+		t.Fatalf("first message = %q", msgs[0].content)
+	}
+	if msgs[1].content != configSelectModelHintMessage {
+		t.Fatalf("hint message = %q", msgs[1].content)
+	}
+	assertSelectModelHintMessage(t, msgs[1])
+}
+
+func TestConfigNeedsModelSelection(t *testing.T) {
+	cfg := Config{Deployments: map[string]DeploymentConfig{"openrouter": {APIKey: "sk-test"}}}
+	if !configNeedsModelSelection(projectModelConfigOptions{global: cfg, project: ProjectConfig{}}) {
+		t.Fatal("want hint when provider configured without active model")
+	}
+	cfg.ActiveModel = "openrouter/test"
+	if configNeedsModelSelection(projectModelConfigOptions{global: cfg, project: ProjectConfig{}}) {
+		t.Fatal("do not want hint when active model is set (exploration optional)")
+	}
+	project := ProjectConfig{ActiveModel: "openrouter/test"}
+	cfg.ActiveModel = ""
+	if configNeedsModelSelection(projectModelConfigOptions{global: cfg, project: project}) {
+		t.Fatal("do not want hint when project active model is set")
+	}
+}
+
+func TestStartAgentRequiresExplicitActiveModel(t *testing.T) {
+	app := &App{
+		globalConfig: Config{
+			Deployments: map[string]DeploymentConfig{"openrouter": {APIKey: "sk-test"}},
+		},
+		configReady: true,
+		models:      defaultTestModels(),
+		headless:    true,
+		width:       80,
+	}
+	app.config = mergeConfigs(mergeConfigsOptions{global: app.globalConfig, project: app.projectConfig})
+
+	app.startAgent("hello")
+	if app.agent != nil || app.agentRunning {
+		t.Fatal("agent should not start without explicit active model")
+	}
+	found := false
+	for _, msg := range app.messages {
+		if msg.content == configMissingModelMessage {
+			found = true
+			assertMissingModelMessage(t, msg)
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("messages = %v, want missing model error", chatMessageContents(app.messages))
+	}
+}
+
+func TestHandleEnterShowsMissingModelMessage(t *testing.T) {
+	app := &App{
+		globalConfig: Config{
+			Deployments: map[string]DeploymentConfig{"openrouter": {APIKey: "sk-test"}},
+		},
+		langdagClient: newTestClient("ok"),
+		configReady:   true,
+		models:        defaultTestModels(),
+		headless:      true,
+		width:         80,
+	}
+	app.config = mergeConfigs(mergeConfigsOptions{global: app.globalConfig, project: app.projectConfig})
+	app.setInputValue("hello")
+
+	app.handleEnter()
+
+	if app.agent != nil || app.agentRunning {
+		t.Fatal("agent should not start without explicit model")
+	}
+	foundUser := false
+	foundError := false
+	for _, msg := range app.messages {
+		if msg.kind == msgUser && msg.content == "hello" {
+			foundUser = true
+		}
+		if msg.content == configMissingModelMessage {
+			foundError = true
+			assertMissingModelMessage(t, msg)
+		}
+	}
+	if !foundUser {
+		t.Fatalf("messages = %v, want user message in chat", chatMessageContents(app.messages))
+	}
+	if !foundError {
+		t.Fatalf("messages = %v, want missing model error in chat", chatMessageContents(app.messages))
+	}
+}
+
+func TestExplicitActiveModelConfigured(t *testing.T) {
+	global := Config{ActiveModel: "openrouter/test"}
+	if !explicitActiveModelConfigured(projectModelConfigOptions{global: global, project: ProjectConfig{}}) {
+		t.Fatal("global active model should count as explicit")
+	}
+	if explicitActiveModelConfigured(projectModelConfigOptions{global: Config{}, project: ProjectConfig{ActiveModel: "openrouter/test"}}) != true {
+		t.Fatal("project active model should count as explicit")
+	}
+	if explicitActiveModelConfigured(projectModelConfigOptions{global: Config{Deployments: map[string]DeploymentConfig{"openrouter": {APIKey: "sk"}}}, project: ProjectConfig{}}) {
+		t.Fatal("API key alone should not count as explicit active model")
+	}
+}
+
+func TestExplicitExplorationModelConfigured(t *testing.T) {
+	global := Config{ExplorationModel: "openrouter/explore"}
+	if !explicitExplorationModelConfigured(projectModelConfigOptions{global: global, project: ProjectConfig{}}) {
+		t.Fatal("global exploration model should count as explicit")
+	}
+	if explicitExplorationModelConfigured(projectModelConfigOptions{global: Config{}, project: ProjectConfig{ExplorationModel: "openrouter/explore"}}) != true {
+		t.Fatal("project exploration model should count as explicit")
+	}
+}
+
+func TestModelsReadyForAgent(t *testing.T) {
+	if !modelsReadyForAgent(projectModelConfigOptions{global: Config{ActiveModel: "openrouter/test"}, project: ProjectConfig{}}) {
+		t.Fatal("explicit active model should be ready")
+	}
+	if !modelsReadyForAgent(projectModelConfigOptions{global: Config{}, project: ProjectConfig{ExplorationModel: "openrouter/explore"}}) {
+		t.Fatal("explicit exploration model should be ready without active model")
+	}
+	if modelsReadyForAgent(projectModelConfigOptions{global: Config{}, project: ProjectConfig{}}) {
+		t.Fatal("no explicit model should not be ready")
+	}
+}
+
+func TestStartAgentAllowsConfigOverrideActiveModel(t *testing.T) {
+	app := &App{
+		globalConfig: Config{
+			Deployments: map[string]DeploymentConfig{"openrouter": {APIKey: "sk-test"}},
+		},
+		cliConfigOverrides: `{"active_model":"openrouter/test"}`,
+		configReady:        true,
+		models:             []ModelDef{{ID: "openrouter/test", Provider: ProviderOpenRouter}},
+		langdagClient:      newTestClient("ok"),
+		headless:           true,
+		width:              80,
+	}
+	app.rebuildEffectiveConfig()
+
+	if !modelsReadyForAgent(app.effectiveModelConfig()) {
+		t.Fatal("config override active model should satisfy explicit-model gate")
+	}
+	app.startAgent("hello")
+	if app.agent == nil || !app.agentRunning {
+		t.Fatal("agent should start with config override active model")
+	}
+	if app.agent.model != "openrouter/test" {
+		t.Fatalf("agent model = %q, want override active model", app.agent.model)
+	}
+}
+
+func TestEffectiveProviderForConfigUsesUncataloguedOpenRouterModel(t *testing.T) {
+	app := &App{
+		models: []ModelDef{},
+	}
+	cfg := Config{
+		Deployments: map[string]DeploymentConfig{"openrouter": {APIKey: "sk-or"}},
+		ActiveModel: "moonshotai/kimi-k2:free",
+	}
+
+	provider, modelID := app.effectiveProviderForConfig(cfg)
+
+	if provider != ProviderOpenRouter {
+		t.Fatalf("provider = %q, want %q", provider, ProviderOpenRouter)
+	}
+	if modelID != "moonshotai/kimi-k2:free" {
+		t.Fatalf("modelID = %q, want configured OpenRouter native ID", modelID)
+	}
+}
+
+func TestStartAgentAllowsExplicitExplorationModelOnly(t *testing.T) {
+	app := &App{
+		globalConfig: Config{
+			Deployments: map[string]DeploymentConfig{"openrouter": {APIKey: "sk-test"}},
+		},
+		projectConfig: ProjectConfig{ExplorationModel: "openrouter/test"},
+		configReady:   true,
+		models:        []ModelDef{{ID: "openrouter/test", Provider: ProviderOpenRouter}},
+		langdagClient: newTestClient("ok"),
+		headless:      true,
+		width:         80,
+	}
+	app.config = mergeConfigs(mergeConfigsOptions{global: app.globalConfig, project: app.projectConfig})
+
+	app.startAgent("hello")
+	if app.agent == nil || !app.agentRunning {
+		t.Fatal("agent should start with explicit exploration model only")
+	}
+	if app.agent.model != "openrouter/test" {
+		t.Fatalf("agent model = %q, want configured exploration model", app.agent.model)
+	}
+}
+
+func TestDisplayConfiguredModelIDUsesConfiguredWhenFallback(t *testing.T) {
+	result := configuredModelResolution{
+		ConfiguredModelID: "openrouter/owl-alpha",
+		ResolvedModelID:   "openrouter/other",
+		Fallback:          true,
+	}
+	if got := displayConfiguredModelID(displayConfiguredModelIDOptions{result: result, configured: "openrouter/owl-alpha"}); got != "openrouter/owl-alpha" {
+		t.Fatalf("displayConfiguredModelID = %q, want configured ID on fallback", got)
+	}
+}
+
+func TestConfigChangeLabelForProjectTabUsesProjectLabels(t *testing.T) {
+	fields := (&App{}).projectTabFields()
+	if len(fields) < 2 {
+		t.Fatal("expected project tab model fields")
+	}
+	if got := configChangeLabelForField(configChangeLabelForFieldOptions{field: fields[0], projectTab: true}); got != uiConfigLabelProjectActiveModel {
+		t.Fatalf("active model label = %q, want %q", got, uiConfigLabelProjectActiveModel)
+	}
+	if got := configChangeLabelForField(configChangeLabelForFieldOptions{field: fields[1], projectTab: true}); got != uiConfigLabelProjectExplorationModel {
+		t.Fatalf("exploration model label = %q, want %q", got, uiConfigLabelProjectExplorationModel)
+	}
+	if got := configChangeLabelForField(configChangeLabelForFieldOptions{field: fields[0], projectTab: false}); got != uiConfigLabelActiveModel {
+		t.Fatalf("global tab should keep field label = %q", got)
+	}
+}
+
+func TestGlobalTabBackspaceUnsetsActiveModel(t *testing.T) {
+	app := &App{
+		cfgActive: true,
+		cfgTab:    cfgTabGlobal,
+		cfgDraft: Config{
+			ActiveModel: "openrouter/bodybuilder",
+		},
+		cfgChangedLabels: map[string]string{},
+		headless:         true,
+		width:            80,
+	}
+	fields := app.settingsTabFields()
+	app.cfgCursor = 0
+	if fields[0].label != uiConfigLabelActiveModel {
+		t.Fatalf("field[0] = %q, want active model", fields[0].label)
+	}
+	if !app.configFieldSupportsUnset(fields[0]) {
+		t.Fatal("global active model should support unset")
+	}
+	help := strings.Join(app.configHelpRows(), " ")
+	if !strings.Contains(help, "Backspace=unset") {
+		t.Fatalf("help = %q, want Backspace=unset hint", help)
+	}
+
+	app.handleConfigByte(handleConfigByteOptions{ch: 127})
+
+	if app.cfgDraft.ActiveModel != "" {
+		t.Fatalf("ActiveModel = %q, want empty after unset", app.cfgDraft.ActiveModel)
+	}
+	if app.cfgChangedLabels[uiConfigLabelActiveModel] != uiConfigChangeRemoved {
+		t.Fatalf("change label = %v, want removed", app.cfgChangedLabels)
+	}
+}
+
+func TestGlobalTabBackspaceDoesNotUnsetPasteCollapse(t *testing.T) {
+	app := &App{
+		cfgActive: true,
+		cfgTab:    cfgTabGlobal,
+		cfgDraft: Config{
+			PasteCollapseMinChars: 200,
+		},
+		headless: true,
+		width:    80,
+	}
+	fields := app.settingsTabFields()
+	for i, field := range fields {
+		if field.label == "Paste Collapse" {
+			app.cfgCursor = i
+			break
+		}
+	}
+	field, ok := app.configSelectedField()
+	if !ok {
+		t.Fatal("expected paste collapse field")
+	}
+	if app.configFieldSupportsUnset(field) {
+		t.Fatal("paste collapse should not support backspace unset on global tab")
+	}
+	app.handleConfigByte(handleConfigByteOptions{ch: 127})
+	if app.cfgDraft.PasteCollapseMinChars != 200 {
+		t.Fatalf("PasteCollapseMinChars = %d, want unchanged", app.cfgDraft.PasteCollapseMinChars)
+	}
+}
+
+func TestShowResolvedModelDisplayShowsConfiguredIDBeforeCatalogLoads(t *testing.T) {
+	app := &App{
+		globalConfig: Config{
+			Deployments: map[string]DeploymentConfig{"openrouter": {APIKey: "sk-or"}},
+		},
+		projectConfig: ProjectConfig{ActiveModel: "poolside/laguna-xs.2:free"},
+		configReady:   true,
+		headless:      true,
+		width:         80,
+	}
+	app.config = mergeConfigs(mergeConfigsOptions{global: app.globalConfig, project: app.projectConfig})
+
+	app.showResolvedModelDisplay()
+	if len(app.messages) != 1 {
+		t.Fatalf("message count = %d, want model display before catalog loads", len(app.messages))
+	}
+	want := "Using active: poolside/laguna-xs.2:free (project)"
+	if app.messages[0].content != want {
+		t.Fatalf("display = %q, want %q", app.messages[0].content, want)
+	}
+}
+
+func TestShowResolvedModelDisplayClearsWhenNoExplicitModel(t *testing.T) {
+	app := &App{
+		globalConfig: Config{
+			Deployments: map[string]DeploymentConfig{"openrouter": {APIKey: "sk-or"}},
+		},
+		projectConfig: ProjectConfig{ActiveModel: "openrouter/active"},
+		configReady:   true,
+		models:        []ModelDef{{ID: "openrouter/active", Provider: ProviderOpenRouter}},
+		headless:      true,
+		width:         80,
+	}
+	app.config = mergeConfigs(mergeConfigsOptions{global: app.globalConfig, project: app.projectConfig})
+	app.showResolvedModelDisplay()
+	if len(app.messages) != 1 || !strings.Contains(app.messages[0].content, "Using active:") {
+		t.Fatalf("initial display = %v", chatMessageContents(app.messages))
+	}
+
+	app.projectConfig.ActiveModel = ""
+	app.rebuildEffectiveConfig()
+	app.showResolvedModelDisplay()
+
+	found := false
+	for _, msg := range app.messages {
+		if msg.modelDisplay {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("model display should remain in chat history after unset, got %v", chatMessageContents(app.messages))
+	}
+	if app.lastModelDisplayLine != "" {
+		t.Fatalf("lastModelDisplayLine = %q, want empty live tracking after unset", app.lastModelDisplayLine)
+	}
+}
+
+func TestExitConfigModeModelDisplayPreservesHistoryOnUpdate(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repoRoot := t.TempDir()
+	app := &App{
+		repoRoot:    repoRoot,
+		configReady: true,
+		resultCh:    make(chan any, 8),
+		headless:    true,
+		width:       80,
+		globalConfig: Config{
+			Deployments: map[string]DeploymentConfig{"openrouter": {APIKey: "sk-or"}},
+		},
+		cfgDraft: Config{
+			Deployments: map[string]DeploymentConfig{"openrouter": {APIKey: "sk-or"}},
+		},
+		models: []ModelDef{},
+	}
+	app.config = mergeConfigs(mergeConfigsOptions{global: app.globalConfig, project: app.projectConfig})
+
+	saveModel := func(direction string, modelID string) {
+		t.Helper()
+		app.cfgActive = true
+		if modelID == "" {
+			app.cfgProjectDraft = ProjectConfig{}
+		} else {
+			app.cfgProjectDraft = ProjectConfig{ActiveModel: modelID}
+		}
+		app.cfgChangedLabels = map[string]string{uiConfigLabelProjectActiveModel: direction}
+		app.exitConfigMode(true)
+	}
+
+	saveModel(uiConfigChangeSaved, "poolside/laguna-xs.2:free")
+	afterSave := chatMessageContents(app.messages)
+	if len(afterSave) != 2 || afterSave[0] != "Project Active Model saved." ||
+		afterSave[1] != "Using active: poolside/laguna-xs.2:free (project)" {
+		t.Fatalf("after save:\n%s", strings.Join(afterSave, "\n"))
+	}
+
+	saveModel(uiConfigChangeUpdated, "openrouter/bodybuilder")
+	afterUpdate := chatMessageContents(app.messages)
+	want := []string{
+		"Project Active Model saved.",
+		"Using active: poolside/laguna-xs.2:free (project)",
+		"Project Active Model updated.",
+		"Using active: openrouter/bodybuilder (project)",
+	}
+	if len(afterUpdate) != len(want) {
+		t.Fatalf("after update:\n%s", strings.Join(afterUpdate, "\n"))
+	}
+	for i, content := range want {
+		if afterUpdate[i] != content {
+			t.Fatalf("after update[%d] = %q, want %q\nfull:\n%s", i, afterUpdate[i], content, strings.Join(afterUpdate, "\n"))
+		}
+	}
+}
+
+func TestShowResolvedModelDisplayUpdatesProjectActiveModel(t *testing.T) {
+	app := &App{
+		globalConfig: Config{
+			Deployments: map[string]DeploymentConfig{"openrouter": {APIKey: "sk-or"}},
+		},
+		projectConfig: ProjectConfig{ActiveModel: "openrouter/pareto-code"},
+		configReady:   true,
+		models:        []ModelDef{},
+		headless:      true,
+		width:         80,
+	}
+	app.config = mergeConfigs(mergeConfigsOptions{global: app.globalConfig, project: app.projectConfig})
+
+	app.showResolvedModelDisplay()
+	wantFirst := "Using active: openrouter/pareto-code (project)"
+	if len(app.messages) != 1 || app.messages[0].content != wantFirst {
+		t.Fatalf("first display = %v", chatMessageContents(app.messages))
+	}
+
+	app.projectConfig.ActiveModel = "openrouter/other-model"
+	app.rebuildEffectiveConfig()
+	app.refreshResolvedModelDisplay()
+
+	if len(app.messages) != 1 {
+		t.Fatalf("message count = %d, want single model display line", len(app.messages))
+	}
+	wantSecond := "Using active: openrouter/other-model (project)"
+	if app.messages[0].content != wantSecond {
+		t.Fatalf("updated display = %q, want %q", app.messages[0].content, wantSecond)
+	}
+	if !app.messages[0].modelDisplay {
+		t.Fatal("expected model display message after update")
+	}
+}
+
+func TestShowResolvedModelDisplayUpdatesWhenExplorationAdded(t *testing.T) {
+	app := &App{
+		globalConfig: Config{
+			Deployments: map[string]DeploymentConfig{"openrouter": {APIKey: "sk-or"}},
+			ActiveModel: "openrouter/active",
+		},
+		configReady: true,
+		models:      []ModelDef{},
+		headless:    true,
+		width:       80,
+	}
+	app.config = mergeConfigs(mergeConfigsOptions{global: app.globalConfig, project: app.projectConfig})
+
+	app.showResolvedModelDisplay()
+	if len(app.messages) != 1 || !strings.Contains(app.messages[0].content, "Using active: openrouter/active") {
+		t.Fatalf("first display = %v", chatMessageContents(app.messages))
+	}
+
+	app.globalConfig.ExplorationModel = "openrouter/explore"
+	app.rebuildEffectiveConfig()
+	app.showResolvedModelDisplay()
+
+	if len(app.messages) != 1 {
+		t.Fatalf("message count = %d, want replaced single display line", len(app.messages))
+	}
+	want := "Using active: openrouter/active (global), exploration: openrouter/explore (global)"
+	if app.messages[0].content != want {
+		t.Fatalf("updated display = %q, want %q", app.messages[0].content, want)
+	}
+}
+
+func TestStartupDoesNotShowMissingModelMessage(t *testing.T) {
+	app := &App{
+		globalConfig: Config{
+			Deployments: map[string]DeploymentConfig{"openrouter": {APIKey: "sk-test"}},
+		},
+		configReady: true,
+		models:      []ModelDef{{ID: "openrouter/test", Provider: ProviderOpenRouter}},
+		headless:    true,
+	}
+	app.config = mergeConfigs(mergeConfigsOptions{global: app.globalConfig, project: app.projectConfig})
+	app.maybeShowInitialModels()
+
+	for _, msg := range app.messages {
+		if msg.content == configMissingModelMessage {
+			t.Fatalf("startup should not show missing model message: %v", chatMessageContents(app.messages))
+		}
 	}
 }
