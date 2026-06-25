@@ -621,18 +621,6 @@ func (a *App) projectTabFields() []cfgField {
 	}
 }
 
-func (a *App) configRowsBeforeFields() int {
-	switch a.cfgTab {
-	case cfgTabProject:
-		if a.projectConfigRoot() != "" {
-			return 1
-		}
-	case cfgTabRouting:
-		return len(a.routingTabReadOnlyRows())
-	}
-	return 0
-}
-
 func (a *App) buildConfigRows() []string {
 	var rows []string
 	configured := a.cfgDraft.configuredProviders()
@@ -656,11 +644,11 @@ func (a *App) buildConfigRows() []string {
 
 	if isProjectTab {
 		if projectRoot == "" {
-			rows = append(rows, "\033[2mNo project detected (not in a git repository)\033[0m")
+			rows = append(rows, a.noProjectRows()...)
 			rows = append(rows, a.configHelpRows()...)
 			return rows
 		}
-		rows = append(rows, fmt.Sprintf("\033[2mOverriding global config for current project (%s).\033[0m", projectRoot))
+		rows = append(rows, a.projectIntroRows(projectRoot)...)
 	}
 
 	// When a model picker menu is active, render it inline below the tab bar
@@ -704,77 +692,13 @@ func (a *App) buildConfigRows() []string {
 	// Fields
 	fields := a.cfgCurrentFields()
 	for i, f := range fields {
-		label := configFieldLabel(f)
-		if f.valueless {
-			if i == a.cfgCursor {
-				rows = append(rows, fmt.Sprintf("%s %s", styledConfigFieldLabel(styledConfigFieldLabelOptions{label: label, selected: true}), styledConfigCursor("◆")))
-			} else {
-				rows = append(rows, styledConfigFieldLabel(styledConfigFieldLabelOptions{label: label}))
-			}
-			continue
-		}
-		if a.cfgEditing && i == a.cfgCursor {
-			editStr := string(a.cfgEditBuf)
-			if f.secret {
-				editStr = secretEditDisplay(editStr)
-			}
-			rows = append(rows, fmt.Sprintf("%s \033[1m%s\033[0m %s", styledConfigFieldLabel(styledConfigFieldLabelOptions{label: label + ":", selected: true}), editStr, styledConfigCursor("◆")))
-		} else {
-			val := ""
-			if f.display != nil {
-				val = f.display(a.cfgDraft)
-			} else if f.get != nil {
-				val = f.get(a.cfgDraft)
-			}
-			if f.picker != nil && val != "" {
-				p := configuredProviderForModelID(configuredProviderForModelIDOptions{
-					cfg:     a.cfgDraft,
-					models:  a.models,
-					modelID: val,
-				})
-				// Hide model values when no providers are configured, or when this
-				// model's provider is not currently configured.
-				if !isProjectTab && (!hasProvider || p == "" || !configured[p]) {
-					val = ""
-				}
-			}
-			// If the value is an Ollama model and Ollama is offline, show indicator.
-			// Only applies to model picker fields, not API key or other fields.
-			if val != "" && f.picker != nil && a.cfgDraft.ollamaBaseURL() != "" && a.isOllamaOffline(val) {
-				val = val + " \033[33m(offline)\033[0m"
-			}
-			if val == "" {
-				if f.picker != nil && !hasProvider && !isProjectTab {
-					val = "(not set)"
-				} else if f.optional {
-					val = "(optional)"
-				} else if f.globalHint != nil {
-					hint := f.globalHint(a.cfgDraft)
-					if f.picker != nil && !isProjectTab {
-						p := configuredProviderForModelID(configuredProviderForModelIDOptions{
-							cfg:     a.cfgDraft,
-							models:  a.models,
-							modelID: hint,
-						})
-						if hint == "" || p == "" || !configured[p] {
-							hint = "not set"
-						}
-					}
-					if hint == "" {
-						hint = "not set"
-					}
-					val = fmt.Sprintf("\033[2m(global: %s)\033[0m", hint)
-				} else {
-					val = "(not set)"
-				}
-			}
-			styledValue := styledConfigFieldValue(styledConfigFieldValueOptions{value: val, secret: f.secret})
-			if i == a.cfgCursor {
-				rows = append(rows, fmt.Sprintf("%s %s %s", styledConfigFieldLabel(styledConfigFieldLabelOptions{label: label + ":", selected: true}), styledValue, styledConfigCursor("◆")))
-			} else {
-				rows = append(rows, fmt.Sprintf("%s %s", styledConfigFieldLabel(styledConfigFieldLabelOptions{label: label + ":"}), styledValue))
-			}
-		}
+		rows = append(rows, a.configFieldRows(configFieldRowsOptions{
+			field:        f,
+			index:        i,
+			configured:   configured,
+			hasProvider:  hasProvider,
+			isProjectTab: isProjectTab,
+		})...)
 	}
 
 	if a.cfgTab == cfgTabRouting && a.cfgDraft.Routing != nil {
@@ -784,7 +708,10 @@ func (a *App) buildConfigRows() []string {
 				rows = append(rows, fmt.Sprintf("\033[33m%d more routing diagnostics\033[0m", len(diagnostics)-i))
 				break
 			}
-			rows = append(rows, fmt.Sprintf("\033[33m%s: %s\033[0m", diagnostic.Path, diagnostic.Message))
+			rows = append(rows, wrapString(wrapStringOptions{
+				s: "\033[33m" + diagnostic.Path + ": " + diagnostic.Message + "\033[0m",
+				w: a.configEditorWidth(),
+			})...)
 		}
 	}
 
