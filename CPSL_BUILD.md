@@ -117,6 +117,52 @@ extension:
 - Linux: `libcpsl.so`
 - macOS: `libcpsl.dylib`
 
+## Apple XCFramework
+
+To build CPSL for Apple app targets, run the Apple helper from macOS with Xcode
+installed:
+
+```sh
+scripts/build-cpsl-apple-xcframework.sh
+```
+
+This follows the same source dependency model as the host-native helper: Herm
+fetches the pinned CPSL commit into `.herm-cpsl/` unless `CPSL_ROOT` points at an
+existing checkout.
+
+The script builds CPSL's FFI crate for iOS device, iOS simulator, and macOS
+targets, then packages the dynamic libraries plus `cpsl.h` into one
+multi-platform XCFramework:
+
+```text
+.herm-cpsl/artifacts/apple/
+  cpsl.xcframework
+  include/cpsl.h
+```
+
+Install the Rust Apple targets before building:
+
+```sh
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
+```
+
+Override the source or output path the same way as the host-native helper:
+
+```sh
+CPSL_REF=main scripts/build-cpsl-apple-xcframework.sh
+CPSL_ROOT=/path/to/cpsl scripts/build-cpsl-apple-xcframework.sh
+OUT_DIR=/tmp/cpsl-apple scripts/build-cpsl-apple-xcframework.sh
+APPLE_PLATFORMS=ios scripts/build-cpsl-apple-xcframework.sh
+APPLE_PLATFORMS=macos scripts/build-cpsl-apple-xcframework.sh
+```
+
+The Apple helper currently builds the minimum Herm CPSL profile. The `--all`
+profile is intentionally not enabled until the Apple PDFium/runtime artifact
+path is defined.
+
+For an iOS-only output under `.herm-cpsl/artifacts/ios/`, the narrower
+`scripts/build-cpsl-ios-xcframework.sh` helper remains available.
+
 ## Options
 
 ```sh
@@ -128,6 +174,8 @@ CPSL_REPO=https://github.com/fundamental-research-labs/cpsl.git scripts/build-cp
 CPSL_REF=47ea301e1b32223cc0bc46001cca59fb7516f047 scripts/build-cpsl-image.sh
 CPSL_ROOT=/path/to/cpsl scripts/build-cpsl-image.sh
 CPSL_TARGET_DIR=/tmp/cpsl-target scripts/build-cpsl-image.sh
+scripts/build-cpsl-apple-xcframework.sh
+scripts/build-cpsl-ios-xcframework.sh
 ```
 
 `RUN_PROBE=1` runs the ignored CPSL FFI probe test after building. The normal
