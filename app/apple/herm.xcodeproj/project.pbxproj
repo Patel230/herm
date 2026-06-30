@@ -6,10 +6,34 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXAggregateTarget section */
+		850B3BFE2FE8390F00A21FCA /* Build CPSL XCFramework */ = {
+			isa = PBXAggregateTarget;
+			buildConfigurationList = 850B3C012FE8390F00A21FCD /* Build configuration list for PBXAggregateTarget "Build CPSL XCFramework" */;
+			buildPhases = (
+				850B3BFD2FE8390F00A21FC9 /* Build CPSL XCFramework */,
+			);
+			dependencies = (
+			);
+			name = "Build CPSL XCFramework";
+			productName = "Build CPSL XCFramework";
+		};
+/* End PBXAggregateTarget section */
+
 /* Begin PBXBuildFile section */
 		850B3BFA2FE8390E00A21FC8 /* cpsl.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 850B3BF92FE8390E00A21FC8 /* cpsl.xcframework */; };
 		850B3BFB2FE8390E00A21FC8 /* cpsl.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 850B3BF92FE8390E00A21FC8 /* cpsl.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		850B3C002FE8390F00A21FCC /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 85D75D2B2FE62B6F0095BAB2 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 850B3BFE2FE8390F00A21FCA;
+			remoteInfo = "Build CPSL XCFramework";
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
 		850B3BFC2FE8390E00A21FC8 /* Embed Frameworks */ = {
@@ -26,7 +50,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		850B3BF92FE8390E00A21FC8 /* cpsl.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = cpsl.xcframework; path = "../../.herm-cpsl/artifacts/apple/cpsl.xcframework"; sourceTree = "<group>"; };
+		850B3BF92FE8390E00A21FC8 /* cpsl.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = cpsl.xcframework; path = "../../scripts/cpsl-xcframework-placeholder/cpsl.xcframework"; sourceTree = "<group>"; };
 		85D75D332FE62B6F0095BAB2 /* herm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = herm.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -90,6 +114,7 @@
 			buildRules = (
 			);
 			dependencies = (
+				850B3BFF2FE8390F00A21FCB /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				85D75D352FE62B6F0095BAB2 /* herm */,
@@ -109,8 +134,11 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2650;
-				LastUpgradeCheck = 2650;
+				LastUpgradeCheck = 2660;
 				TargetAttributes = {
+					850B3BFE2FE8390F00A21FCA = {
+						CreatedOnToolsVersion = 26.5;
+					};
 					85D75D322FE62B6F0095BAB2 = {
 						CreatedOnToolsVersion = 26.5;
 					};
@@ -130,6 +158,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
+				850B3BFE2FE8390F00A21FCA /* Build CPSL XCFramework */,
 				85D75D322FE62B6F0095BAB2 /* herm */,
 			);
 		};
@@ -145,6 +174,29 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		850B3BFD2FE8390F00A21FC9 /* Build CPSL XCFramework */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build CPSL XCFramework";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/../../scripts/cpsl-xcframework-placeholder/cpsl.xcframework/Info.plist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/../../scripts/link-cpsl-xcframework-for-xcode.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		85D75D2F2FE62B6F0095BAB2 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -155,7 +207,31 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		850B3BFF2FE8390F00A21FCB /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 850B3BFE2FE8390F00A21FCA /* Build CPSL XCFramework */;
+			targetProxy = 850B3C002FE8390F00A21FCC /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		850B3C022FE8390F00A21FCE /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		850B3C032FE8390F00A21FCF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
 		85D75D3C2FE62B6F0095BAB2 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -190,8 +266,9 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = 27947JUSTR;
+				DEVELOPMENT_TEAM = 9JFN8QQG65;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -213,6 +290,7 @@
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -252,8 +330,9 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = 27947JUSTR;
+				DEVELOPMENT_TEAM = 9JFN8QQG65;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -268,6 +347,7 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 			};
 			name = Release;
@@ -277,12 +357,15 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 27947JUSTR;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 9JFN8QQG65;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -300,8 +383,9 @@
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.5;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.herm.herm;
+				PRODUCT_BUNDLE_IDENTIFIER = com.herm.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -321,12 +405,15 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 27947JUSTR;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 9JFN8QQG65;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -344,8 +431,9 @@
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.5;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.herm.herm;
+				PRODUCT_BUNDLE_IDENTIFIER = com.herm.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -363,6 +451,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		850B3C012FE8390F00A21FCD /* Build configuration list for PBXAggregateTarget "Build CPSL XCFramework" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				850B3C022FE8390F00A21FCE /* Debug */,
+				850B3C032FE8390F00A21FCF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		85D75D2E2FE62B6F0095BAB2 /* Build configuration list for PBXProject "herm" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

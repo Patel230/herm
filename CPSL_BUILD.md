@@ -8,9 +8,10 @@ The helper script invokes native build tools, Go, Rust, Git unless `CPSL_ROOT`
 is set, and optional PDFium download tooling for `--all`. It does not invoke
 Python, Node, Docker, package managers, or the CPSL CLI.
 
-Herm owns this build flow. CPSL is fetched as a build dependency into
-`.herm-cpsl/`, which is ignored by git so dependency checkouts and generated
-artifacts do not get committed by accident.
+Herm owns this build flow. CPSL source is tracked as the `external/cpsl`
+submodule. Generated build artifacts and Cargo output still live under
+`.herm-cpsl/`, which is ignored by git so generated files do not get committed
+by accident.
 
 ## Requirements
 
@@ -20,7 +21,8 @@ Common requirements:
 - Rust and Cargo
 - Native C and C++ build tools (`cc` and `c++`)
 - Git, unless `CPSL_ROOT` points at an existing CPSL checkout
-- Herm submodules initialized with `git submodule update --init --recursive`
+- Herm submodules initialized with
+  `git submodule update --init external/langdag external/cpsl`
 
 macOS needs Xcode Command Line Tools:
 
@@ -45,21 +47,25 @@ From the Herm repo:
 scripts/build-cpsl-image.sh
 ```
 
-By default the script fetches CPSL from:
+By default the script builds CPSL from Herm's submodule:
 
 ```text
-https://github.com/fundamental-research-labs/cpsl.git
+external/cpsl
 ```
 
-By default it fetches pinned CPSL commit
-`47ea301e1b32223cc0bc46001cca59fb7516f047`, the merge commit for the CPSL HTTP
-policy integration. Override the source when testing another CPSL ref or a local
-CPSL checkout:
+The current submodule points at CPSL commit
+`4376c3bc49045177f8096688f9e350423a79b9b4`, which includes the HTTP policy and
+composed mount integration used by Herm. Override the source when testing a
+local CPSL checkout:
 
 ```sh
-CPSL_REF=main scripts/build-cpsl-image.sh
 CPSL_ROOT=/path/to/cpsl scripts/build-cpsl-image.sh
 ```
+
+Before compiling CPSL, Herm applies tracked integration patches from
+`scripts/cpsl-patches/` to the selected checkout. These patches keep the pinned
+CPSL dependency aligned with Herm's app/runtime integration. When a patch is
+already present in the submodule commit, the patch helper skips it.
 
 The default build is the minimum Herm CPSL profile. It compiles `fs`, `json`,
 `csv`, `http`, and `grep`.
@@ -127,8 +133,7 @@ scripts/build-cpsl-apple-xcframework.sh
 ```
 
 This follows the same source dependency model as the host-native helper: Herm
-fetches the pinned CPSL commit into `.herm-cpsl/` unless `CPSL_ROOT` points at an
-existing checkout.
+builds from `external/cpsl` unless `CPSL_ROOT` points at an existing checkout.
 
 The script builds CPSL's FFI crate for iOS device, iOS simulator, and macOS
 targets, then packages the dynamic libraries plus `cpsl.h` into one
@@ -140,16 +145,20 @@ multi-platform XCFramework:
   include/cpsl.h
 ```
 
-Install the Rust Apple targets before building:
+Install Rust with [rustup](https://rustup.rs/), then add the Apple targets before
+building:
 
 ```sh
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
 ```
 
+Xcode run scripts do not use your login-shell `PATH`. The CPSL build scripts
+source `~/.cargo/env` and prepend `~/.cargo/bin` automatically. If Xcode still
+cannot find `cargo`, restart Xcode after installing Rust.
+
 Override the source or output path the same way as the host-native helper:
 
 ```sh
-CPSL_REF=main scripts/build-cpsl-apple-xcframework.sh
 CPSL_ROOT=/path/to/cpsl scripts/build-cpsl-apple-xcframework.sh
 OUT_DIR=/tmp/cpsl-apple scripts/build-cpsl-apple-xcframework.sh
 APPLE_PLATFORMS=ios scripts/build-cpsl-apple-xcframework.sh
@@ -160,8 +169,137 @@ The Apple helper currently builds the minimum Herm CPSL profile. The `--all`
 profile is intentionally not enabled until the Apple PDFium/runtime artifact
 path is defined.
 
-For an iOS-only output under `.herm-cpsl/artifacts/ios/`, the narrower
-`scripts/build-cpsl-ios-xcframework.sh` helper remains available.
+For an iOS-only output under `.herm-cpsl/artifacts/ios/`, use the Apple helper
+with the iOS platform selected:
+
+```sh
+APPLE_PLATFORMS=ios OUT_DIR=.herm-cpsl/artifacts/ios scripts/build-cpsl-apple-xcframework.sh
+```
+
+## Xcode auto-build
+
+Opening `app/apple/herm.xcodeproj` in Xcode and building the `herm` target
+automatically ensures the CPSL XCFramework exists before Swift compilation.
+
+The `herm` target depends on a **Build CPSL XCFramework** aggregate target that
+runs before compilation. On every build it runs:
+
+```sh
+"${SRCROOT}/../../scripts/link-cpsl-xcframework-for-xcode.sh"
+```
+
+That helper calls `ensure-cpsl-apple-xcframework.sh` to build or reuse
+`.herm-cpsl/artifacts/apple/cpsl.xcframework`, then symlinks the Xcode-linked
+path at `scripts/cpsl-xcframework-placeholder/cpsl.xcframework` to the built
+artifact.
+
+The phase is marked always-out-of-date so Xcode invokes the script each build,
+but the ensure script itself is cheap when nothing changed: it reuses
+`.herm-cpsl/artifacts/apple/cpsl.xcframework` when all three slices are present
+(iOS device, iOS simulator, macOS) and staleness inputs are not newer than
+`Info.plist`. It rebuilds when the artifact is missing, incomplete, or stale
+because files under `scripts/cpsl-patches/`, `scripts/build-cpsl-apple-xcframework.sh`,
+or `scripts/apply-cpsl-patches.sh` changed.
+
+Xcode builds always produce the full iOS+macOS XCFramework, even when the active
+destination only needs one platform.
+
+Xcode validates linked XCFrameworks before any target runs. A tracked bootstrap
+placeholder at `scripts/cpsl-xcframework-placeholder/cpsl.xcframework`
+satisfies that check on fresh clones. The ensure script then builds the real
+XCFramework under gitignored `.herm-cpsl/artifacts/apple/`, and the Xcode helper
+replaces the placeholder path with a local symlink to that artifact during the
+build. The link step marks the tracked bootstrap files `skip-worktree` so
+`git status` stays clean while the symlink is present. Do not commit the
+symlink; only the bootstrap directory belongs in git.
+
+### First-build prerequisites
+
+The first full XCFramework build compiles five Rust targets and may take several
+minutes. You need:
+
+- **Full Xcode** installed and selected (Command Line Tools alone is not enough)
+- The Rust Apple targets listed in [Apple XCFramework](#apple-xcframework)
+
+Initialize Xcode from Terminal if needed:
+
+```sh
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+sudo xcodebuild -runFirstLaunch
+```
+
+The `herm` target sets `ENABLE_USER_SCRIPT_SANDBOXING = NO` so the run-script
+phase can invoke Cargo, Git, `xcodebuild`, and write under `.herm-cpsl/`.
+
+### Force rebuild
+
+To force a CPSL rebuild from Terminal or by exporting before an Xcode build:
+
+```sh
+HERM_CPSL_REBUILD=1 scripts/ensure-cpsl-apple-xcframework.sh
+```
+
+### visionOS
+
+The `herm` target lists visionOS in `SUPPORTED_PLATFORMS`, but CPSL does not
+yet support visionOS. Building for an `xros` or `xrsimulator` destination fails
+early in the ensure script with a clear error before any Rust build starts.
+
+### Dev launchers
+
+`scripts/dev-apple-macos.sh` and `scripts/dev-apple-ios.sh` call the same
+ensure script. Use `--skip-cpsl` to require an existing full XCFramework without
+building, or `--rebuild-cpsl` to set `HERM_CPSL_REBUILD=1` before the ensure
+step. The `--full-cpsl` flag is deprecated; the ensure script always builds the
+full framework.
+
+## macOS App From Terminal
+
+Use the macOS dev launcher when you want to build and run the SwiftUI app
+without opening Xcode:
+
+```sh
+scripts/dev-apple-macos.sh
+```
+
+The launcher must run from a macOS host shell with full Xcode selected.
+Command Line Tools alone, usually selected as `/Library/Developer/CommandLineTools`,
+is not enough for this Xcode project flow. It calls
+`scripts/ensure-cpsl-apple-xcframework.sh` to build or reuse the CPSL
+XCFramework, builds the `herm` app target for macOS, clears local extended
+attributes from the finished bundle, ad-hoc signs it, then runs the app
+executable directly so stdout and stderr stay attached to the terminal.
+
+If Xcode is installed but Command Line Tools is selected, either select and
+initialize Xcode globally:
+
+```sh
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+sudo xcodebuild -runFirstLaunch
+```
+
+Or use Xcode only for one launch:
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer scripts/dev-apple-macos.sh
+```
+
+For an LLDB session:
+
+```sh
+scripts/dev-apple-macos.sh --debug
+```
+
+For a build-only check:
+
+```sh
+scripts/dev-apple-macos.sh --build-only
+```
+
+By default, the launcher ensures the full iOS+macOS CPSL XCFramework via the
+shared ensure script. Use `--universal-cpsl` when you want both arm64 and
+x86_64 macOS slices. Use `--project-signing` if you want Xcode's configured
+team/signing settings instead of local ad hoc signing.
 
 ## Options
 
@@ -170,12 +308,9 @@ scripts/build-cpsl-image.sh --minimum
 scripts/build-cpsl-image.sh --all
 OUT_DIR=/tmp/herm-cpsl scripts/build-cpsl-image.sh
 RUN_PROBE=1 scripts/build-cpsl-image.sh
-CPSL_REPO=https://github.com/fundamental-research-labs/cpsl.git scripts/build-cpsl-image.sh
-CPSL_REF=47ea301e1b32223cc0bc46001cca59fb7516f047 scripts/build-cpsl-image.sh
 CPSL_ROOT=/path/to/cpsl scripts/build-cpsl-image.sh
 CPSL_TARGET_DIR=/tmp/cpsl-target scripts/build-cpsl-image.sh
 scripts/build-cpsl-apple-xcframework.sh
-scripts/build-cpsl-ios-xcframework.sh
 ```
 
 `RUN_PROBE=1` runs the ignored CPSL FFI probe test after building. The normal
